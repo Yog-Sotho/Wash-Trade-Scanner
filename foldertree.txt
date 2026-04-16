@@ -1,0 +1,29 @@
+wash_trade_detector/
+├── config/
+│   ├── __init__.py
+│   ├── chains.py              # Chain and DEX configurations
+│   └── settings.py            # Global settings
+├── core/
+│   ├── __init__.py
+│   ├── ingestor.py            # Multi-chain event listener
+│   ├── feature_engineer.py    # Feature extraction
+│   ├── heuristics.py          # Heuristic detection rules
+│   ├── ml_detector.py         # ML anomaly detection
+│   ├── entity_clustering.py   # Address clustering
+│   └── storage.py             # Database interactions
+├── models/
+│   ├── __init__.py
+│   ├── schemas.py             # Data models (Pydantic/SQLAlchemy)
+│   └── ml_model.pkl           # Trained ML model (saved)
+├── scripts/
+│   ├── train_model.py         # Train and save the ML model
+│   └── run_audit.py           # Entry point for auditing a token/pool
+├── tests/
+│   ├── test_heuristics.py
+│   ├── test_ingestor.py
+│   └── ...
+├── requirements.txt
+├── docker-compose.yml
+├── Dockerfile
+├── .env.example
+└── README.md
