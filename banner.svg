@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#070A12"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="300" fill="url(#bg)"/>
+
+  <!-- Subtle grid -->
+  <g opacity="0.08" stroke="#FFFFFF">
+    <path d="M0 60 H1200"/>
+    <path d="M0 120 H1200"/>
+    <path d="M0 180 H1200"/>
+    <path d="M0 240 H1200"/>
+
+    <path d="M200 0 V300"/>
+    <path d="M400 0 V300"/>
+    <path d="M600 0 V300"/>
+    <path d="M800 0 V300"/>
+    <path d="M1000 0 V300"/>
+  </g>
+
+  <!-- Left text block -->
+  <text x="70" y="110"
+        fill="#FFFFFF"
+        font-size="44"
+        font-family="monospace"
+        font-weight="700">
+    Wash Trade Scanner
+  </text>
+
+  <text x="70" y="150"
+        fill="#9CA3AF"
+        font-size="18"
+        font-family="monospace">
+    Detecting fake volume, wash trading & coordinated wallets
+  </text>
+
+  <text x="70" y="180"
+        fill="#6B7280"
+        font-size="14"
+        font-family="monospace">
+    Graph analysis • anomaly detection • on-chain pattern recognition
+  </text>
+
+  <!-- Accent line -->
+  <rect x="70" y="200" width="260" height="3" fill="url(#accent)"/>
+
+  <!-- Right-side network graph -->
+  <g filter="url(#glow)">
+
+    <!-- nodes -->
+    <circle cx="820" cy="120" r="6" fill="#22D3EE"/>
+    <circle cx="980" cy="100" r="6" fill="#3B82F6"/>
+    <circle cx="1080" cy="170" r="6" fill="#22D3EE"/>
+    <circle cx="950" cy="240" r="6" fill="#3B82F6"/>
+    <circle cx="800" cy="220" r="6" fill="#22D3EE"/>
+
+    <!-- edges -->
+    <path d="M820 120 L980 100 L1080 170 L950 240 L800 220 Z"
+          fill="none"
+          stroke="url(#accent)"
+          stroke-width="2"/>
+
+    <!-- anomaly highlight -->
+    <path d="M1080 170 L820 120"
+          stroke="#EF4444"
+          stroke-width="3"/>
+
+  </g>
+
+  <!-- Label -->
+  <text x="820" y="285"
+        fill="#EF4444"
+        font-size="13"
+        font-family="monospace">
+    suspicious wash trading loop detected
+  </text>
+
+</svg>
