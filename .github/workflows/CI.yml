@@ -2,7 +2,7 @@ name: CI.yml
 
 on:
   push:
-    branches: [main, develop, 'release/**']
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
   schedule:
@@ -18,78 +18,68 @@ concurrency:
 
 jobs:
   pre-check:
-    name: Pre-Flight Security
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify commit signatures
+      - name: verify commit signatures
         id: check
         run: |
-          if [[ "${{ github.ref }}" == refs/heads/main || "${{ github.ref }}" == refs/heads/release/* ]]; then
+          if [[ "${{ github.ref }}" == refs/heads/main ]]; then
             UNSIGNED=$(git log --format='%H' ${{ github.event.before }}..${{ github.sha }} | while read c; do
               git verify-commit $c 2>/dev/null || echo $c
             done)
             if [ -n "$UNSIGNED" ]; then
-              echo "Unsigned commits: $UNSIGNED"
+              echo "unsigned commits: $UNSIGNED"
               exit 1
             fi
           fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
-      - name: Secret scan
-        uses: trufflesecurity/trufflehog@main
+      - uses: trufflesecurity/trufflehog@main
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
           head: HEAD
           extra_args: --debug --only-verified
 
-      - name: Check forbidden files
+      - name: check forbidden files
         run: |
           for pattern in '\.env$' '\.pem$' '\.key$' 'credentials' 'secret' 'password' '\.p12$' '\.pfx$'; do
             FOUND=$(git ls-files | grep -iE "$pattern" || true)
             if [ -n "$FOUND" ]; then
-              echo "Forbidden pattern: $pattern"
+              echo "forbidden pattern: $pattern"
               echo "$FOUND"
               exit 1
             fi
           done
 
   dependency-audit:
-    name: Dependency Fortress
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - uses: snok/install-poetry@v1
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
           virtualenvs-in-project: true
 
-      - name: Verify lock file
-        run: poetry check --lock
-
-      - name: Export requirements
-        run: poetry export -f requirements.txt --output requirements.txt --without-hashes
+      - run: poetry check --lock
+      - run: poetry export -f requirements.txt --output requirements.txt --without-hashes
 
       - name: pip-audit scan
         run: |
@@ -101,18 +91,17 @@ jobs:
             exit 1
           fi
 
-      - name: Safety scan
+      - name: safety scan
         run: |
           pip install safety
           safety scan --file requirements.txt --json --output safety.json
 
-      - name: Generate SBOM
+      - name: generate sbom
         run: |
           pip install cyclonedx-bom
           cyclonedx-py environment --output-format json --output-file sbom.json
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dependency-reports
@@ -123,54 +112,48 @@ jobs:
           retention-days: 90
 
   static-analysis:
-    name: Static Analysis
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - uses: snok/install-poetry@v1
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
           virtualenvs-in-project: true
 
-      - name: Install dependencies
-        run: poetry install --no-interaction
+      - run: poetry install --no-interaction
 
-      - name: Run ruff
+      - name: ruff
         run: |
           poetry run pip install ruff
           poetry run ruff check .
           poetry run ruff format --check .
 
-      - name: Run mypy
+      - name: mypy
         run: |
           poetry run pip install mypy
           poetry run mypy . --strict --ignore-missing-imports
 
-      - name: Run bandit
+      - name: bandit
         run: |
           poetry run pip install bandit
           poetry run bandit -r . -f json -o bandit.json || true
 
-      - name: Run pylint
+      - name: pylint
         run: |
           poetry run pip install pylint
           poetry run pylint . --output-format=json > pylint.json || true
 
-      - name: Upload scan results
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: static-analysis-reports
@@ -179,36 +162,30 @@ jobs:
             pylint.json
           retention-days: 90
 
-  test-matrix:
-    name: Test Matrix
+  test:
     needs: [dependency-audit, static-analysis]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
-        test-type: [unit, integration]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - uses: snok/install-poetry@v1
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
           virtualenvs-in-project: true
 
-      - name: Install dependencies
-        run: poetry install --no-interaction
+      - run: poetry install --no-interaction
 
-      - name: Run tests
+      - name: run tests
         run: |
           poetry run pip install pytest pytest-asyncio pytest-cov hypothesis
           poetry run pytest tests/ \
@@ -216,59 +193,48 @@ jobs:
             --cov=core \
             --cov-report=xml \
             --cov-report=html \
-            --cov-fail-under=80 \
-            -m ${{ matrix.test-type }}
+            --cov-fail-under=80
 
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-${{ matrix.python-version }}-${{ matrix.test-type }}
+          name: coverage-${{ matrix.python-version }}
           path: |
             htmlcov/
             coverage.xml
           retention-days: 30
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v4
         with:
           files: coverage.xml
           fail_ci_if_error: true
 
-  build-and-scan:
-    name: Build and Container Scan
-    needs: test-matrix
+  build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       security-events: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
+      - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=
 
-      - name: Build image
+      - name: build image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -279,20 +245,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Scan image with Trivy
+      - name: trivy scan
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
 
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-results.sarif
 
-      - name: Push image
+      - name: push image
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
         with:
@@ -302,30 +267,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   deploy-staging:
-    name: Deploy to Staging
-    needs: build-and-scan
+    needs: build
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - name: Deploy
-        run: |
-          echo "Deploying to staging environment"
+      - run: echo "deploy to staging"
 
   deploy-production:
-    name: Deploy to Production
-    needs: build-and-scan
+    needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Require manual approval
-        uses: trstringer/manual-approval@v1
+      - uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.TOKEN }}
-          approvers: security-team
+          approvers: ${{ vars.APPROVERS }}
           minimum-approvals: 2
 
-      - name: Deploy
-        run: |
-          echo "Deploying to production environment"
+      - run: echo "deploy to production"
