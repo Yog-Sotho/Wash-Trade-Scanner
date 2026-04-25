@@ -46,6 +46,12 @@ class Storage:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database initialized")
 
+    async def close(self):
+        """Dispose engine and release connections."""
+        if self.engine:
+            await self.engine.dispose()
+            logger.info("Database connections closed")
+
     @asynccontextmanager
     async def get_session(self) -> AsyncSession:
         if not self.session_factory:
@@ -75,14 +81,12 @@ class Storage:
             return trade
 
     async def save_trades_batch(self, trades_data: List[Dict[str, Any]]) -> int:
+        """Bulk insert trades using add_all for performance."""
         async with self.get_session() as session:
-            saved = 0
-            for trade_data in trades_data:
-                trade = SwapTrade(**trade_data)
-                session.add(trade)
-                saved += 1
+            trades = [SwapTrade(**data) for data in trades_data]
+            session.add_all(trades)
             await session.commit()
-            return saved
+            return len(trades)
 
     async def update_trade_labels(
         self,
