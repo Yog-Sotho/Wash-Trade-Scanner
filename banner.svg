@@ -1,0 +1,53 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0f1c"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="300" fill="url(#bg)" />
+
+  <!-- Subtle grid -->
+  <g opacity="0.08">
+    <path d="M0 50 H1200 M0 100 H1200 M0 150 H1200 M0 200 H1200 M0 250 H1200" stroke="white"/>
+    <path d="M200 0 V300 M400 0 V300 M600 0 V300 M800 0 V300 M1000 0 V300" stroke="white"/>
+  </g>
+
+  <!-- Data lines -->
+  <polyline points="100,200 250,140 400,180 550,100 700,160 850,120 1000,150"
+            fill="none" stroke="url(#accent)" stroke-width="2"/>
+
+  <!-- Nodes -->
+  <g fill="#22d3ee">
+    <circle cx="250" cy="140" r="4"/>
+    <circle cx="400" cy="180" r="4"/>
+    <circle cx="550" cy="100" r="4"/>
+    <circle cx="700" cy="160" r="4"/>
+    <circle cx="850" cy="120" r="4"/>
+  </g>
+
+  <!-- Title -->
+  <text x="80" y="110" font-family="monospace" font-size="42" fill="white" font-weight="bold">
+    Wash Trade Scanner
+  </text>
+
+  <!-- Subtitle -->
+  <text x="80" y="150" font-family="monospace" font-size="18" fill="#9ca3af">
+    Detecting artificial volume & market manipulation in crypto markets
+  </text>
+
+  <!-- Tagline -->
+  <text x="80" y="190" font-family="monospace" font-size="14" fill="#6b7280">
+    On-chain analysis • Pattern detection • Transparency tools
+  </text>
+
+  <!-- Accent line -->
+  <rect x="80" y="210" width="220" height="3" fill="url(#accent)" />
+</svg>
