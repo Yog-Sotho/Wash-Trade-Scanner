@@ -9,6 +9,8 @@ import csv
 import json
 import logging
 import os
+import re
+import signal
 import time
 from datetime import datetime
 from typing import Optional
@@ -27,6 +29,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+VALID_ADDRESS_RE = re.compile(r'^0x[a-fA-F0-9]{40}$')
+
+
+def validate_address(addr: str) -> None:
+    if not VALID_ADDRESS_RE.match(addr):
+        raise ValueError(f"Invalid Ethereum address: {addr}")
+
 
 async def run_audit(
     chain_id: int,
@@ -39,6 +48,7 @@ async def run_audit(
     export_format: Optional[str] = None,
     export_path: Optional[str] = None,
 ):
+    validate_address(pool_address)
     start_time = time.time()
     storage = Storage()
     await storage.initialize()
@@ -131,8 +141,6 @@ async def run_audit(
             },
             results_summary=risk_metrics,
         )
-
-    # Print results
     print("\n" + "="*60)
     print(f"Audit Results for Pool: {pool_address}")
     print(f"Chain ID: {chain_id}")
@@ -145,8 +153,6 @@ async def run_audit(
     print(f"Detection Methods: {', '.join(detection_methods)}")
     print(f"Duration: {duration:.2f} seconds")
     print("="*60)
-
-    # Export if requested
     if export_format:
         results = {
             "chain_id": chain_id,
@@ -170,7 +176,7 @@ async def run_audit(
                 for k, v in risk_metrics.items():
                     writer.writerow([k, v])
             logger.info(f"Results exported to {export_file}")
-
+    await storage.close()
     return {
         "chain_id": chain_id,
         "pool_address": pool_address,
@@ -182,7 +188,15 @@ async def run_audit(
     }
 
 
+def handle_signal(signum, frame):
+    logger.info("Shutdown signal received. Exiting.")
+    raise SystemExit(0)
+
+
 async def main():
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     parser = argparse.ArgumentParser(description="Wash Trade Detection Audit")
     parser.add_argument("--chain-id", type=int, required=True, help="Blockchain chain ID")
     parser.add_argument("--pool", type=str, required=True, help="Pool address to audit")
