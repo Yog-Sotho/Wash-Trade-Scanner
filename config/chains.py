@@ -3,7 +3,8 @@ Multi‑chain and multi‑DEX configuration with complete ABIs and type tags.
 Supports 20+ blockchains and major DEXes. No placeholders.
 """
 
-from typing import List, Dict, Any
+from dataclasses import dataclass
+from typing import List, Dict, Any, Tuple, Optional
 
 # ============================================================================
 # Complete ABI definitions – verified from Etherscan / official sources
@@ -105,7 +106,6 @@ SYNCSWAP_ROUTER_ABI = [
     }
 ]
 
-# Aliases
 PANCAKESWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 SUSHISWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 TRADERJOE_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
@@ -139,6 +139,31 @@ KAVASWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 KLAYSWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 CLAIMSWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 DRAGONSWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
+
+
+@dataclass
+class DEXConfig:
+    """Configuration for a single DEX."""
+    name: str
+    router: str
+    factory: str
+    event_sig: str
+    abi: List[Dict[str, Any]]
+    type: str
+
+
+@dataclass
+class ChainConfig:
+    """Configuration for a single blockchain."""
+    chain_id: int
+    name: str
+    rpc_url: str
+    ws_url: str
+    native_token: str
+    block_time: float
+    explorer_api: str
+    start_block: int
+    dexes: List[Dict[str, Any]]
 
 
 # ============================================================================
@@ -362,7 +387,7 @@ CHAINS: List[Dict[str, Any]] = [
                 "factory": "0x25CbdDb98b35ab1FF77413456B31EC81A6B6B746",
                 "event_sig": "Swap(address,address,uint256,uint256,uint256,uint256)",
                 "abi": VELODROME_ROUTER_ABI,
-                "type": "v2",  # Velodrome uses same event structure as V2 but different indexing
+                "type": "v2",
             },
             {
                 "name": "Curve",
@@ -1042,6 +1067,7 @@ CHAINS: List[Dict[str, Any]] = [
 
 
 def get_chain_config(chain_id: int) -> Dict[str, Any]:
+    """Retrieve chain configuration by chain ID."""
     for chain in CHAINS:
         if chain["chain_id"] == chain_id:
             return chain
@@ -1049,6 +1075,7 @@ def get_chain_config(chain_id: int) -> Dict[str, Any]:
 
 
 def get_dex_config(chain_id: int, dex_name: str) -> Dict[str, Any]:
+    """Retrieve DEX configuration by chain ID and DEX name."""
     chain = get_chain_config(chain_id)
     for dex in chain["dexes"]:
         if dex["name"].lower() == dex_name.lower():
