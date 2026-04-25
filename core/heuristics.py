@@ -1,8 +1,9 @@
 """
-High‑signal heuristic detection rules for wash trading.
+High-signal heuristic detection rules for wash trading.
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Set, Tuple, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -17,9 +18,18 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+def _load_allowlist() -> Set[str]:
+    """Load allowed bot addresses from env var (comma-separated)."""
+    env_val = os.getenv("BOT_ALLOWLIST", "")
+    if not env_val:
+        return set()
+    return {addr.strip().lower() for addr in env_val.split(",") if addr.strip()}
+
+
 class HeuristicDetector:
     def __init__(self):
         self.confidence_threshold = settings.SUSPICIOUS_ACTIVITY_THRESHOLD
+        self.bot_allowlist = _load_allowlist()
 
     async def detect_self_trading(
         self,
@@ -84,6 +94,9 @@ class HeuristicDetector:
         for trade in trades:
             sender_groups[trade.sender].append(trade)
         for sender, sender_trades in sender_groups.items():
+            # Skip allowlisted addresses
+            if sender.lower() in self.bot_allowlist:
+                continue
             if len(sender_trades) < 10:
                 continue
             sender_trades.sort(key=lambda t: t.block_timestamp)
