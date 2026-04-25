@@ -1,65 +1,77 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
 
   <!-- Background -->
-  <rect width="1200" height="300" fill="#0b0f1a"/>
+  <rect width="1200" height="300" fill="#0a0f1c"/>
 
-  <!-- Subtle grid -->
-  <g stroke="#1f2937" stroke-width="1" opacity="0.6">
-    <path d="M0 60 H1200"/>
-    <path d="M0 120 H1200"/>
-    <path d="M0 180 H1200"/>
-    <path d="M0 240 H1200"/>
+  <!-- LEFT SAFE ZONE (TEXT AREA BACKDROP) -->
+  <rect x="0" y="0" width="700" height="300" fill="#0b1220"/>
 
-    <path d="M200 0 V300"/>
-    <path d="M400 0 V300"/>
-    <path d="M600 0 V300"/>
+  <!-- subtle grid only on right side -->
+  <g stroke="#1f2937" stroke-width="1" opacity="0.4">
+    <path d="M700 60 H1200"/>
+    <path d="M700 120 H1200"/>
+    <path d="M700 180 H1200"/>
+    <path d="M700 240 H1200"/>
+
     <path d="M800 0 V300"/>
-    <path d="M1000 0 V300"/>
+    <path d="M950 0 V300"/>
+    <path d="M1100 0 V300"/>
   </g>
 
-  <!-- Title -->
-  <text x="70" y="120"
+  <!-- TITLE -->
+  <text x="60" y="110"
         fill="#ffffff"
-        font-size="46"
+        font-size="44"
         font-family="monospace"
         font-weight="700">
     Wash Trade Scanner
   </text>
 
-  <!-- Subtitle -->
-  <text x="70" y="160"
+  <!-- SUBTITLE -->
+  <text x="60" y="155"
         fill="#9ca3af"
         font-size="18"
         font-family="monospace">
-    Detect fake volume, wash trading & coordinated wallets
+    Detecting artificial volume & coordinated trading loops
   </text>
 
-  <text x="70" y="190"
+  <text x="60" y="185"
         fill="#6b7280"
         font-size="14"
         font-family="monospace">
-    Graph-based anomaly detection • market manipulation signals
+    Graph anomaly detection • wallet clustering • wash pattern identification
   </text>
 
-  <!-- Accent line -->
-  <rect x="70" y="210" width="280" height="3" fill="#3b82f6"/>
+  <!-- accent line -->
+  <rect x="60" y="205" width="320" height="3" fill="#3b82f6"/>
 
-  <!-- Simple network graph -->
+  <!-- RIGHT GRAPH AREA -->
+  <!-- nodes -->
   <g fill="#22d3ee">
-
-    <circle cx="850" cy="90" r="5"/>
-    <circle cx="1000" cy="130" r="5"/>
-    <circle cx="1100" cy="210" r="5"/>
-    <circle cx="950" cy="250" r="5"/>
-    <circle cx="800" cy="200" r="5"/>
-
+    <circle cx="860" cy="90" r="6"/>
+    <circle cx="1040" cy="110" r="6"/>
+    <circle cx="1120" cy="200" r="6"/>
+    <circle cx="980" cy="250" r="6"/>
+    <circle cx="820" cy="220" r="6"/>
   </g>
 
-  <g stroke="#3b82f6" stroke-width="2">
-    <path d="M850 90 L1000 130 L1100 210 L950 250 L800 200 Z"/>
+  <!-- normal edges -->
+  <g stroke="#3b82f6" stroke-width="2" fill="none">
+    <path d="M860 90 L1040 110 L1120 200 L980 250 L820 220 L860 90"/>
   </g>
 
-  <!-- anomaly edge -->
-  <line x1="1100" y1="210" x2="850" y2="90" stroke="#ef4444" stroke-width="3"/>
+  <!-- wash trading loop highlight -->
+  <path d="M1120 200 L860 90"
+        stroke="#ef4444"
+        stroke-width="4"
+        fill="none"/>
+
+  <!-- label -->
+  <text x="820" y="285"
+        fill="#ef4444"
+        font-size="12"
+        font-family="monospace">
+    suspicious wash loop detected
+  </text>
 
 </svg>
