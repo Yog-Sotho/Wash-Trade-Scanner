@@ -35,6 +35,8 @@ class Storage:
             echo=False,
             pool_size=10,
             max_overflow=20,
+            pool_recycle=3600,
+            connect_args={"timeout": 30}
         )
         self.session_factory = async_sessionmaker(
             self.engine,
