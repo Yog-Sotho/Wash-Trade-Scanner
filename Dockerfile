@@ -16,12 +16,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create directories
+# Create directories if they don't exist
 RUN mkdir -p /app/models /app/logs
 
-# Set environment variables
+# Environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Default command (override in docker-compose)
+# Default command
 CMD ["python", "scripts/run_audit.py", "--help"]
