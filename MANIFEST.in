@@ -1,0 +1,14 @@
+include README.md
+include .env.example
+include docker-compose.yml
+include Dockerfile
+include requirements.txt
+include requirements-dev.txt
+include Makefile
+include pyproject.toml
+recursive-include config *.py
+recursive-include core *.py
+recursive-include models *.py
+recursive-include scripts *.py
+recursive-include tests *.py
+recursive-include logs .gitkeep
