@@ -6,14 +6,13 @@ Now resolves token addresses from pool contracts.
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 
 from web3 import AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware
 from web3.providers.rpc import AsyncHTTPProvider
 from web3.providers.websocket import WebsocketProviderV2
-from web3.types import EventData, LogReceipt
+from web3.types import LogReceipt
 from web3.contract import AsyncContract
 
 from config.chains import CHAINS, ChainConfig, get_chain_config
@@ -50,11 +49,18 @@ class ChainIngestor:
         self.latest_block = 0
         self.contracts: Dict[str, AsyncContract] = {}
         # Cache pool token addresses: pool_address -> (token0, token1)
-        self._pool_tokens: Dict[str, tuple[str, str]] = {}
+        self._pool_tokens: Dict[str, Tuple[str, str]] = {}
         self._pool_tokens_lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        if self.chain_config.ws_url:
+        """Connect to the blockchain RPC, validating the URL."""
+        rpc = self.chain_config.rpc_url
+        if "YOUR_KEY" in rpc or "YOUR_KEY" in (self.chain_config.ws_url or ""):
+            raise ValueError(
+                f"RPC URL for {self.chain_config.name} contains placeholder 'YOUR_KEY'. "
+                "Set a real endpoint in .env."
+            )
+        if self.chain_config.ws_url and "YOUR_KEY" not in self.chain_config.ws_url:
             try:
                 provider = WebsocketProviderV2(self.chain_config.ws_url)
                 self.web3 = AsyncWeb3(provider)
@@ -63,7 +69,7 @@ class ChainIngestor:
                     return
             except Exception as e:
                 logger.warning(f"WebSocket connection failed for {self.chain_config.name}: {e}")
-        provider = AsyncHTTPProvider(self.chain_config.rpc_url)
+        provider = AsyncHTTPProvider(rpc)
         self.web3 = AsyncWeb3(provider)
         self.web3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
         if await self.web3.is_connected():
@@ -71,14 +77,13 @@ class ChainIngestor:
         else:
             raise ConnectionError(f"Failed to connect to {self.chain_config.name}")
 
-    async def _get_pool_tokens(self, pool_address: str) -> tuple[str, str]:
+    async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
         """Fetch token0 and token1 from pool contract, with caching."""
         addr = Web3.to_checksum_address(pool_address)
         async with self._pool_tokens_lock:
             if addr in self._pool_tokens:
                 return self._pool_tokens[addr]
 
-        # Minimal ABI for token0/token1
         pool_abi = [
             {"constant": True, "inputs": [], "name": "token0", "outputs": [{"name": "", "type": "address"}], "type": "function"},
             {"constant": True, "inputs": [], "name": "token1", "outputs": [{"name": "", "type": "address"}], "type": "function"}
@@ -89,7 +94,7 @@ class ChainIngestor:
             token1 = await contract.functions.token1().call()
         except Exception as e:
             logger.error(f"Failed to fetch token0/token1 for {addr}: {e}")
-            token0 = addr  # fallback to pool address
+            token0 = addr
             token1 = addr
         token0 = token0.lower()
         token1 = token1.lower()
@@ -111,25 +116,33 @@ class ChainIngestor:
         address: str,
         topics: List[str],
         from_block: int,
-        to_block: int
+        to_block: int,
+        max_retries: int = 3
     ) -> List[LogReceipt]:
+        """Fetch logs in batches with retry logic."""
         batch_size = 1000
         all_logs = []
         for batch_start in range(from_block, to_block + 1, batch_size):
             batch_end = min(batch_start + batch_size - 1, to_block)
-            await self.rate_limiter.acquire()
-            try:
-                logs = await self.web3.eth.get_logs({
-                    "address": address,
-                    "topics": topics,
-                    "fromBlock": batch_start,
-                    "toBlock": batch_end,
-                })
-                all_logs.extend(logs)
-                logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
-            except Exception as e:
-                logger.error(f"Error fetching logs for {address}: {e}")
-                await asyncio.sleep(1)
+            for attempt in range(max_retries):
+                try:
+                    await self.rate_limiter.acquire()
+                    logs = await self.web3.eth.get_logs({
+                        "address": address,
+                        "topics": topics,
+                        "fromBlock": batch_start,
+                        "toBlock": batch_end,
+                    })
+                    all_logs.extend(logs)
+                    logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
+                    break
+                except Exception as e:
+                    logger.error(
+                        f"Error fetching logs for {address} blocks {batch_start}-{batch_end}: {e}. Attempt {attempt+1}/{max_retries}"
+                    )
+                    await asyncio.sleep(2 ** attempt)
+            else:
+                logger.error(f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts")
         return all_logs
 
     async def _process_swap_event(
@@ -144,7 +157,6 @@ class ChainIngestor:
             decoded = contract.events.Swap().process_log(log)
             args = decoded["args"]
 
-            # Default values
             sender = args.get("sender", args.get("buyer", log["address"]))
             recipient = args.get("to", args.get("recipient", args.get("buyer", log["address"])))
             amount_in = 0
@@ -196,7 +208,6 @@ class ChainIngestor:
                 logger.warning(f"Unknown DEX type {event_type} for {dex['name']}, skipping")
                 return
 
-            # Resolve actual token addresses for v2/v3/curve pools
             if event_type in ("v2", "v3", "curve"):
                 token0, token1 = await self._get_pool_tokens(log["address"])
                 # Determine which is in/out based on amounts direction
@@ -242,12 +253,20 @@ class ChainIngestor:
         logs = await self._get_logs_batch(address, topics, from_block, to_block)
         block_numbers = set(log["blockNumber"] for log in logs)
         block_timestamps = {}
-        for block_num in block_numbers:
+        # Fetch block timestamps in parallel
+        async def fetch_block(blk):
             await self.rate_limiter.acquire()
-            block = await self.web3.eth.get_block(block_num)
-            block_timestamps[block_num] = datetime.fromtimestamp(block["timestamp"])
-        for log in logs:
-            await self._process_swap_event(dex, log, block_timestamps[log["blockNumber"]])
+            block = await self.web3.eth.get_block(blk)
+            return blk, datetime.fromtimestamp(block["timestamp"])
+        tasks = [fetch_block(bn) for bn in block_numbers]
+        results = await asyncio.gather(*tasks)
+        block_timestamps = dict(results)
+
+        # Process logs concurrently
+        await asyncio.gather(*[
+            self._process_swap_event(dex, log, block_timestamps[log["blockNumber"]])
+            for log in logs
+        ])
         logger.info(f"Synced {len(logs)} historical swaps for {dex['name']}")
         return len(logs)
 
@@ -274,19 +293,22 @@ class ChainIngestor:
                             self.latest_block + 1,
                             latest,
                         )
-                        for log in logs:
-                            await self.rate_limiter.acquire()
-                            block = await self.web3.eth.get_block(log["blockNumber"])
-                            await self._process_swap_event(
-                                dex,
-                                log,
-                                datetime.fromtimestamp(block["timestamp"])
-                            )
+                        # Process concurrently
+                        tasks = [
+                            self._process_single_realtime(dex, log)
+                            for log in logs
+                        ]
+                        await asyncio.gather(*tasks)
                     self.latest_block = latest
                 await asyncio.sleep(self.chain_config.block_time)
             except Exception as e:
                 logger.error(f"Error in real-time listener for {self.chain_config.name}: {e}")
                 await asyncio.sleep(5)
+
+    async def _process_single_realtime(self, dex, log):
+        await self.rate_limiter.acquire()
+        block = await self.web3.eth.get_block(log["blockNumber"])
+        await self._process_swap_event(dex, log, datetime.fromtimestamp(block["timestamp"]))
 
     async def stop(self):
         self.is_running = False
@@ -302,16 +324,16 @@ class MultiChainIngestor:
         for chain_config in CHAINS:
             ingestor = ChainIngestor(chain_config, self.storage)
             await ingestor.connect()
-            self.ingestors[chain_config.chain_id] = ingestor
+            self.ingestors[chain_config["chain_id"]] = ingestor
 
     async def sync_historical_all(self, from_block_override: Optional[Dict[int, int]] = None):
         tasks = []
         for chain_id, ingestor in self.ingestors.items():
             chain_config = ingestor.chain_config
-            start_block = from_block_override.get(chain_id) if from_block_override else chain_config.start_block
+            start_block = from_block_override.get(chain_id) if from_block_override else chain_config.get("start_block", 0)
             await ingestor.rate_limiter.acquire()
             latest_block = await ingestor.web3.eth.block_number
-            for dex in chain_config.dexes:
+            for dex in chain_config["dexes"]:
                 task = asyncio.create_task(
                     ingestor.sync_historical_swaps(dex, start_block, latest_block)
                 )
@@ -323,7 +345,7 @@ class MultiChainIngestor:
     async def start_realtime_all(self):
         for ingestor in self.ingestors.values():
             task = asyncio.create_task(
-                ingestor.listen_realtime(ingestor.chain_config.dexes)
+                ingestor.listen_realtime(ingestor.chain_config["dexes"])
             )
             self.tasks.append(task)
 
@@ -345,9 +367,9 @@ class MultiChainIngestor:
         if not ingestor:
             raise ValueError(f"Chain {chain_id} not configured")
         total_swaps = 0
-        for dex in ingestor.chain_config.dexes:
+        for dex in ingestor.chain_config["dexes"]:
             if start_block is None:
-                start_block = ingestor.chain_config.start_block
+                start_block = ingestor.chain_config.get("start_block", 0)
             if end_block is None:
                 await ingestor.rate_limiter.acquire()
                 end_block = await ingestor.web3.eth.block_number
