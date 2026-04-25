@@ -1,77 +1,78 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
 
   <!-- Background -->
-  <rect width="1200" height="300" fill="#0a0f1c"/>
+  <rect width="1200" height="300" fill="#070A12"/>
 
-  <!-- LEFT SAFE ZONE (TEXT AREA BACKDROP) -->
-  <rect x="0" y="0" width="700" height="300" fill="#0b1220"/>
+  <!-- Subtle grid -->
+  <g stroke="#111827" stroke-width="1">
+    <path d="M0 60 H1200"/>
+    <path d="M0 120 H1200"/>
+    <path d="M0 180 H1200"/>
+    <path d="M0 240 H1200"/>
 
-  <!-- subtle grid only on right side -->
-  <g stroke="#1f2937" stroke-width="1" opacity="0.4">
-    <path d="M700 60 H1200"/>
-    <path d="M700 120 H1200"/>
-    <path d="M700 180 H1200"/>
-    <path d="M700 240 H1200"/>
-
+    <path d="M200 0 V300"/>
+    <path d="M400 0 V300"/>
+    <path d="M600 0 V300"/>
     <path d="M800 0 V300"/>
-    <path d="M950 0 V300"/>
-    <path d="M1100 0 V300"/>
+    <path d="M1000 0 V300"/>
   </g>
 
-  <!-- TITLE -->
-  <text x="60" y="110"
-        fill="#ffffff"
-        font-size="44"
+  <!-- LEFT PANEL (TEXT) -->
+  <text x="60" y="105"
         font-family="monospace"
+        font-size="42"
+        fill="#ffffff"
         font-weight="700">
     Wash Trade Scanner
   </text>
 
-  <!-- SUBTITLE -->
-  <text x="60" y="155"
-        fill="#9ca3af"
+  <text x="60" y="145"
+        font-family="monospace"
         font-size="18"
-        font-family="monospace">
-    Detecting artificial volume & coordinated trading loops
+        fill="#9CA3AF">
+    On-chain detection of artificial volume & coordinated trading
   </text>
 
-  <text x="60" y="185"
-        fill="#6b7280"
+  <text x="60" y="175"
+        font-family="monospace"
         font-size="14"
-        font-family="monospace">
-    Graph anomaly detection • wallet clustering • wash pattern identification
+        fill="#6B7280">
+    Graph analytics • anomaly scoring • behavioral clustering
   </text>
 
-  <!-- accent line -->
-  <rect x="60" y="205" width="320" height="3" fill="#3b82f6"/>
+  <!-- Accent bar -->
+  <rect x="60" y="195" width="340" height="3" fill="#3B82F6"/>
 
-  <!-- RIGHT GRAPH AREA -->
-  <!-- nodes -->
-  <g fill="#22d3ee">
-    <circle cx="860" cy="90" r="6"/>
-    <circle cx="1040" cy="110" r="6"/>
-    <circle cx="1120" cy="200" r="6"/>
-    <circle cx="980" cy="250" r="6"/>
-    <circle cx="820" cy="220" r="6"/>
+  <!-- RIGHT PANEL (NETWORK GRAPH) -->
+
+  <!-- Nodes -->
+  <circle cx="820" cy="90" r="6" fill="#22D3EE"/>
+  <circle cx="980" cy="110" r="6" fill="#22D3EE"/>
+  <circle cx="1100" cy="190" r="6" fill="#22D3EE"/>
+  <circle cx="960" cy="250" r="6" fill="#22D3EE"/>
+  <circle cx="800" cy="220" r="6" fill="#22D3EE"/>
+  <circle cx="900" cy="160" r="6" fill="#3B82F6"/>
+
+  <!-- Normal edges -->
+  <g stroke="#3B82F6" stroke-width="2" fill="none">
+    <path d="M820 90 L980 110 L1100 190 L960 250 L800 220 Z"/>
+    <path d="M900 160 L820 90"/>
+    <path d="M900 160 L980 110"/>
+    <path d="M900 160 L1100 190"/>
   </g>
 
-  <!-- normal edges -->
-  <g stroke="#3b82f6" stroke-width="2" fill="none">
-    <path d="M860 90 L1040 110 L1120 200 L980 250 L820 220 L860 90"/>
-  </g>
-
-  <!-- wash trading loop highlight -->
-  <path d="M1120 200 L860 90"
-        stroke="#ef4444"
-        stroke-width="4"
+  <!-- Suspicious wash loop (highlight) -->
+  <path d="M1100 190 L820 90"
+        stroke="#EF4444"
+        stroke-width="3"
         fill="none"/>
 
-  <!-- label -->
-  <text x="820" y="285"
-        fill="#ef4444"
+  <!-- Label -->
+  <text x="800" y="285"
+        font-family="monospace"
         font-size="12"
-        font-family="monospace">
-    suspicious wash loop detected
+        fill="#EF4444">
+    anomaly: circular wash trading pattern detected
   </text>
 
 </svg>
