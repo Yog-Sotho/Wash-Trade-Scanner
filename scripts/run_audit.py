@@ -5,7 +5,10 @@ Main entry point for auditing a blockchain pool for wash trading.
 
 import asyncio
 import argparse
+import csv
+import json
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Optional
@@ -17,7 +20,6 @@ from core.heuristics import HeuristicDetector
 from core.ml_detector import MLDetector
 from core.entity_clustering import EntityClusterer
 from config.settings import settings
-from models.schemas import TokenRiskProfileResponse
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -34,6 +36,8 @@ async def run_audit(
     use_ml: bool = True,
     use_heuristics: bool = True,
     sync_historical: bool = True,
+    export_format: Optional[str] = None,
+    export_path: Optional[str] = None,
 ):
     start_time = time.time()
     storage = Storage()
@@ -127,6 +131,8 @@ async def run_audit(
             },
             results_summary=risk_metrics,
         )
+
+    # Print results
     print("\n" + "="*60)
     print(f"Audit Results for Pool: {pool_address}")
     print(f"Chain ID: {chain_id}")
@@ -139,6 +145,32 @@ async def run_audit(
     print(f"Detection Methods: {', '.join(detection_methods)}")
     print(f"Duration: {duration:.2f} seconds")
     print("="*60)
+
+    # Export if requested
+    if export_format:
+        results = {
+            "chain_id": chain_id,
+            "pool_address": pool_address,
+            "trades_processed": len(trades),
+            "wash_trades_detected": wash_trades_detected,
+            "risk_metrics": risk_metrics,
+            "detection_methods": detection_methods,
+            "duration": duration,
+        }
+        if export_format == "json":
+            export_file = export_path or f"audit_{chain_id}_{pool_address[:8]}.json"
+            with open(export_file, "w") as f:
+                json.dump(results, f, default=str, indent=2)
+            logger.info(f"Results exported to {export_file}")
+        elif export_format == "csv":
+            export_file = export_path or f"audit_{chain_id}_{pool_address[:8]}.csv"
+            with open(export_file, "w", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["metric", "value"])
+                for k, v in risk_metrics.items():
+                    writer.writerow([k, v])
+            logger.info(f"Results exported to {export_file}")
+
     return {
         "chain_id": chain_id,
         "pool_address": pool_address,
@@ -159,6 +191,8 @@ async def main():
     parser.add_argument("--no-ml", action="store_true", help="Disable ML detection")
     parser.add_argument("--no-heuristics", action="store_true", help="Disable heuristic detection")
     parser.add_argument("--no-sync", action="store_true", help="Skip historical sync (use existing data)")
+    parser.add_argument("--export", choices=["json", "csv"], help="Export results to file")
+    parser.add_argument("--export-path", type=str, help="Path for export file (optional)")
     args = parser.parse_args()
     await run_audit(
         chain_id=args.chain_id,
@@ -168,6 +202,8 @@ async def main():
         use_ml=not args.no_ml,
         use_heuristics=not args.no_heuristics,
         sync_historical=not args.no_sync,
+        export_format=args.export,
+        export_path=args.export_path,
     )
 
 
