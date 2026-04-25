@@ -1,5 +1,6 @@
 """
 High-signal heuristic detection rules for wash trading.
+Uses configurable thresholds from settings.
 """
 
 import logging
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def _load_allowlist() -> Set[str]:
     """Load allowed bot addresses from env var (comma-separated)."""
-    env_val = os.getenv("BOT_ALLOWLIST", "")
+    env_val = settings.BOT_ALLOWLIST
     if not env_val:
         return set()
     return {addr.strip().lower() for addr in env_val.split(",") if addr.strip()}
@@ -94,7 +95,6 @@ class HeuristicDetector:
         for trade in trades:
             sender_groups[trade.sender].append(trade)
         for sender, sender_trades in sender_groups.items():
-            # Skip allowlisted addresses
             if sender.lower() in self.bot_allowlist:
                 continue
             if len(sender_trades) < 10:
@@ -111,7 +111,7 @@ class HeuristicDetector:
             avg_time = sum(inter_trade_times) / len(inter_trade_times)
             volume_variance = sum((v - sum(volumes)/len(volumes))**2 for v in volumes) / len(volumes) if volumes else 0
             volume_cv = volume_variance**0.5 / (sum(volumes)/len(volumes) + 1e-9)
-            if avg_time < 60 and volume_cv < 0.5:
+            if avg_time < settings.BOT_TRADE_TIME_THRESHOLD and volume_cv < settings.BOT_VOLUME_CV_THRESHOLD:
                 for trade in sender_trades:
                     trade.is_wash_trade = True
                     trade.wash_trade_score = 0.8
@@ -139,12 +139,11 @@ class HeuristicDetector:
             volumes = [t.volume_usd or 0.0 for t in hour_trades]
             mean_vol = sum(volumes) / len(volumes)
             std_vol = (sum((v - mean_vol)**2 for v in volumes) / len(volumes))**0.5
-            z_threshold = 3.0
             for trade, vol in zip(hour_trades, volumes):
                 z_score = abs(vol - mean_vol) / (std_vol + 1e-9)
-                if z_score > z_threshold:
+                if z_score > settings.Z_SCORE_THRESHOLD:
                     trade.is_wash_trade = True
-                    trade.wash_trade_score = min(0.7 + (z_score - z_threshold) * 0.1, 1.0)
+                    trade.wash_trade_score = min(0.7 + (z_score - settings.Z_SCORE_THRESHOLD) * 0.1, 1.0)
                     trade.detection_method = "volume_anomaly"
                     wash_trades.append(trade)
         logger.info(f"Detected {len(wash_trades)} volume anomalies")
