@@ -6,11 +6,11 @@ from datetime import datetime
 from typing import Optional, List
 from sqlalchemy import (
     Column, Integer, String, Float, DateTime, Boolean,
-    BigInteger, Index, JSON, Text
+    BigInteger, Index, JSON
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 Base = declarative_base()
 
@@ -111,6 +111,8 @@ class DetectionAuditLog(Base):
 
 # Pydantic models for API responses
 class SwapTradeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     chain_id: int
     dex_name: str
@@ -129,11 +131,10 @@ class SwapTradeResponse(BaseModel):
     wash_trade_score: float = 0.0
     detection_method: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
 
 class TokenRiskProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     chain_id: int
     pool_address: str
     token_address: str
@@ -146,9 +147,6 @@ class TokenRiskProfileResponse(BaseModel):
     total_volume_usd: float
     wash_trade_volume_usd: float
     last_updated: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class AuditRequest(BaseModel):
