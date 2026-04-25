@@ -96,8 +96,9 @@ Use `--export json` or `--export csv` to save audit results. A JSON summary file
 
 ## License
 
-Proprietary – All rights reserved.
+MIT
 
 ## Support
 
-For enterprise support: support@yourcompany.com
+If you like my work, buy me a coffee ❤️
+Yog-Sotho
