@@ -18,39 +18,23 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: wash_detector_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   app:
     build: .
     container_name: wash_detector_app
     environment:
       DATABASE_URL: postgresql+asyncpg://wash_user:wash_pass@postgres:5432/wash_detector
-      REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: INFO
       ML_MODEL_PATH: /app/models/ml_model.pkl
       COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+      BOT_ALLOWLIST: ${BOT_ALLOWLIST:-}
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     command: python scripts/run_audit.py --chain-id 1 --pool 0x...
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:
