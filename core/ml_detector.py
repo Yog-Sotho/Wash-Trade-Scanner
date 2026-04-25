@@ -3,8 +3,9 @@ Machine learning based anomaly detection for wash trading.
 """
 
 import logging
+import os
 import joblib
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -45,11 +46,11 @@ class MLDetector:
             "pool_self_trade_ratio",
         ]
 
-    def _build_pipeline(self) -> Pipeline:
+    def _build_pipeline(self, contamination: float = settings.ML_CONTAMINATION) -> Pipeline:
         return Pipeline([
             ("scaler", StandardScaler()),
             ("isolation_forest", IsolationForest(
-                contamination=settings.ML_CONTAMINATION,
+                contamination=contamination,
                 random_state=42,
                 n_estimators=100,
                 max_samples="auto",
@@ -62,9 +63,12 @@ class MLDetector:
         self,
         chain_id: int,
         pool_addresses: List[str],
-        use_heuristic_labels: bool = True
+        use_heuristic_labels: bool = True,
+        contamination: Optional[float] = None
     ) -> None:
-        logger.info(f"Training ML model on {len(pool_addresses)} pools")
+        if contamination is None:
+            contamination = settings.ML_CONTAMINATION
+        logger.info(f"Training ML model on {len(pool_addresses)} pools (contamination={contamination})")
         all_features = []
         all_labels = []
         async with self.storage.get_session() as session:
@@ -91,7 +95,7 @@ class MLDetector:
         if not all_features:
             raise ValueError("No training data available")
         X = np.vstack(all_features)
-        self.model = self._build_pipeline()
+        self.model = self._build_pipeline(contamination)
         if all_labels and use_heuristic_labels:
             y = np.array(all_labels)
             sample_weight = np.ones(len(y))
@@ -117,13 +121,27 @@ class MLDetector:
         self,
         chain_id: int,
         pool_address: str,
-        threshold: float = 0.8
+        threshold: float = 0.8,
+        contamination: Optional[float] = None
     ) -> List[SwapTrade]:
         async with self.storage.get_session() as session:
             df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session)
             if df.empty:
                 return []
-            probs = await self.predict(df)
+            # If per-pool contamination is provided, retrain a temporary model
+            if contamination is not None and contamination != settings.ML_CONTAMINATION:
+                # Clone features and train a temporary model with this contamination
+                X = df[[c for c in self.feature_columns if c in df.columns]].fillna(0).values
+                temp_model = self._build_pipeline(contamination)
+                temp_model.fit(X)
+                scores = temp_model.decision_function(X)
+            else:
+                probs = await self.predict(df)
+                # Convert back to raw scores for consistent threshold handling
+                from scipy.special import logit
+                scores = -logit(probs.clip(1e-10, 1-1e-10))  # invert sigmoid
+            from scipy.special import expit
+            probabilities = expit(-scores)
             from sqlalchemy import select, and_
             stmt = select(SwapTrade).where(
                 and_(
@@ -134,7 +152,7 @@ class MLDetector:
             result = await session.execute(stmt)
             trades = result.scalars().all()
             wash_trades = []
-            for trade, prob in zip(trades, probs):
+            for trade, prob in zip(trades, probabilities):
                 if prob >= threshold:
                     trade.is_wash_trade = True
                     trade.wash_trade_score = float(prob)
@@ -146,6 +164,7 @@ class MLDetector:
         if not self.is_trained:
             raise RuntimeError("No trained model to save")
         save_path = path or settings.ML_MODEL_PATH
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         joblib.dump({
             "pipeline": self.model,
             "feature_columns": self.feature_columns,
@@ -154,6 +173,8 @@ class MLDetector:
 
     def load_model(self, path: Optional[str] = None):
         load_path = path or settings.ML_MODEL_PATH
+        if not os.path.exists(load_path):
+            raise FileNotFoundError(f"ML model file not found at {load_path}")
         data = joblib.load(load_path)
         self.model = data["pipeline"]
         self.feature_columns = data["feature_columns"]
