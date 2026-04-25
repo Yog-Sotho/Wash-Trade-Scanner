@@ -9,12 +9,13 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 - **Heuristic Detection** with near‑zero false positives:
   - Self‑trading (same sender/recipient)
   - Circular trading (strongly connected components)
-  - High‑frequency bot patterns (allow‑listable)
-  - Volume anomaly detection (z‑score)
-  - Entity clustering via on‑chain funding traces
+  - High‑frequency bot patterns (allow‑listable via `BOT_ALLOWLIST`)
+  - Volume anomaly detection (z‑score, threshold configurable)
+  - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
 - **Machine Learning** – Isolation Forest with per‑pool contamination control.
 - **Real‑time Monitoring** – WebSocket‑based listeners.
 - **Full Audit Reports** – JSON/CSV export.
+- **Production‑Ready** – Retry logic, rate limiting, graceful shutdown, input validation.
 
 ## Quick Start
 
@@ -31,7 +32,7 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 
 ### 3. Set up environment
 
-Copy `.env.example` to `.env` and fill in your RPC endpoints (at least one per chain you want to scan).
+Copy `.env.example` to `.env` and fill in your RPC endpoints (at least one per chain you want to scan). `DATABASE_URL` is **required**.
 
 ### 4. Start the database (Docker)
 
@@ -66,15 +67,18 @@ For more options:
 
 All settings are in `.env` (see `.env.example`). Important variables:
 
-- `DATABASE_URL` – PostgreSQL connection string (async)
+- `DATABASE_URL` – PostgreSQL connection string (async) – **required**
 - `BOT_ALLOWLIST` – comma‑separated addresses to skip in high‑frequency bot detection
+- `ETH_RPC_URL`, `BSC_RPC_URL`, … – RPC endpoints per chain
+
+Full reference: see `docs/configuration.md`.
 
 ## Detection Methodology
 
 1. **Self‑Trading**: `sender == recipient` ⇒ instant wash trade (score 1.0).
 2. **Circular Trading**: Strongly Connected Components in the trade graph with reverse trades within a configurable time window.
 3. **High‑Frequency Bot**: More than 10 trades from the same sender with average inter‑trade time < 60s and low volume variance (CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored.
-4. **Volume Anomaly**: z‑score > 3 on trade volume within 1‑hour buckets.
+4. **Volume Anomaly**: z‑score > 3 on trade volume within 1‑hour buckets (threshold configurable in settings).
 5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning).
 6. **ML Isolation Forest**: Anomaly detection on 16 trade‑level features. Can be retrained with custom contamination per pool.
 
@@ -85,6 +89,13 @@ All settings are in `.env` (see `.env.example`). Important variables:
     models/         – database schemas
     scripts/        – entry points (run_audit.py, train_model.py)
     tests/          – pytest tests
+    docs/           – detailed documentation
+
+## Documentation
+
+- [Installation](docs/installation.md)
+- [Configuration Reference](docs/configuration.md)
+- [Architecture Overview](docs/architecture.md)
 
 ## Testing
 
@@ -100,5 +111,4 @@ MIT
 
 ## Support
 
-If you like my work, buy me a coffee ❤️
-Yog-Sotho
+If you like my work, buy me a coffee ❤️ Yog-Sotho
