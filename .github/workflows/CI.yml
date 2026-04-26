@@ -12,12 +12,10 @@ env:
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.7.1"
 
-# Production-grade: cancel redundant runs
 concurrency:
   group: \( {{ github.workflow }}- \){{ github.ref }}
   cancel-in-progress: true
 
-# Least-privilege permissions (2026 best practice)
 permissions:
   contents: read
 
@@ -29,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # Required for TruffleHog + signature check
+          fetch-depth: 0
           persist-credentials: false
 
       - name: verify commit signatures
@@ -46,13 +44,11 @@ jobs:
           fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
-      # Fixed TruffleHog - official recommended config (no explicit base/head)
       - name: TruffleHog Secret Scan
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          extra_args: --debug --only-verified --fail   # --fail makes verified secrets block the build
-        # Allow first commits / schedule runs to continue if no prior base exists
+          extra_args: --debug --only-verified --fail
         continue-on-error: ${{ github.event.before == '0000000000000000000000000000000000000000' || github.event_name == 'schedule' }}
 
       - name: check forbidden files
