@@ -1,4 +1,4 @@
-name: CI.yml
+name: CI
 
 on:
   push:
@@ -12,9 +12,14 @@ env:
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.7.1"
 
+# Production-grade: cancel redundant runs
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: \( {{ github.workflow }}- \){{ github.ref }}
   cancel-in-progress: true
+
+# Least-privilege permissions (2026 best practice)
+permissions:
+  contents: read
 
 jobs:
   pre-check:
@@ -24,14 +29,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0          # Required for TruffleHog + signature check
           persist-credentials: false
 
       - name: verify commit signatures
         id: check
         run: |
           if [[ "${{ github.ref }}" == refs/heads/main ]]; then
-            UNSIGNED=$(git log --format='%H' ${{ github.event.before }}..${{ github.sha }} | while read c; do
+            UNSIGNED=$(git log --format='%H' \( {{ github.event.before }}.. \){{ github.sha }} | while read c; do
               git verify-commit $c 2>/dev/null || echo $c
             done)
             if [ -n "$UNSIGNED" ]; then
@@ -41,16 +46,18 @@ jobs:
           fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
-      - uses: trufflesecurity/trufflehog@main
+      # Fixed TruffleHog - official recommended config (no explicit base/head)
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
-          extra_args: --debug --only-verified
+          extra_args: --debug --only-verified --fail   # --fail makes verified secrets block the build
+        # Allow first commits / schedule runs to continue if no prior base exists
+        continue-on-error: ${{ github.event.before == '0000000000000000000000000000000000000000' || github.event_name == 'schedule' }}
 
       - name: check forbidden files
         run: |
-          for pattern in '\.env$' '\.pem$' '\.key$' 'credentials' 'secret' 'password' '\.p12$' '\.pfx$'; do
+          for pattern in '\.env\( ' '\.pem \)' '\.key\( ' 'credentials' 'secret' 'password' '\.p12 \)' '\.pfx$'; do
             FOUND=$(git ls-files | grep -iE "$pattern" || true)
             if [ -n "$FOUND" ]; then
               echo "forbidden pattern: $pattern"
@@ -63,6 +70,8 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,6 +124,8 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,6 +176,8 @@ jobs:
   test:
     needs: [dependency-audit, static-analysis]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -248,7 +261,7 @@ jobs:
       - name: trivy scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          image-ref: ghcr.io/\( {{ github.repository }}: \){{ github.sha }}
           format: sarif
           output: trivy-results.sarif
 
@@ -271,6 +284,8 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     steps:
       - run: echo "deploy to staging"
 
@@ -279,6 +294,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
     steps:
       - uses: trstringer/manual-approval@v1
         with:
