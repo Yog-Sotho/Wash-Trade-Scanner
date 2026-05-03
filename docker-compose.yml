@@ -6,7 +6,7 @@ services:
     container_name: wash_detector_db
     environment:
       POSTGRES_USER: wash_user
-      POSTGRES_PASSWORD: wash_pass
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD environment variable is required}
       POSTGRES_DB: wash_detector
     ports:
       - "5432:5432"
@@ -17,23 +17,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   app:
     build: .
     container_name: wash_detector_app
     environment:
-      DATABASE_URL: postgresql+asyncpg://wash_user:wash_pass@postgres:5432/wash_detector
-      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://wash_user:${POSTGRES_PASSWORD}@postgres:5432/wash_detector
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ML_MODEL_PATH: /app/models/ml_model.pkl
-      COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       BOT_ALLOWLIST: ${BOT_ALLOWLIST:-}
+      RPC_RATE_LIMIT: ${RPC_RATE_LIMIT:-10}
+      RPC_TIMEOUT: ${RPC_TIMEOUT:-60}
+      WASH_TRADE_TIME_WINDOW_MINUTES: ${WASH_TRADE_TIME_WINDOW_MINUTES:-60}
+      MIN_WASH_TRADE_VOLUME_USD: ${MIN_WASH_TRADE_VOLUME_USD:-100}
+      SUSPICIOUS_ACTIVITY_THRESHOLD: ${SUSPICIOUS_ACTIVITY_THRESHOLD:-0.85}
+      ML_CONTAMINATION: ${ML_CONTAMINATION:-0.05}
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
-    command: python scripts/run_audit.py --chain-id 1 --pool 0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc
     restart: unless-stopped
 
 volumes:

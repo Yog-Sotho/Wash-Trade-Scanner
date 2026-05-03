@@ -35,7 +35,9 @@ dependencies = [
     "aiohttp>=3.8.0",
     "redis>=5.0.0",
     "python-json-logger>=2.0.0",
-    "tqdm>=4.65.0"
+    "tqdm>=4.65.0",
+    "httpx>=0.24.0",
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
