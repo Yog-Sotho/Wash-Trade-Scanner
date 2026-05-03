@@ -4,6 +4,7 @@ from .feature_engineer import FeatureEngineer
 from .heuristics import HeuristicDetector
 from .ml_detector import MLDetector
 from .entity_clustering import EntityClusterer
+from .price_oracle import PriceOracle, get_price_oracle, TokenPrice
 
 __all__ = [
     "Storage",
@@ -13,4 +14,7 @@ __all__ = [
     "HeuristicDetector",
     "MLDetector",
     "EntityClusterer",
+    "PriceOracle",
+    "get_price_oracle",
+    "TokenPrice",
 ]
