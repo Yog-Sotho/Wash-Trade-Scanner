@@ -1,21 +1,43 @@
 """
 SQLAlchemy and Pydantic models for the database.
+
+This module provides:
+- SQLAlchemy ORM models for PostgreSQL tables
+- Pydantic models for API request/response validation
+- Database schema definitions for all entities
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
+
+from pydantic import ConfigDict, BaseModel, Field
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Boolean,
-    BigInteger, Index, JSON
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
-from pydantic import BaseModel, ConfigDict
 
 Base = declarative_base()
 
 
+# ==============================================================================
+# SQLAlchemy ORM Models
+# ==============================================================================
+
 class SwapTrade(Base):
+    """Swap trade record from DEX events."""
+
     __tablename__ = "swap_trades"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -50,6 +72,8 @@ class SwapTrade(Base):
 
 
 class AddressCluster(Base):
+    """Address cluster for entity clustering."""
+
     __tablename__ = "address_clusters"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -64,6 +88,8 @@ class AddressCluster(Base):
 
 
 class TokenRiskProfile(Base):
+    """Token risk profile based on detected wash trading."""
+
     __tablename__ = "token_risk_profiles"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -89,6 +115,8 @@ class TokenRiskProfile(Base):
 
 
 class DetectionAuditLog(Base):
+    """Audit log for detection runs."""
+
     __tablename__ = "detection_audit_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -105,12 +133,20 @@ class DetectionAuditLog(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        Index("ix_detection_audit_logs_chain_pool_time", "chain_id", "pool_address", "created_at"),
+        Index(
+            "ix_detection_audit_logs_chain_pool_time",
+            "chain_id", "pool_address", "created_at"
+        ),
     )
 
 
-# Pydantic models for API responses
+# ==============================================================================
+# Pydantic Models for API
+# ==============================================================================
+
 class SwapTradeResponse(BaseModel):
+    """Pydantic model for swap trade API responses."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -133,6 +169,8 @@ class SwapTradeResponse(BaseModel):
 
 
 class TokenRiskProfileResponse(BaseModel):
+    """Pydantic model for token risk profile API responses."""
+
     model_config = ConfigDict(from_attributes=True)
 
     chain_id: int
@@ -150,15 +188,21 @@ class TokenRiskProfileResponse(BaseModel):
 
 
 class AuditRequest(BaseModel):
-    chain_id: int
-    pool_address: str
-    start_block: Optional[int] = None
-    end_block: Optional[int] = None
-    use_ml: bool = True
-    use_heuristics: bool = True
+    """Pydantic model for audit API requests."""
+
+    chain_id: int = Field(..., description="Blockchain chain ID")
+    pool_address: str = Field(..., description="Pool contract address")
+    start_block: Optional[int] = Field(None, description="Starting block number")
+    end_block: Optional[int] = Field(None, description="Ending block number")
+    use_ml: bool = Field(True, description="Enable ML-based detection")
+    use_heuristics: bool = Field(True, description="Enable heuristic detection")
 
 
 class AuditResponse(BaseModel):
+    """Pydantic model for audit API responses."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     audit_id: int
     chain_id: int
     pool_address: str
@@ -169,4 +213,52 @@ class AuditResponse(BaseModel):
     risk_score: float
     detection_methods_used: List[str]
     duration_seconds: float
+    timestamp: datetime
+
+
+class PriceData(BaseModel):
+    """Pydantic model for token price data."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    token_address: str
+    price_usd: float
+    price_change_24h: Optional[float] = None
+    price_change_7d: Optional[float] = None
+    market_cap: Optional[float] = None
+    volume_24h: Optional[float] = None
+    last_updated: datetime
+
+
+class HeuristicResult(BaseModel):
+    """Pydantic model for heuristic detection results."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    method: str
+    wash_trades_count: int
+    confidence_scores: List[float]
+    flags: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ClusterResult(BaseModel):
+    """Pydantic model for entity clustering results."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    cluster_id: str
+    addresses: List[str]
+    confidence_score: float
+    evidence: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthCheckResponse(BaseModel):
+    """Pydantic model for health check responses."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str
+    database_connected: bool
+    rpc_endpoints: Dict[str, bool]
+    ml_model_loaded: bool
     timestamp: datetime
