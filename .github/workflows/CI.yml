@@ -7,13 +7,14 @@ on:
     branches: [main, develop]
   schedule:
     - cron: '0 6 * * *'
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "1.7.1"
 
 concurrency:
-  group: \( {{ github.workflow }}- \){{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -22,6 +23,7 @@ permissions:
 jobs:
   pre-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
     steps:
@@ -30,19 +32,25 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: verify commit signatures
+      - name: Verify commit signatures
         id: check
         run: |
-          if [[ "${{ github.ref }}" == refs/heads/main ]]; then
-            UNSIGNED=$(git log --format='%H' \( {{ github.event.before }}.. \){{ github.sha }} | while read c; do
-              git verify-commit $c 2>/dev/null || echo $c
-            done)
-            if [ -n "$UNSIGNED" ]; then
-              echo "unsigned commits: $UNSIGNED"
-              exit 1
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # github.event.before is only meaningful on push events; guard against empty/zeroed values
+            BEFORE="${{ github.event.before }}"
+            if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+              echo "Skipping signature check: no valid before-ref available"
+            else
+              UNSIGNED=$(git log --format='%H' "${BEFORE}..${{ github.sha }}" | while read -r c; do
+                git verify-commit "$c" 2>/dev/null || echo "$c"
+              done)
+              if [ -n "$UNSIGNED" ]; then
+                echo "unsigned commits: $UNSIGNED"
+                exit 1
+              fi
             fi
           fi
-          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
 
       - name: TruffleHog Secret Scan
         uses: trufflesecurity/trufflehog@main
@@ -51,12 +59,12 @@ jobs:
           extra_args: --debug --only-verified --fail
         continue-on-error: ${{ github.event.before == '0000000000000000000000000000000000000000' || github.event_name == 'schedule' }}
 
-      - name: check forbidden files
+      - name: Check forbidden files
         run: |
-          for pattern in '\.env\( ' '\.pem \)' '\.key\( ' 'credentials' 'secret' 'password' '\.p12 \)' '\.pfx$'; do
+          for pattern in '\.env$' '\.pem$' '\.key$' 'credentials' 'secret' 'password' '\.p12$' '\.pfx$'; do
             FOUND=$(git ls-files | grep -iE "$pattern" || true)
             if [ -n "$FOUND" ]; then
-              echo "forbidden pattern: $pattern"
+              echo "forbidden pattern matched: $pattern"
               echo "$FOUND"
               exit 1
             fi
@@ -66,6 +74,7 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -86,9 +95,11 @@ jobs:
       - run: poetry check --lock
       - run: poetry export -f requirements.txt --output requirements.txt --without-hashes
 
+      - name: Install audit tools
+        run: pip install pip-audit safety cyclonedx-bom
+
       - name: pip-audit scan
         run: |
-          pip install pip-audit
           pip-audit --requirement requirements.txt --format=json --output=pip-audit.json
           CRITICAL=$(jq '[.dependencies[]?.vulns[]? | select(.fix_versions | length > 0)] | length' pip-audit.json)
           if [ "$CRITICAL" -gt 0 ]; then
@@ -98,13 +109,16 @@ jobs:
 
       - name: safety scan
         run: |
-          pip install safety
           safety scan --file requirements.txt --json --output safety.json
+          # Fail if Safety reports any vulnerabilities with known fixes (align with pip-audit behavior)
+          FIXABLE=$(jq '[.vulnerabilities[]? | select(.vulnerability_id)] | length' safety.json || echo "0")
+          if [ "$FIXABLE" -gt 0 ]; then
+            echo "$FIXABLE vulnerabilities reported by safety"
+            exit 1
+          fi
 
-      - name: generate sbom
-        run: |
-          pip install cyclonedx-bom
-          cyclonedx-py environment --output-format json --output-file sbom.json
+      - name: Generate SBOM
+        run: cyclonedx-py environment --output-format json --output-file sbom.json
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -120,6 +134,7 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -139,26 +154,23 @@ jobs:
 
       - run: poetry install --no-interaction
 
-      - name: ruff
+      - name: Install linters
         run: |
-          poetry run pip install ruff
-          poetry run ruff check .
-          poetry run ruff format --check .
+          pip install ruff mypy bandit pylint
 
-      - name: mypy
+      - name: Ruff
         run: |
-          poetry run pip install mypy
-          poetry run mypy . --strict --ignore-missing-imports
+          ruff check .
+          ruff format --check .
 
-      - name: bandit
-        run: |
-          poetry run pip install bandit
-          poetry run bandit -r . -f json -o bandit.json || true
+      - name: Mypy
+        run: mypy . --strict --ignore-missing-imports
 
-      - name: pylint
-        run: |
-          poetry run pip install pylint
-          poetry run pylint . --output-format=json > pylint.json || true
+      - name: Bandit
+        run: bandit -r . -f json -o bandit.json || true
+
+      - name: Pylint
+        run: pylint . --output-format=json > pylint.json || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -172,9 +184,11 @@ jobs:
   test:
     needs: [dependency-audit, static-analysis]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
@@ -194,10 +208,12 @@ jobs:
 
       - run: poetry install --no-interaction
 
-      - name: run tests
+      - name: Install test tools
+        run: pip install pytest pytest-asyncio pytest-cov hypothesis
+
+      - name: Run tests
         run: |
-          poetry run pip install pytest pytest-asyncio pytest-cov hypothesis
-          poetry run pytest tests/ \
+          pytest tests/ \
             -v \
             --cov=core \
             --cov-report=xml \
@@ -221,6 +237,7 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -242,8 +259,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: build image
+      - name: Build image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -254,10 +275,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: trivy scan
+      - name: Trivy scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ghcr.io/\( {{ github.repository }}: \){{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
 
@@ -266,7 +287,7 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-      - name: push image
+      - name: Push image
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
         with:
@@ -274,29 +295,37 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
 
   deploy-staging:
     needs: build
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-    environment: staging
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: https://staging.example.com
     permissions:
       contents: read
     steps:
-      - run: echo "deploy to staging"
+      - run: echo "Deploy to staging"
 
   deploy-production:
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://example.com
     permissions:
       contents: read
     steps:
-      - uses: trstringer/manual-approval@v1
+      - name: Await manual approval
+        uses: trstringer/manual-approval@v1
         with:
-          secret: ${{ github.TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           approvers: ${{ vars.APPROVERS }}
           minimum-approvals: 2
 
-      - run: echo "deploy to production"
+      - run: echo "Deploy to production"
