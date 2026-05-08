@@ -10,13 +10,13 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 - **Heuristic Detection** with near‑zero false positives:
   - Self‑trading (same sender/recipient)
   - Circular trading (strongly connected components)
-  - High‑frequency bot patterns (allow‑listable via `BOT_ALLOWLIST`)
-  - Volume anomaly detection (z‑score, threshold configurable)
+  - High‑frequency bot patterns (allow‑listable via `BOT_ALLOWLIST`, thresholds configurable)
+  - Volume anomaly detection (MAD/IQR/z‑score, method and threshold configurable)
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
-- **Machine Learning** – Isolation Forest with per‑pool contamination control.
-- **Real‑time Monitoring** – WebSocket‑based listeners.
+- **Machine Learning** – Isolation Forest with per‑pool contamination control and feature explainability.
+- **Real‑time Monitoring** – HTTP‑based listeners with circuit breaker protection.
 - **Full Audit Reports** – JSON/CSV export.
-- **Production‑Ready** – Retry logic, rate limiting, graceful shutdown, input validation.
+- **Production‑Ready** – Retry logic, rate limiting, circuit breaker, graceful shutdown, input validation, SSL/TLS enforcement.
 
 ## Quick Start
 
@@ -29,11 +29,16 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 
     python -m venv venv
     source venv/bin/activate  # or venv\Scripts\activate on Windows
-    pip install -e .
+    pip install -e ".[dev]"
 
 ### 3. Set up environment
 
-Copy `.env.example` to `.env` and fill in your RPC endpoints (at least one per chain you want to scan). `DATABASE_URL` is **required**.
+Copy `.env.example` to `.env` and fill in your RPC endpoints (at least one per chain you want to scan). Database configuration is **required** via separate secure parameters:
+
+- `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD`
+- `DATABASE_SSL_MODE` defaults to `require`
+
+See `.env.example` for full reference.
 
 ### 4. Start the database (Docker)
 
@@ -56,6 +61,8 @@ Then initialise the tables:
         --end-block 19000000 \
         --export json
 
+Addresses are checksum‑validated. Block ranges are limited to 10M spans maximum.
+
 For more options:
 
     python scripts/run_audit.py --help
@@ -68,9 +75,13 @@ For more options:
 
 All settings are in `.env` (see `.env.example`). Important variables:
 
-- `DATABASE_URL` – PostgreSQL connection string (async) – **required**
+- `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, `DATABASE_PASSWORD` – PostgreSQL connection parameters (async, SSL enforced)
+- `DATABASE_SSL_MODE` – `require` (default), `verify-ca`, `verify-full`
 - `BOT_ALLOWLIST` – comma‑separated addresses to skip in high‑frequency bot detection
-- `ETH_RPC_URL`, `BSC_RPC_URL`, … – RPC endpoints per chain
+- `ETH_RPC_URL`, `BSC_RPC_URL`, … – RPC endpoints per chain (placeholders rejected at startup)
+- `VOLUME_ANOMALY_METHOD` – `mad` (default), `iqr`, or `zscore`
+- `VOLUME_ANOMALY_THRESHOLD` – default 3.5 for MAD/IQR
+- `RPC_MAX_FAILURES` / `RPC_RECOVERY_TIMEOUT` – circuit breaker configuration
 
 Full reference: see `docs/configuration.md`.
 
@@ -78,15 +89,15 @@ Full reference: see `docs/configuration.md`.
 
 1. **Self‑Trading**: `sender == recipient` ⇒ instant wash trade (score 1.0).
 2. **Circular Trading**: Strongly Connected Components in the trade graph with reverse trades within a configurable time window.
-3. **High‑Frequency Bot**: More than 10 trades from the same sender with average inter‑trade time < 60s and low volume variance (CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored.
-4. **Volume Anomaly**: z‑score > 3 on trade volume within 1‑hour buckets (threshold configurable in settings).
-5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning).
-6. **ML Isolation Forest**: Anomaly detection on 16 trade‑level features. Can be retrained with custom contamination per pool.
+3. **High‑Frequency Bot**: Configurable thresholds (default: >10 trades, average inter‑trade time < 60s, CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored. All thresholds tunable via environment.
+4. **Volume Anomaly**: MAD (default) or IQR on log‑transformed trade volumes within configurable buckets. Z‑score available for backward compatibility. Threshold configurable in settings.
+5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning). Optional due to privacy implications.
+6. **ML Isolation Forest**: Anomaly detection on 16 trade‑level features. Per‑pool contamination control. Feature explainability available via `ML_EXPLAINABILITY=true`.
 
 ## Architecture
 
-    config/         – chain and DEX configurations
-    core/           – detection logic (ingestor, heuristics, ML, entity clustering)
+    config/         – chain and DEX configurations with validated RPC URLs
+    core/           – detection logic (ingestor, heuristics, ML, entity clustering, validators, circuit breaker)
     models/         – database schemas
     scripts/        – entry points (run_audit.py, train_model.py)
     tests/          – pytest tests
@@ -97,10 +108,19 @@ Full reference: see `docs/configuration.md`.
 - [Installation](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
 - [Architecture Overview](docs/architecture.md)
+- [Security Guide](docs/security.md)
 
 ## Testing
 
-    pytest tests/ -v --cov=core --cov-report=html
+    pytest tests/ -v --cov=core --cov-report=html --cov-fail-under=80
+
+## Security
+
+- Input validation via Pydantic (checksum addresses, block ranges, chain IDs)
+- Circuit breaker for RPC resilience
+- Database SSL/TLS enforcement
+- Secret scanning and dependency audit in CI
+- See `docs/security.md` for full details
 
 ## Export & Reporting
 
