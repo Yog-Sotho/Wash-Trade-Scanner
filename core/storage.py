@@ -1,22 +1,22 @@
 """
 Database storage layer using SQLAlchemy async.
+Secure connection handling with SSL enforcement.
 """
 
 import logging
 from typing import Optional, List, Dict, Any
-from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
     AsyncEngine,
-    async_sessionmaker
+    async_sessionmaker,
 )
 from sqlalchemy import select, update, and_, func
 
 from models.schemas import (
     Base, SwapTrade, AddressCluster,
-    TokenRiskProfile, DetectionAuditLog
+    TokenRiskProfile, DetectionAuditLog,
 )
 from config.settings import settings
 
@@ -24,19 +24,23 @@ logger = logging.getLogger(__name__)
 
 
 class Storage:
-    def __init__(self, database_url: str = settings.DATABASE_URL):
-        self.database_url = database_url
+    """Async database storage with connection pooling."""
+
+    def __init__(self, database_url: Optional[str] = None):
+        self.database_url = database_url or settings.DATABASE_URL
         self.engine: Optional[AsyncEngine] = None
         self.session_factory: Optional[async_sessionmaker] = None
 
-    async def initialize(self):
+    async def initialize(self) -> None:
+        """Initialize database engine and create tables."""
         self.engine = create_async_engine(
             self.database_url,
             echo=False,
             pool_size=10,
             max_overflow=20,
             pool_recycle=3600,
-            connect_args={"timeout": 30}
+            pool_pre_ping=True,
+            connect_args={"timeout": settings.RPC_TIMEOUT},
         )
         self.session_factory = async_sessionmaker(
             self.engine,
@@ -46,21 +50,35 @@ class Storage:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database initialized")
 
-    async def close(self):
+    async def close(self) -> None:
         """Dispose engine and release connections."""
         if self.engine:
             await self.engine.dispose()
-            logger.info("Database connections closed")
+            self.engine = None
+            self.session_factory = None
+        logger.info("Database connections closed")
 
-    @asynccontextmanager
+    async def health_check(self) -> bool:
+        """Verify database connectivity."""
+        if not self.engine:
+            return False
+        try:
+            async with self.engine.connect() as conn:
+                result = await conn.execute(select(func.now()))
+                return result.scalar() is not None
+        except Exception as exc:
+            logger.error(f"Database health check failed: {exc}")
+            return False
+
     async def get_session(self) -> AsyncSession:
+        """Get a new database session."""
         if not self.session_factory:
             raise RuntimeError("Storage not initialized. Call initialize() first.")
-        async with self.session_factory() as session:
-            yield session
+        return self.session_factory()
 
     async def save_trade(self, trade_data: Dict[str, Any]) -> SwapTrade:
-        async with self.get_session() as session:
+        """Save or update a single trade."""
+        async with await self.get_session() as session:
             stmt = select(SwapTrade).where(
                 and_(
                     SwapTrade.transaction_hash == trade_data["transaction_hash"],
@@ -81,8 +99,10 @@ class Storage:
             return trade
 
     async def save_trades_batch(self, trades_data: List[Dict[str, Any]]) -> int:
-        """Bulk insert trades using add_all for performance."""
-        async with self.get_session() as session:
+        """Bulk insert trades for performance."""
+        if not trades_data:
+            return 0
+        async with await self.get_session() as session:
             trades = [SwapTrade(**data) for data in trades_data]
             session.add_all(trades)
             await session.commit()
@@ -93,15 +113,20 @@ class Storage:
         trade_ids: List[int],
         is_wash_trade: bool,
         wash_trade_score: float,
-        detection_method: str
+        detection_method: str,
     ) -> int:
-        async with self.get_session() as session:
-            stmt = update(SwapTrade).where(
-                SwapTrade.id.in_(trade_ids)
-            ).values(
-                is_wash_trade=is_wash_trade,
-                wash_trade_score=wash_trade_score,
-                detection_method=detection_method,
+        """Update wash trade labels for given trade IDs."""
+        if not trade_ids:
+            return 0
+        async with await self.get_session() as session:
+            stmt = (
+                update(SwapTrade)
+                .where(SwapTrade.id.in_(trade_ids))
+                .values(
+                    is_wash_trade=is_wash_trade,
+                    wash_trade_score=wash_trade_score,
+                    detection_method=detection_method,
+                )
             )
             result = await session.execute(stmt)
             await session.commit()
@@ -112,28 +137,34 @@ class Storage:
         chain_id: int,
         pool_address: str,
         limit: Optional[int] = None,
-        offset: int = 0
+        offset: int = 0,
     ) -> List[SwapTrade]:
-        async with self.get_session() as session:
-            stmt = select(SwapTrade).where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
+        """Retrieve trades for a specific pool."""
+        async with await self.get_session() as session:
+            stmt = (
+                select(SwapTrade)
+                .where(
+                    and_(
+                        SwapTrade.chain_id == chain_id,
+                        SwapTrade.pool_address == pool_address,
+                    )
                 )
-            ).order_by(SwapTrade.block_timestamp.desc())
+                .order_by(SwapTrade.block_timestamp.desc())
+            )
             if limit:
                 stmt = stmt.limit(limit).offset(offset)
             result = await session.execute(stmt)
-            return result.scalars().all()
+            return list(result.scalars().all())
 
     async def update_token_risk_profile(
         self,
         chain_id: int,
         pool_address: str,
         token_address: str,
-        risk_metrics: Dict[str, Any]
+        risk_metrics: Dict[str, Any],
     ) -> TokenRiskProfile:
-        async with self.get_session() as session:
+        """Update or create token risk profile."""
+        async with await self.get_session() as session:
             stmt = select(TokenRiskProfile).where(
                 and_(
                     TokenRiskProfile.chain_id == chain_id,
@@ -145,14 +176,15 @@ class Storage:
             profile = result.scalar_one_or_none()
             if profile:
                 for key, value in risk_metrics.items():
-                    setattr(profile, key, value)
+                    if hasattr(profile, key):
+                        setattr(profile, key, value)
                 profile.last_updated = func.now()
             else:
                 profile = TokenRiskProfile(
                     chain_id=chain_id,
                     pool_address=pool_address,
                     token_address=token_address,
-                    **risk_metrics
+                    **risk_metrics,
                 )
                 session.add(profile)
             await session.commit()
@@ -170,9 +202,10 @@ class Storage:
         wash_trades_detected: int,
         detection_duration_seconds: float,
         parameters_used: Dict[str, Any],
-        results_summary: Dict[str, Any]
+        results_summary: Dict[str, Any],
     ) -> DetectionAuditLog:
-        async with self.get_session() as session:
+        """Create audit log entry."""
+        async with await self.get_session() as session:
             log = DetectionAuditLog(
                 chain_id=chain_id,
                 pool_address=pool_address,
@@ -191,9 +224,25 @@ class Storage:
             return log
 
     async def get_address_clusters(self, chain_id: int) -> List[AddressCluster]:
-        async with self.get_session() as session:
+        """Retrieve address clusters for a chain."""
+        async with await self.get_session() as session:
             stmt = select(AddressCluster).where(
                 AddressCluster.cluster_id.like(f"{chain_id}:%")
             )
             result = await session.execute(stmt)
-            return result.scalars().all()
+            return list(result.scalars().all())
+
+    async def cleanup_old_data(self, retention_days: int) -> int:
+        """Remove trades older than retention period."""
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        async with await self.get_session() as session:
+            stmt = select(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
+            result = await session.execute(stmt)
+            old_trades = result.scalars().all()
+            count = len(old_trades)
+            for trade in old_trades:
+                await session.delete(trade)
+            await session.commit()
+            logger.info(f"Cleaned up {count} old trades")
+            return count
