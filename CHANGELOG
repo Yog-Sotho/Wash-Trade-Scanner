@@ -1,0 +1,40 @@
+# Changelog
+
+## [1.0.1] - 2026-04-25
+
+### Security
+- Replaced plaintext `.env` credential storage with Pydantic Settings validation
+- Enforced database SSL/TLS (`sslmode=require` default)
+- Added input validation layer (`core/validators.py`) with checksum address validation
+- Added circuit breaker pattern (`core/circuit_breaker.py`) for RPC resilience
+- Added hierarchical exception types (`core/exceptions.py`)
+- CI pipeline: secret scanning, dependency audit, SBOM generation
+
+### Fixed
+- Replaced z-score volume anomaly with MAD/IQR (distribution-agnostic)
+- Made bot detection thresholds configurable (not hardcoded)
+- Fixed RPC placeholder validation (fails fast on `YOUR_KEY`)
+- Added graceful shutdown with SIGINT/SIGTERM handlers
+- Enforced 10M block range maximum
+
+### Added
+- ML explainability via feature perturbation importance
+- Database health checks and connection pre-ping
+- Automatic data cleanup by retention period
+- Per-pool contamination override for ML training
+- Full type hints across all modules
+
+### Changed
+- Python requirement: 3.10 → 3.11
+- Dependency pinning with upper bounds
+- `pyproject.toml` replaces `setup.py` as primary config
+- CI workflow renamed to neutral `ci` (no security disclosure)
+
+## [1.0.0] - Initial Release
+
+- Multi-chain support (20+ networks)
+- Multi-DEX support (Uniswap V2/V3, PancakeSwap, Sushiswap, Curve, Balancer, etc.)
+- Heuristic detection: self-trading, circular, bot, volume anomaly, clusters
+- ML: Isolation Forest with 16 features
+- Real-time WebSocket listeners
+- JSON/CSV export
