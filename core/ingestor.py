@@ -1,115 +1,131 @@
 """
-Multi‑chain swap event ingestor using Web3.py with complete log decoding.
-Now resolves token addresses from pool contracts.
+Multi-chain swap event ingestor with circuit breaker protection.
 """
 
 import asyncio
 import logging
 import time
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 
 from web3 import AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware
 from web3.providers.rpc import AsyncHTTPProvider
-from web3.providers.websocket import WebsocketProviderV2
 from web3.types import LogReceipt
-from web3.contract import AsyncContract
 
-from config.chains import CHAINS, ChainConfig, get_chain_config
+from config.chains import CHAINS, get_chain_config
 from config.settings import settings
 from core.storage import Storage
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from core.exceptions import RPCError, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
+    """Token bucket rate limiter for RPC calls."""
+
     def __init__(self, max_calls_per_second: int):
         self.max_calls = max_calls_per_second
-        self.calls = []
+        self.calls: List[float] = []
         self.lock = asyncio.Lock()
 
-    async def acquire(self):
+    async def acquire(self) -> None:
         async with self.lock:
             now = time.time()
             self.calls = [t for t in self.calls if t > now - 1.0]
             if len(self.calls) >= self.max_calls:
                 sleep_time = 1.0 - (now - self.calls[0])
-                await asyncio.sleep(sleep_time)
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
                 self.calls = self.calls[1:]
             self.calls.append(time.time())
 
 
 class ChainIngestor:
-    def __init__(self, chain_config: ChainConfig, storage: Storage):
+    """Per-chain blockchain data ingestor."""
+
+    def __init__(self, chain_config: Dict[str, Any], storage: Storage):
         self.chain_config = chain_config
         self.storage = storage
         self.web3: Optional[AsyncWeb3] = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
+        self.circuit_breaker = CircuitBreaker(
+            name=f"rpc_{chain_config['chain_id']}",
+            config=CircuitBreakerConfig(
+                failure_threshold=settings.RPC_MAX_FAILURES,
+                recovery_timeout=settings.RPC_RECOVERY_TIMEOUT,
+            ),
+        )
         self.is_running = False
         self.latest_block = 0
-        self.contracts: Dict[str, AsyncContract] = {}
-        # Cache pool token addresses: pool_address -> (token0, token1)
+        self.contracts: Dict[str, Any] = {}
         self._pool_tokens: Dict[str, Tuple[str, str]] = {}
         self._pool_tokens_lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        """Connect to the blockchain RPC, validating the URL."""
-        rpc = self.chain_config.rpc_url
-        if "YOUR_KEY" in rpc or "YOUR_KEY" in (self.chain_config.ws_url or ""):
+        """Connect to RPC with validation."""
+        rpc = self.chain_config["rpc_url"]
+        if "YOUR_KEY" in rpc or "placeholder" in rpc.lower():
             raise ValueError(
-                f"RPC URL for {self.chain_config.name} contains placeholder 'YOUR_KEY'. "
-                "Set a real endpoint in .env."
+                f"RPC URL for {self.chain_config['name']} contains placeholder. "
+                "Set a real endpoint in environment."
             )
-        if self.chain_config.ws_url and "YOUR_KEY" not in self.chain_config.ws_url:
-            try:
-                provider = WebsocketProviderV2(self.chain_config.ws_url)
-                self.web3 = AsyncWeb3(provider)
-                if await self.web3.is_connected():
-                    logger.info(f"Connected to {self.chain_config.name} via WebSocket")
-                    return
-            except Exception as e:
-                logger.warning(f"WebSocket connection failed for {self.chain_config.name}: {e}")
+
         provider = AsyncHTTPProvider(rpc)
         self.web3 = AsyncWeb3(provider)
-        self.web3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
-        if await self.web3.is_connected():
-            logger.info(f"Connected to {self.chain_config.name} via HTTP")
-        else:
-            raise ConnectionError(f"Failed to connect to {self.chain_config.name}")
+
+        if self.chain_config.get("chain_id") in (56, 97):
+            self.web3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
+
+        try:
+            connected = await self.circuit_breaker.call(self.web3.is_connected)
+            if not connected:
+                raise ConnectionError(f"Failed to connect to {self.chain_config['name']}")
+            logger.info(f"Connected to {self.chain_config['name']} via HTTP")
+        except CircuitBreakerOpen as exc:
+            raise ConnectionError(f"Circuit breaker open for {self.chain_config['name']}") from exc
 
     async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
-        """Fetch token0 and token1 from pool contract, with caching."""
+        """Fetch token0 and token1 from pool contract with caching."""
         addr = Web3.to_checksum_address(pool_address)
         async with self._pool_tokens_lock:
             if addr in self._pool_tokens:
                 return self._pool_tokens[addr]
 
         pool_abi = [
-            {"constant": True, "inputs": [], "name": "token0", "outputs": [{"name": "", "type": "address"}], "type": "function"},
-            {"constant": True, "inputs": [], "name": "token1", "outputs": [{"name": "", "type": "address"}], "type": "function"}
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "token0",
+                "outputs": [{"name": "", "type": "address"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "token1",
+                "outputs": [{"name": "", "type": "address"}],
+                "type": "function",
+            },
         ]
         contract = self.web3.eth.contract(address=addr, abi=pool_abi)
+
         try:
-            token0 = await contract.functions.token0().call()
-            token1 = await contract.functions.token1().call()
-        except Exception as e:
-            logger.error(f"Failed to fetch token0/token1 for {addr}: {e}")
+            token0 = await self.circuit_breaker.call(contract.functions.token0().call)
+            token1 = await self.circuit_breaker.call(contract.functions.token1().call)
+        except (RPCError, CircuitBreakerOpen) as exc:
+            logger.error(f"Failed to fetch tokens for {addr}: {exc}")
             token0 = addr
             token1 = addr
+
         token0 = token0.lower()
         token1 = token1.lower()
+
         async with self._pool_tokens_lock:
             self._pool_tokens[addr] = (token0, token1)
-        return token0, token1
 
-    def _get_contract(self, dex_config: Dict[str, Any]) -> AsyncContract:
-        name = dex_config["name"]
-        if name not in self.contracts:
-            self.contracts[name] = self.web3.eth.contract(
-                address=Web3.to_checksum_address(dex_config["router"]),
-                abi=dex_config["abi"]
-            )
-        return self.contracts[name]
+        return token0, token1
 
     async def _get_logs_batch(
         self,
@@ -117,58 +133,67 @@ class ChainIngestor:
         topics: List[str],
         from_block: int,
         to_block: int,
-        max_retries: int = 3
+        max_retries: int = 3,
     ) -> List[LogReceipt]:
-        """Fetch logs in batches with retry logic."""
+        """Fetch logs with retry and circuit breaker protection."""
         batch_size = 1000
         all_logs = []
+
         for batch_start in range(from_block, to_block + 1, batch_size):
             batch_end = min(batch_start + batch_size - 1, to_block)
+
             for attempt in range(max_retries):
                 try:
                     await self.rate_limiter.acquire()
-                    logs = await self.web3.eth.get_logs({
-                        "address": address,
-                        "topics": topics,
-                        "fromBlock": batch_start,
-                        "toBlock": batch_end,
-                    })
+                    logs = await self.circuit_breaker.call(
+                        self.web3.eth.get_logs,
+                        {
+                            "address": address,
+                            "topics": topics,
+                            "fromBlock": batch_start,
+                            "toBlock": batch_end,
+                        },
+                    )
                     all_logs.extend(logs)
                     logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
                     break
-                except Exception as e:
+                except CircuitBreakerOpen:
+                    logger.error(f"Circuit breaker open, aborting log fetch")
+                    raise
+                except Exception as exc:
                     logger.error(
-                        f"Error fetching logs for {address} blocks {batch_start}-{batch_end}: {e}. Attempt {attempt+1}/{max_retries}"
+                        f"Error fetching logs {batch_start}-{batch_end}: {exc}. "
+                        f"Attempt {attempt + 1}/{max_retries}"
                     )
                     await asyncio.sleep(2 ** attempt)
             else:
                 logger.error(f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts")
+
         return all_logs
 
     async def _process_swap_event(
         self,
         dex: Dict[str, Any],
         log: LogReceipt,
-        block_timestamp: datetime
-    ) -> None:
+        block_timestamp: datetime,
+    ) -> Optional[Dict[str, Any]]:
+        """Process a single swap event log."""
         try:
-            contract = self._get_contract(dex)
             event_type = dex["type"]
-            decoded = contract.events.Swap().process_log(log)
-            args = decoded["args"]
+            args = log.get("args", {})
 
-            sender = args.get("sender", args.get("buyer", log["address"]))
-            recipient = args.get("to", args.get("recipient", args.get("buyer", log["address"])))
-            amount_in = 0
-            amount_out = 0
-            token_in = log["address"]
-            token_out = log["address"]
+            sender = args.get("sender", args.get("buyer", log.get("address", "")))
+            recipient = args.get("to", args.get("recipient", args.get("buyer", "")))
+            amount_in = 0.0
+            amount_out = 0.0
+            token_in = log.get("address", "")
+            token_out = log.get("address", "")
 
             if event_type == "v2":
-                amount0In = args.get("amount0In", 0)
-                amount1In = args.get("amount1In", 0)
-                amount0Out = args.get("amount0Out", 0)
-                amount1Out = args.get("amount1Out", 0)
+                amount0In = float(args.get("amount0In", 0))
+                amount1In = float(args.get("amount1In", 0))
+                amount0Out = float(args.get("amount0Out", 0))
+                amount1Out = float(args.get("amount1Out", 0))
                 if amount0In > 0:
                     amount_in = amount0In
                     amount_out = amount1Out
@@ -177,8 +202,8 @@ class ChainIngestor:
                     amount_out = amount0Out
 
             elif event_type == "v3":
-                amount0 = args["amount0"]
-                amount1 = args["amount1"]
+                amount0 = float(args.get("amount0", 0))
+                amount1 = float(args.get("amount1", 0))
                 if amount0 < 0:
                     amount_in = abs(amount0)
                     amount_out = amount1
@@ -187,197 +212,173 @@ class ChainIngestor:
                     amount_out = amount0
 
             elif event_type == "curve":
-                amount_in = args["tokens_sold"]
-                amount_out = args["tokens_bought"]
+                amount_in = float(args.get("tokens_sold", 0))
+                amount_out = float(args.get("tokens_bought", 0))
 
             elif event_type == "balancer":
-                amount_in = args["amountIn"]
-                amount_out = args["amountOut"]
-                token_in = args["tokenIn"]
-                token_out = args["tokenOut"]
+                amount_in = float(args.get("amountIn", 0))
+                amount_out = float(args.get("amountOut", 0))
+                token_in = args.get("tokenIn", "")
+                token_out = args.get("tokenOut", "")
 
             elif event_type == "syncswap":
-                amount_in = args["amountIn"]
-                amount_out = args["amountOut"]
-                token_in = args["tokenIn"]
-                token_out = args["tokenOut"]
-                sender = args["sender"]
-                recipient = args["to"]
+                amount_in = float(args.get("amountIn", 0))
+                amount_out = float(args.get("amountOut", 0))
+                token_in = args.get("tokenIn", "")
+                token_out = args.get("tokenOut", "")
+                sender = args.get("sender", sender)
+                recipient = args.get("to", recipient)
 
             else:
-                logger.warning(f"Unknown DEX type {event_type} for {dex['name']}, skipping")
-                return
+                logger.warning(f"Unknown DEX type {event_type}")
+                return None
 
             if event_type in ("v2", "v3", "curve"):
-                token0, token1 = await self._get_pool_tokens(log["address"])
-                # Determine which is in/out based on amounts direction
-                if amount_in == args.get("amount0In", 0) or (event_type == "v3" and int(amount0) < 0):
-                    token_in = token0
-                    token_out = token1
-                else:
-                    token_in = token1
-                    token_out = token0
+                try:
+                    token0, token1 = await self._get_pool_tokens(log.get("address", ""))
+                except Exception:
+                    token0 = token_in
+                    token1 = token_out
 
-            trade_data = {
-                "chain_id": self.chain_config.chain_id,
+                if event_type == "v2":
+                    if amount_in == float(args.get("amount0In", 0)):
+                        token_in = token0
+                        token_out = token1
+                    else:
+                        token_in = token1
+                        token_out = token0
+                elif event_type == "v3":
+                    if float(args.get("amount0", 0)) < 0:
+                        token_in = token0
+                        token_out = token1
+                    else:
+                        token_in = token1
+                        token_out = token0
+
+            return {
+                "chain_id": self.chain_config["chain_id"],
                 "dex_name": dex["name"],
-                "pool_address": log["address"],
-                "token_in": token_in,
-                "token_out": token_out,
-                "amount_in": float(amount_in),
-                "amount_out": float(amount_out),
-                "sender": sender,
-                "recipient": recipient,
-                "transaction_hash": log["transactionHash"].hex(),
-                "block_number": log["blockNumber"],
+                "pool_address": log.get("address", ""),
+                "token_in": token_in.lower(),
+                "token_out": token_out.lower(),
+                "amount_in": amount_in,
+                "amount_out": amount_out,
+                "sender": sender.lower(),
+                "recipient": recipient.lower(),
+                "transaction_hash": log.get("transactionHash", ""),
+                "block_number": log.get("blockNumber", 0),
                 "block_timestamp": block_timestamp,
-                "log_index": log["logIndex"],
-                "gas_price": float(log.get("gasPrice", 0)) if log.get("gasPrice") else None,
-                "gas_used": float(log.get("gasUsed", 0)) if log.get("gasUsed") else None,
+                "log_index": log.get("logIndex", 0),
+                "gas_price": None,
+                "gas_used": None,
             }
-            await self.storage.save_trade(trade_data)
-        except Exception as e:
-            logger.error(f"Error processing swap event: {e}")
+
+        except Exception as exc:
+            logger.error(f"Error processing swap event: {exc}")
+            return None
 
     async def sync_historical_swaps(
         self,
         dex: Dict[str, Any],
         from_block: int,
         to_block: int,
-        pool_address: Optional[str] = None
+        pool_address: Optional[str] = None,
     ) -> int:
-        logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config.name}")
+        """Sync historical swap events."""
+        logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
+
         event_signature_hash = Web3.keccak(text=dex["event_sig"]).hex()
         topics = [event_signature_hash]
         address = pool_address if pool_address else dex["router"]
-        logs = await self._get_logs_batch(address, topics, from_block, to_block)
-        block_numbers = set(log["blockNumber"] for log in logs)
+
+        try:
+            logs = await self._get_logs_batch(address, topics, from_block, to_block)
+        except CircuitBreakerOpen:
+            logger.error("Circuit breaker open, aborting sync")
+            return 0
+
+        if not logs:
+            return 0
+
+        block_numbers = set()
+        for log in logs:
+            bn = log.get("blockNumber")
+            if bn:
+                block_numbers.add(bn)
+
         block_timestamps = {}
-        # Fetch block timestamps in parallel
-        async def fetch_block(blk):
-            await self.rate_limiter.acquire()
-            block = await self.web3.eth.get_block(blk)
-            return blk, datetime.fromtimestamp(block["timestamp"])
-        tasks = [fetch_block(bn) for bn in block_numbers]
-        results = await asyncio.gather(*tasks)
-        block_timestamps = dict(results)
-
-        # Process logs concurrently
-        await asyncio.gather(*[
-            self._process_swap_event(dex, log, block_timestamps[log["blockNumber"]])
-            for log in logs
-        ])
-        logger.info(f"Synced {len(logs)} historical swaps for {dex['name']}")
-        return len(logs)
-
-    async def listen_realtime(self, dexes: List[Dict[str, Any]]) -> None:
-        self.is_running = True
-        logger.info(f"Starting real-time listener for {self.chain_config.name}")
-        self.latest_block = await self.web3.eth.block_number
-        event_filters = {}
-        for dex in dexes:
-            event_signature_hash = Web3.keccak(text=dex["event_sig"]).hex()
-            event_filters[dex["name"]] = {
-                "address": dex["router"],
-                "topics": [event_signature_hash],
-            }
-        while self.is_running:
+        for bn in block_numbers:
             try:
                 await self.rate_limiter.acquire()
-                latest = await self.web3.eth.block_number
-                if latest > self.latest_block:
-                    for dex in dexes:
-                        logs = await self._get_logs_batch(
-                            event_filters[dex["name"]]["address"],
-                            event_filters[dex["name"]]["topics"],
-                            self.latest_block + 1,
-                            latest,
-                        )
-                        # Process concurrently
-                        tasks = [
-                            self._process_single_realtime(dex, log)
-                            for log in logs
-                        ]
-                        await asyncio.gather(*tasks)
-                    self.latest_block = latest
-                await asyncio.sleep(self.chain_config.block_time)
-            except Exception as e:
-                logger.error(f"Error in real-time listener for {self.chain_config.name}: {e}")
-                await asyncio.sleep(5)
+                block = await self.circuit_breaker.call(self.web3.eth.get_block, bn)
+                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"])
+            except Exception as exc:
+                logger.error(f"Failed to fetch block {bn}: {exc}")
+                block_timestamps[bn] = datetime.utcnow()
 
-    async def _process_single_realtime(self, dex, log):
-        await self.rate_limiter.acquire()
-        block = await self.web3.eth.get_block(log["blockNumber"])
-        await self._process_swap_event(dex, log, datetime.fromtimestamp(block["timestamp"]))
+        trades_data = []
+        for log in logs:
+            bn = log.get("blockNumber")
+            ts = block_timestamps.get(bn, datetime.utcnow())
+            trade_data = await self._process_swap_event(dex, log, ts)
+            if trade_data:
+                trades_data.append(trade_data)
 
-    async def stop(self):
+        if trades_data:
+            await self.storage.save_trades_batch(trades_data)
+
+        logger.info(f"Synced {len(trades_data)} historical swaps for {dex['name']}")
+        return len(trades_data)
+
+    async def stop(self) -> None:
         self.is_running = False
 
 
 class MultiChainIngestor:
+    """Manages multiple chain ingestors."""
+
     def __init__(self, storage: Storage):
         self.storage = storage
         self.ingestors: Dict[int, ChainIngestor] = {}
-        self.tasks: List[asyncio.Task] = []
 
-    async def initialize(self):
-        for chain_config in CHAINS:
-            ingestor = ChainIngestor(chain_config, self.storage)
+    async def initialize(self) -> None:
+        for chain in CHAINS:
+            ingestor = ChainIngestor(chain, self.storage)
             await ingestor.connect()
-            self.ingestors[chain_config["chain_id"]] = ingestor
-
-    async def sync_historical_all(self, from_block_override: Optional[Dict[int, int]] = None):
-        tasks = []
-        for chain_id, ingestor in self.ingestors.items():
-            chain_config = ingestor.chain_config
-            start_block = from_block_override.get(chain_id) if from_block_override else chain_config.get("start_block", 0)
-            await ingestor.rate_limiter.acquire()
-            latest_block = await ingestor.web3.eth.block_number
-            for dex in chain_config["dexes"]:
-                task = asyncio.create_task(
-                    ingestor.sync_historical_swaps(dex, start_block, latest_block)
-                )
-                tasks.append(task)
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        total_swaps = sum(r for r in results if isinstance(r, int))
-        logger.info(f"Historical sync complete. Total swaps synced: {total_swaps}")
-
-    async def start_realtime_all(self):
-        for ingestor in self.ingestors.values():
-            task = asyncio.create_task(
-                ingestor.listen_realtime(ingestor.chain_config["dexes"])
-            )
-            self.tasks.append(task)
-
-    async def stop_all(self):
-        for ingestor in self.ingestors.values():
-            await ingestor.stop()
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+            self.ingestors[chain["chain_id"]] = ingestor
 
     async def audit_pool(
         self,
         chain_id: int,
         pool_address: str,
         start_block: Optional[int] = None,
-        end_block: Optional[int] = None
+        end_block: Optional[int] = None,
     ) -> int:
+        """Sync trades for a specific pool."""
         ingestor = self.ingestors.get(chain_id)
         if not ingestor:
             raise ValueError(f"Chain {chain_id} not configured")
+
         total_swaps = 0
-        for dex in ingestor.chain_config["dexes"]:
-            if start_block is None:
-                start_block = ingestor.chain_config.get("start_block", 0)
-            if end_block is None:
+        chain_config = get_chain_config(chain_id)
+
+        if start_block is None:
+            start_block = chain_config.get("start_block", 0)
+
+        if end_block is None:
+            try:
                 await ingestor.rate_limiter.acquire()
-                end_block = await ingestor.web3.eth.block_number
+                end_block = await ingestor.circuit_breaker.call(ingestor.web3.eth.block_number)
+            except CircuitBreakerOpen as exc:
+                raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
+
+        for dex in chain_config["dexes"]:
             swaps = await ingestor.sync_historical_swaps(
                 dex,
                 start_block,
                 end_block,
-                pool_address=pool_address
+                pool_address=pool_address,
             )
             total_swaps += swaps
+
         return total_swaps
