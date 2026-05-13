@@ -126,10 +126,13 @@ class HeuristicDetector:
         for pool_address, pool_trades in pool_groups.items():
             G = nx.DiGraph()
             edges = defaultdict(float)
+            # Optimization: pre-group trades by (sender, recipient) pairs to avoid O(N^2) search
+            pair_trades = defaultdict(list)
             for trade in pool_trades:
                 key = (trade.sender, trade.recipient)
                 edges[key] += trade.volume_usd or 0.0
                 G.add_edge(trade.sender, trade.recipient, volume=edges[key])
+                pair_trades[key].append(trade)
 
             sccs = list(nx.strongly_connected_components(G))
             for scc in sccs:
@@ -142,11 +145,12 @@ class HeuristicDetector:
                     window_minutes = settings.WASH_TRADE_TIME_WINDOW_MINUTES
                     window_start = trade.block_timestamp - timedelta(minutes=window_minutes)
                     window_end = trade.block_timestamp + timedelta(minutes=window_minutes)
+
+                    # Fast lookup of potential reverse trades
+                    potential_reverse = pair_trades.get((trade.recipient, trade.sender), [])
                     reverse_trades = [
-                        t for t in pool_trades
-                        if t.sender == trade.recipient
-                        and t.recipient == trade.sender
-                        and window_start <= t.block_timestamp <= window_end
+                        t for t in potential_reverse
+                        if window_start <= t.block_timestamp <= window_end
                     ]
                     if reverse_trades:
                         trade.is_wash_trade = True
