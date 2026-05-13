@@ -8,9 +8,8 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-from web3 import AsyncWeb3, Web3
+from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
 from web3.middleware import async_geth_poa_middleware
-from web3.providers.rpc import AsyncHTTPProvider
 from web3.types import LogReceipt
 
 from config.chains import CHAINS, get_chain_config
