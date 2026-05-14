@@ -6,10 +6,11 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.schemas import SwapTrade
@@ -25,7 +26,8 @@ class FeatureEngineer:
     async def compute_trade_features(
         self,
         trade: SwapTrade,
-        session: AsyncSession
+        session: AsyncSession,
+        trade_history: Optional[Dict[str, Any]] = None
     ) -> Dict[str, float]:
         features = {}
         features["volume_usd"] = trade.volume_usd or 0.0
@@ -38,52 +40,74 @@ class FeatureEngineer:
         else:
             features["slippage_ratio"] = 0.0
         one_hour_ago = trade.block_timestamp - timedelta(hours=1)
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == trade.chain_id,
-                SwapTrade.sender == trade.sender,
-                SwapTrade.block_timestamp >= one_hour_ago,
-                SwapTrade.block_timestamp < trade.block_timestamp,
+
+        if trade_history:
+            # Sender trades
+            s_ts, s_trades = trade_history["by_sender"].get(trade.sender, ([], []))
+            sender_trades = self._get_window_trades(s_ts, s_trades, one_hour_ago, trade.block_timestamp)
+
+            # Recipient trades
+            r_ts, r_trades = trade_history["by_recipient"].get(trade.recipient, ([], []))
+            recipient_trades = self._get_window_trades(r_ts, r_trades, one_hour_ago, trade.block_timestamp)
+
+            # Pair trades (Sender -> Recipient)
+            pair_trades = [t for t in sender_trades if t.recipient == trade.recipient]
+
+            # Reverse pair trades (Recipient -> Sender)
+            rs_ts, rs_trades = trade_history["by_sender"].get(trade.recipient, ([], []))
+            reverse_pair_trades = [t for t in self._get_window_trades(rs_ts, rs_trades, one_hour_ago, trade.block_timestamp)
+                                   if t.recipient == trade.sender]
+        else:
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == trade.chain_id,
+                    SwapTrade.sender == trade.sender,
+                    SwapTrade.block_timestamp >= one_hour_ago,
+                    SwapTrade.block_timestamp < trade.block_timestamp,
+                )
             )
-        )
-        result = await session.execute(stmt)
-        sender_trades = result.scalars().all()
+            result = await session.execute(stmt)
+            sender_trades = result.scalars().all()
+
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == trade.chain_id,
+                    SwapTrade.recipient == trade.recipient,
+                    SwapTrade.block_timestamp >= one_hour_ago,
+                    SwapTrade.block_timestamp < trade.block_timestamp,
+                )
+            )
+            result = await session.execute(stmt)
+            recipient_trades = result.scalars().all()
+
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == trade.chain_id,
+                    SwapTrade.sender == trade.sender,
+                    SwapTrade.recipient == trade.recipient,
+                    SwapTrade.block_timestamp >= one_hour_ago,
+                    SwapTrade.block_timestamp < trade.block_timestamp,
+                )
+            )
+            result = await session.execute(stmt)
+            pair_trades = result.scalars().all()
+
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == trade.chain_id,
+                    SwapTrade.sender == trade.recipient,
+                    SwapTrade.recipient == trade.sender,
+                    SwapTrade.block_timestamp >= one_hour_ago,
+                    SwapTrade.block_timestamp < trade.block_timestamp,
+                )
+            )
+            result = await session.execute(stmt)
+            reverse_pair_trades = result.scalars().all()
+
         features["sender_trade_count_1h"] = len(sender_trades)
         features["sender_volume_1h"] = sum(t.volume_usd or 0 for t in sender_trades)
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == trade.chain_id,
-                SwapTrade.recipient == trade.recipient,
-                SwapTrade.block_timestamp >= one_hour_ago,
-                SwapTrade.block_timestamp < trade.block_timestamp,
-            )
-        )
-        result = await session.execute(stmt)
-        recipient_trades = result.scalars().all()
         features["recipient_trade_count_1h"] = len(recipient_trades)
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == trade.chain_id,
-                SwapTrade.sender == trade.sender,
-                SwapTrade.recipient == trade.recipient,
-                SwapTrade.block_timestamp >= one_hour_ago,
-                SwapTrade.block_timestamp < trade.block_timestamp,
-            )
-        )
-        result = await session.execute(stmt)
-        pair_trades = result.scalars().all()
         features["pair_trade_count_1h"] = len(pair_trades)
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == trade.chain_id,
-                SwapTrade.sender == trade.recipient,
-                SwapTrade.recipient == trade.sender,
-                SwapTrade.block_timestamp >= one_hour_ago,
-                SwapTrade.block_timestamp < trade.block_timestamp,
-            )
-        )
-        result = await session.execute(stmt)
-        reverse_pair_trades = result.scalars().all()
         features["reverse_pair_trade_count_1h"] = len(reverse_pair_trades)
         if sender_trades:
             last_sender_trade = max(sender_trades, key=lambda t: t.block_timestamp)
@@ -130,15 +154,25 @@ class FeatureEngineer:
         features["unique_senders"] = unique_senders
         features["unique_recipients"] = unique_recipients
         features["trader_diversity"] = (unique_senders + unique_recipients) / (2 * len(trades) + 1)
+
+        # Optimization: O(N log N) circular trade calculation using bisect
+        pair_timestamps = defaultdict(list)
+        for _, row in df.iterrows():
+            pair_timestamps[(row["sender"], row["recipient"])].append(row["timestamp"])
+
         circular_count = 0
-        for i, row in df.iterrows():
-            matching = df[
-                (df["sender"] == row["recipient"]) &
-                (df["recipient"] == row["sender"]) &
-                (df["timestamp"] > row["timestamp"]) &
-                (df["timestamp"] <= row["timestamp"] + timedelta(hours=1))
-            ]
-            circular_count += len(matching)
+        for _, row in df.iterrows():
+            reverse_pair = (row["recipient"], row["sender"])
+            if reverse_pair in pair_timestamps:
+                timestamps = pair_timestamps[reverse_pair]
+                start_time = row["timestamp"]
+                end_time = row["timestamp"] + timedelta(hours=1)
+
+                # Find number of trades in (start_time, end_time]
+                idx1 = bisect_right(timestamps, start_time)
+                idx2 = bisect_right(timestamps, end_time)
+                circular_count += (idx2 - idx1)
+
         features["circular_trade_ratio"] = circular_count / (len(trades) + 1)
         sender_counts = df["sender"].value_counts()
         features["max_trades_per_sender"] = sender_counts.max() if not sender_counts.empty else 0
@@ -147,6 +181,12 @@ class FeatureEngineer:
         features["self_trade_ratio"] = len(self_trades) / (len(trades) + 1)
         features["self_trade_volume"] = self_trades["volume_usd"].sum()
         return features
+
+    def _get_window_trades(self, ts_list: List[datetime], trades_list: List[SwapTrade], start_ts: datetime, end_ts: datetime) -> List[SwapTrade]:
+        """Helper for binary search window lookups."""
+        idx_start = bisect_left(ts_list, start_ts)
+        idx_end = bisect_left(ts_list, end_ts)
+        return trades_list[idx_start:idx_end]
 
     async def build_ml_features(
         self,
@@ -164,9 +204,47 @@ class FeatureEngineer:
         trades = result.scalars().all()
         if not trades:
             return pd.DataFrame()
+
+        # Pre-fetch trade history for all participants to avoid N+1 queries
+        all_addresses = set()
+        for t in trades:
+            all_addresses.add(t.sender)
+            all_addresses.add(t.recipient)
+
+        min_ts = min(t.block_timestamp for t in trades)
+        max_ts = max(t.block_timestamp for t in trades)
+
+        hist_stmt = select(SwapTrade).where(
+            and_(
+                SwapTrade.chain_id == chain_id,
+                or_(
+                    SwapTrade.sender.in_(all_addresses),
+                    SwapTrade.recipient.in_(all_addresses)
+                ),
+                SwapTrade.block_timestamp >= min_ts - timedelta(hours=1),
+                SwapTrade.block_timestamp <= max_ts
+            )
+        ).order_by(SwapTrade.block_timestamp)
+
+        hist_result = await session.execute(hist_stmt)
+        history = hist_result.scalars().all()
+
+        trade_history = {
+            "by_sender": defaultdict(lambda: ([], [])),
+            "by_recipient": defaultdict(lambda: ([], []))
+        }
+        for ht in history:
+            s_ts, s_tr = trade_history["by_sender"][ht.sender]
+            s_ts.append(ht.block_timestamp)
+            s_tr.append(ht)
+
+            r_ts, r_tr = trade_history["by_recipient"][ht.recipient]
+            r_ts.append(ht.block_timestamp)
+            r_tr.append(ht)
+
         feature_list = []
         for trade in trades:
-            trade_features = await self.compute_trade_features(trade, session)
+            trade_features = await self.compute_trade_features(trade, session, trade_history=trade_history)
             feature_list.append(trade_features)
         df = pd.DataFrame(feature_list)
         df["chain_id"] = chain_id
