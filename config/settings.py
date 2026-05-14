@@ -115,11 +115,16 @@ class Settings(BaseSettings):
     @property
     def DATABASE_URL(self) -> str:
         """Build secure async PostgreSQL URL."""
-        return (
-            f"postgresql+asyncpg://{self.DATABASE_USER}:{self.DATABASE_PASSWORD}"
-            f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
-            f"?ssl={self.DATABASE_SSL_MODE}"
-        )
+        from sqlalchemy.engine import URL
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.DATABASE_USER,
+            password=self.DATABASE_PASSWORD,
+            host=self.DATABASE_HOST,
+            port=self.DATABASE_PORT,
+            database=self.DATABASE_NAME,
+            query={"ssl": self.DATABASE_SSL_MODE},
+        ).render_as_string(hide_password=False)
 
     @property
     def bot_allowlist_set(self) -> Set[str]:
