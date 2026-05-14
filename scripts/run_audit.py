@@ -50,6 +50,16 @@ class AuditRunner:
             await self.storage.close()
             self.storage = None
 
+    def initialize_signal_handlers(self) -> None:
+        """Register signal handlers for graceful shutdown."""
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.add_signal_handler(sig, lambda s=sig: self._shutdown_event.set())
+            except NotImplementedError:
+                # Fallback for Windows or systems where add_signal_handler is not available
+                signal.signal(sig, self._signal_handler)
+
     def _signal_handler(self, signum: int, frame: Optional[object]) -> None:
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self._shutdown_event.set()
@@ -249,6 +259,34 @@ class AuditRunner:
                 for k, v in risk_metrics.items():
                     writer.writerow([k, v])
             logger.info(f"Results exported to {export_file}")
+
+
+async def run_audit(
+    chain_id: int,
+    pool_address: str,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    use_ml: bool = True,
+    use_heuristics: bool = True,
+    export_format: Optional[str] = None,
+    export_path: Optional[str] = None,
+    sync_historical: bool = True,  # Maintained for backward compatibility
+) -> dict:
+    """Programmatic entry point for audits."""
+    params = AuditParameters(
+        chain_id=chain_id,
+        pool_address=pool_address,
+        start_block=start_block,
+        end_block=end_block,
+        use_ml=use_ml,
+        use_heuristics=use_heuristics,
+    )
+    runner = AuditRunner()
+    try:
+        await runner.initialize()
+        return await runner.run_audit(params, export_format, export_path)
+    finally:
+        await runner.cleanup()
 
 
 async def main() -> int:
