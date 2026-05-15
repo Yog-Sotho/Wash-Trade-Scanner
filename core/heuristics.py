@@ -8,6 +8,7 @@ import math
 from typing import List, Dict, Any, Set, Tuple, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
 
 import networkx as nx
 from sqlalchemy import select, and_
@@ -126,33 +127,38 @@ class HeuristicDetector:
         for pool_address, pool_trades in pool_groups.items():
             G = nx.DiGraph()
             edges = defaultdict(float)
-            # Optimization: pre-group trades by (sender, recipient) pairs to avoid O(N^2) search
-            pair_trades = defaultdict(list)
+            # Optimization: pre-group trades by (sender, recipient) pairs
+            pair_timestamps = defaultdict(list)
             for trade in pool_trades:
                 key = (trade.sender, trade.recipient)
                 edges[key] += trade.volume_usd or 0.0
                 G.add_edge(trade.sender, trade.recipient, volume=edges[key])
-                pair_trades[key].append(trade)
+                pair_timestamps[key].append(trade.block_timestamp)
 
             sccs = list(nx.strongly_connected_components(G))
-            for scc in sccs:
-                if len(scc) < 2:
-                    continue
-                scc_addresses = set(scc)
-                for trade in pool_trades:
-                    if trade.sender not in scc_addresses or trade.recipient not in scc_addresses:
-                        continue
-                    window_minutes = settings.WASH_TRADE_TIME_WINDOW_MINUTES
-                    window_start = trade.block_timestamp - timedelta(minutes=window_minutes)
-                    window_end = trade.block_timestamp + timedelta(minutes=window_minutes)
+            # Optimization: map addresses to SCC index for O(1) lookup
+            addr_to_scc = {}
+            for i, scc in enumerate(sccs):
+                if len(scc) >= 2:
+                    for addr in scc:
+                        addr_to_scc[addr] = i
 
-                    # Fast lookup of potential reverse trades
-                    potential_reverse = pair_trades.get((trade.recipient, trade.sender), [])
-                    reverse_trades = [
-                        t for t in potential_reverse
-                        if window_start <= t.block_timestamp <= window_end
-                    ]
-                    if reverse_trades:
+            for trade in pool_trades:
+                scc_idx = addr_to_scc.get(trade.sender)
+                if scc_idx is None or addr_to_scc.get(trade.recipient) != scc_idx:
+                    continue
+
+                window_minutes = settings.WASH_TRADE_TIME_WINDOW_MINUTES
+                window_start = trade.block_timestamp - timedelta(minutes=window_minutes)
+                window_end = trade.block_timestamp + timedelta(minutes=window_minutes)
+
+                # Fast lookup of potential reverse trades using binary search O(log K)
+                reverse_key = (trade.recipient, trade.sender)
+                timestamps = pair_timestamps.get(reverse_key, [])
+                if timestamps:
+                    idx1 = bisect_left(timestamps, window_start)
+                    idx2 = bisect_right(timestamps, window_end)
+                    if idx2 > idx1:
                         trade.is_wash_trade = True
                         trade.wash_trade_score = 0.9
                         trade.detection_method = "circular_trading"
@@ -184,7 +190,7 @@ class HeuristicDetector:
             if len(sender_trades) < count_threshold:
                 continue
 
-            sender_trades.sort(key=lambda t: t.block_timestamp)
+            # Optimization: trades are already sorted by block_timestamp from DB
             inter_trade_times = []
             volumes = []
 
