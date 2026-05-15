@@ -7,6 +7,7 @@ import os
 from typing import Optional, Set
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -113,9 +114,8 @@ class Settings(BaseSettings):
         return v
 
     @property
-    def DATABASE_URL(self) -> str:
-        """Build secure async PostgreSQL URL."""
-        from sqlalchemy.engine import URL
+    def DATABASE_URL(self) -> URL:
+        """Build secure async PostgreSQL URL object with masked password."""
         return URL.create(
             drivername="postgresql+asyncpg",
             username=self.DATABASE_USER,
@@ -124,7 +124,7 @@ class Settings(BaseSettings):
             port=self.DATABASE_PORT,
             database=self.DATABASE_NAME,
             query={"ssl": self.DATABASE_SSL_MODE},
-        ).render_as_string(hide_password=False)
+        )
 
     @property
     def bot_allowlist_set(self) -> Set[str]:
