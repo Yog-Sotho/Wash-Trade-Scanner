@@ -4,8 +4,9 @@ Secure connection handling with SSL enforcement.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class Storage:
     """Async database storage with connection pooling."""
 
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, database_url: Optional[Union[str, URL]] = None):
         self.database_url = database_url or settings.DATABASE_URL
         self.engine: Optional[AsyncEngine] = None
         self.session_factory: Optional[async_sessionmaker] = None
