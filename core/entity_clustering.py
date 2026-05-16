@@ -18,6 +18,7 @@ from sqlalchemy.sql import func
 from models.schemas import AddressCluster, SwapTrade
 from core.storage import Storage
 from config.chains import get_chain_config
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +140,19 @@ class EntityClusterer:
         if not addresses_set:
             return G
 
-        chain_config = get_chain_config(chain_id)
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(chain_config.rpc_url))
+        # Respect RPC URL overrides from settings
+        rpc_url = settings.rpc_urls.get(chain_id)
+        if not rpc_url:
+            chain_config = get_chain_config(chain_id)
+            rpc_url = chain_config["rpc_url"]
+
+        if "YOUR_KEY" in rpc_url or "placeholder" in rpc_url.lower():
+            raise ValueError(
+                f"RPC URL for chain {chain_id} contains placeholder. "
+                "Set a real endpoint in environment."
+            )
+
+        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url))
 
         # Determine block range
         if from_block_override is None:

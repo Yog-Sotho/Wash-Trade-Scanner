@@ -4,8 +4,8 @@ Uses Pydantic for validation. No hardcoded credentials.
 """
 
 import os
-from typing import Optional, Set
-from pydantic import Field, field_validator
+from typing import Optional, Set, Any
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import URL
 
@@ -106,12 +106,14 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_PASSWORD must be at least 8 characters")
         return v
 
-    @field_validator("ETH_RPC_URL", "BSC_RPC_URL", "POLYGON_RPC_URL", mode="before")
-    @classmethod
-    def validate_no_placeholder(cls, v: str) -> str:
-        if "YOUR_KEY" in v or "placeholder" in v.lower():
-            raise ValueError(f"RPC URL contains placeholder: {v}")
-        return v
+    @model_validator(mode="after")
+    def validate_all_rpc_urls(self) -> "Settings":
+        """Centrally validate all RPC URLs for placeholder strings."""
+        for field_name, value in self.__dict__.items():
+            if field_name.endswith("_RPC_URL") and isinstance(value, str) and value:
+                if "YOUR_KEY" in value or "placeholder" in value.lower():
+                    raise ValueError(f"RPC URL for {field_name} contains placeholder: {value}")
+        return self
 
     @property
     def DATABASE_URL(self) -> URL:

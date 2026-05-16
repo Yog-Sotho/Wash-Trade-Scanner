@@ -341,10 +341,15 @@ class MultiChainIngestor:
         self.ingestors: Dict[int, ChainIngestor] = {}
 
     async def initialize(self) -> None:
+        overrides = settings.rpc_urls
         for chain in CHAINS:
+            chain_id = chain["chain_id"]
+            if chain_id in overrides and overrides[chain_id]:
+                chain["rpc_url"] = overrides[chain_id]
+
             ingestor = ChainIngestor(chain, self.storage)
             await ingestor.connect()
-            self.ingestors[chain["chain_id"]] = ingestor
+            self.ingestors[chain_id] = ingestor
 
     async def audit_pool(
         self,
