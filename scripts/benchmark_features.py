@@ -9,7 +9,7 @@ from models.schemas import SwapTrade
 
 async def run_benchmark():
     # 1. Setup mock trades
-    num_trades = 1000
+    num_trades = 10000
     base_time = datetime(2024, 1, 1, 10, 0, 0)
     trades = []
     for i in range(num_trades):

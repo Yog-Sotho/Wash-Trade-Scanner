@@ -8,3 +8,7 @@
 ## 2025-05-24 - [SCC Mapping & Binary Search Lookup Optimization]
 **Learning:** Nested loops over SCCs and trades create an $O(S \times T)$ bottleneck. Linear scans for time-window lookups are $O(K)$.
 **Action:** Use an address-to-SCC index for $O(1)$ SCC membership checks and `bisect` for $O(\log K)$ time-window lookups. Removed redundant sorts where data is already ordered by the database query.
+
+## 2025-05-28 - [Pandas iterrows() and DataFrame Overhead]
+**Learning:** `pandas.DataFrame.iterrows()` is extremely slow for large datasets. Additionally, creating a DataFrame from a list of objects just to calculate simple statistics (mean, std, unique counts) adds significant overhead.
+**Action:** Process raw lists of trade data directly and use NumPy for vectorised calculations. For circular trade detection, iterate over unique sender-recipient pairs instead of every trade row to skip redundant checks. Achieved ~30x speedup (1.3s -> 0.04s) for 10k trades.
