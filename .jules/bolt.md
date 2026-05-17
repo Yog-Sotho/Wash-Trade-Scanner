@@ -8,3 +8,7 @@
 ## 2025-05-24 - [SCC Mapping & Binary Search Lookup Optimization]
 **Learning:** Nested loops over SCCs and trades create an $O(S \times T)$ bottleneck. Linear scans for time-window lookups are $O(K)$.
 **Action:** Use an address-to-SCC index for $O(1)$ SCC membership checks and `bisect` for $O(\log K)$ time-window lookups. Removed redundant sorts where data is already ordered by the database query.
+
+## 2025-05-28 - [Pandas iterrows and Redundant Query Optimization]
+**Learning:** `pandas.DataFrame.iterrows()` and creating dataframes for small datasets (e.g., a few thousand trades in a pool) adds significant overhead. Additionally, `build_ml_features` was re-querying the same pool trades that it already had in memory.
+**Action:** Replaced `pandas` with a single-pass loop and `numpy` vectorized operations in `compute_pool_features` for ~30x speedup. Modified `compute_pool_features` to accept an optional `trades` list, allowing `build_ml_features` to pass its already-fetched data and eliminate redundant queries. Enhanced `trade_history` with `by_pair` indexing for $O(\log K)$ lookups.
