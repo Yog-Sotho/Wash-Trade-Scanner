@@ -12,25 +12,26 @@ from config.chains import ChainConfig, DEXConfig
 
 @pytest.fixture
 def mock_chain_config():
-    return ChainConfig(
-        chain_id=1,
-        name="TestChain",
-        rpc_url="http://localhost:8545",
-        ws_url="",
-        native_token="TEST",
-        block_time=12.0,
-        explorer_api="",
-        dexes=[
-            DEXConfig(
-                name="TestDEX",
-                router_address="0x1234",
-                factory_address="0x5678",
-                swap_event_signature="Swap(address,uint256,uint256,uint256,uint256,address)",
-                abi=[],
-            )
+    return {
+        "chain_id": 1,
+        "name": "TestChain",
+        "rpc_url": "http://localhost:8545",
+        "ws_url": "",
+        "native_token": "TEST",
+        "block_time": 12.0,
+        "explorer_api": "",
+        "dexes": [
+            {
+                "name": "TestDEX",
+                "router": "0x1234",
+                "factory": "0x5678",
+                "event_sig": "Swap(address,uint256,uint256,uint256,uint256,address)",
+                "abi": [],
+                "type": "v2",
+            }
         ],
-        start_block=0,
-    )
+        "start_block": 0,
+    }
 
 
 @pytest.mark.asyncio
