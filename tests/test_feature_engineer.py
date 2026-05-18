@@ -53,11 +53,7 @@ async def test_build_ml_features(fe, sample_trades):
     mock_result_hist = MagicMock()
     mock_result_hist.scalars.return_value.all.return_value = sample_trades
 
-    # 3. Call in compute_pool_features
-    mock_result_pool_fe = MagicMock()
-    mock_result_pool_fe.scalars.return_value.all.return_value = sample_trades
-
-    mock_session.execute.side_effect = [mock_result_pool, mock_result_hist, mock_result_pool_fe]
+    mock_session.execute.side_effect = [mock_result_pool, mock_result_hist]
 
     df = await fe.build_ml_features(1, "0xpool", mock_session)
 

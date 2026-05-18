@@ -18,7 +18,7 @@ async def run_benchmark():
             chain_id=1,
             pool_address="0xpool",
             sender=f"0xsender_{i % 10}",
-            recipient=f"0xrecipient_{i % 10}",
+            recipient=f"0xrecipient_{i % 11}", # slightly different to have variety
             volume_usd=100.0,
             amount_in_usd=100.0,
             amount_out_usd=99.0,
@@ -33,39 +33,46 @@ async def run_benchmark():
     fe = FeatureEngineer(mock_storage)
 
     mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = []
-    mock_session.execute.return_value = mock_result
+
+    # Generic mock result
+    def make_mock_result(data):
+        m = MagicMock()
+        m.scalars.return_value.all.return_value = data
+        return m
 
     print(f"--- Benchmarking with {num_trades} trades ---")
 
     # 3. Benchmark compute_pool_features
-    # We need to mock the initial query inside compute_pool_features
-    mock_result_pool = MagicMock()
-    mock_result_pool.scalars.return_value.all.return_value = trades
-
-    # We'll patch session.execute to return trades for the first call (in compute_pool_features)
-    # and empty list for subsequent calls (if any)
-    mock_session.execute.side_effect = [mock_result_pool] + [mock_result] * 10000
+    mock_session.execute.reset_mock()
+    mock_session.execute.side_effect = [make_mock_result(trades)]
 
     start_time = time.perf_counter()
     await fe.compute_pool_features(1, "0xpool", mock_session)
     end_time = time.perf_counter()
     pool_features_time = end_time - start_time
     print(f"compute_pool_features time: {pool_features_time:.4f} seconds")
+    print(f"compute_pool_features execute calls: {mock_session.execute.call_count}")
 
     # 4. Benchmark build_ml_features
-    # reset side effect
-    mock_session.execute.side_effect = [mock_result_pool] + [mock_result] * 10000
+    # Redundant query expectation:
+    # 1. Initial query in build_ml_features
+    # 2. History query in build_ml_features
+    # 3. Redundant query in compute_pool_features (called inside build_ml_features)
+
+    mock_session.execute.reset_mock()
+    # History includes the trades themselves plus maybe some buffer
+    mock_session.execute.side_effect = [
+        make_mock_result(trades), # Initial trades
+        make_mock_result(trades), # History
+        make_mock_result(trades), # REDUNDANT call from compute_pool_features
+    ]
 
     start_time = time.perf_counter()
     await fe.build_ml_features(1, "0xpool", mock_session)
     end_time = time.perf_counter()
     build_ml_features_time = end_time - start_time
     print(f"build_ml_features time: {build_ml_features_time:.4f} seconds")
-
-    # Count calls to session.execute
-    print(f"Number of session.execute calls: {mock_session.execute.call_count}")
+    print(f"build_ml_features total execute calls: {mock_session.execute.call_count}")
 
 if __name__ == "__main__":
     asyncio.run(run_benchmark())
