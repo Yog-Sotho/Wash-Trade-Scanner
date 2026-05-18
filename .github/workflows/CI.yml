@@ -103,10 +103,13 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
@@ -116,11 +119,24 @@ jobs:
         run: |
           pip install ruff mypy bandit
 
+      - name: ruff fix
+        run: ruff check . --fix
+
+      - name: ruff format
+        run: ruff format .
+        continue-on-error: true
+
+      - name: auto-commit fixes
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-fix by ruff"
+          file_pattern: "*.py"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
       - name: ruff check
         run: ruff check .
-
-      - name: ruff format check
-        run: ruff format --check .
 
       - name: mypy type check
         run: mypy . --ignore-missing-imports || true
