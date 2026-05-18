@@ -239,6 +239,7 @@ class Storage:
         Uses single delete statement to avoid memory exhaustion (DoS protection).
         """
         from datetime import datetime, timedelta
+        from sqlalchemy import delete
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         async with await self.get_session() as session:
             stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
