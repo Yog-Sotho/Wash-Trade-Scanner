@@ -236,6 +236,7 @@ class Storage:
     async def cleanup_old_data(self, retention_days: int) -> int:
         """Remove trades older than retention period."""
         from datetime import datetime, timedelta
+        from sqlalchemy import delete
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         async with await self.get_session() as session:
             stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)

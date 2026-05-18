@@ -51,12 +51,12 @@ class FeatureEngineer:
             recipient_trades = self._get_window_trades(r_ts, r_trades, one_hour_ago, trade.block_timestamp)
 
             # Pair trades (Sender -> Recipient)
-            pair_trades = [t for t in sender_trades if t.recipient == trade.recipient]
+            p_ts, p_trades = trade_history["by_pair"].get((trade.sender, trade.recipient), ([], []))
+            pair_trades = self._get_window_trades(p_ts, p_trades, one_hour_ago, trade.block_timestamp)
 
             # Reverse pair trades (Recipient -> Sender)
-            rs_ts, rs_trades = trade_history["by_sender"].get(trade.recipient, ([], []))
-            reverse_pair_trades = [t for t in self._get_window_trades(rs_ts, rs_trades, one_hour_ago, trade.block_timestamp)
-                                   if t.recipient == trade.sender]
+            rp_ts, rp_trades = trade_history["by_pair"].get((trade.recipient, trade.sender), ([], []))
+            reverse_pair_trades = self._get_window_trades(rp_ts, rp_trades, one_hour_ago, trade.block_timestamp)
         else:
             stmt = select(SwapTrade).where(
                 and_(
@@ -123,63 +123,89 @@ class FeatureEngineer:
         self,
         chain_id: int,
         pool_address: str,
-        session: AsyncSession
+        session: AsyncSession,
+        trades: Optional[List[SwapTrade]] = None
     ) -> Dict[str, float]:
         features = {}
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
-            )
-        ).order_by(SwapTrade.block_timestamp)
-        result = await session.execute(stmt)
-        trades = result.scalars().all()
+        if trades is None:
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
+            ).order_by(SwapTrade.block_timestamp)
+            result = await session.execute(stmt)
+            trades = list(result.scalars().all())
+
         if not trades:
             return features
-        df = pd.DataFrame([{
-            "timestamp": t.block_timestamp,
-            "volume_usd": t.volume_usd or 0.0,
-            "sender": t.sender,
-            "recipient": t.recipient,
-        } for t in trades])
-        time_diffs = df["timestamp"].diff().dt.total_seconds().fillna(0)
-        features["avg_time_between_trades"] = time_diffs.mean()
-        features["std_time_between_trades"] = time_diffs.std()
-        features["total_volume_usd"] = df["volume_usd"].sum()
-        features["avg_trade_volume_usd"] = df["volume_usd"].mean()
-        features["max_trade_volume_usd"] = df["volume_usd"].max()
-        features["volume_volatility"] = df["volume_usd"].std() / (df["volume_usd"].mean() + 1e-9)
-        unique_senders = df["sender"].nunique()
-        unique_recipients = df["recipient"].nunique()
-        features["unique_senders"] = unique_senders
-        features["unique_recipients"] = unique_recipients
+
+        # Use NumPy for faster calculations (replaces slow pandas DataFrame creation/ops)
+        volumes = np.array([t.volume_usd or 0.0 for t in trades])
+        timestamps = np.array([t.block_timestamp.timestamp() for t in trades])
+
+        # Calculate time diffs (seconds)
+        if len(timestamps) > 1:
+            time_diffs = np.diff(timestamps)
+            # Prepend 0.0 to match pandas diff().fillna(0) behavior
+            time_diffs = np.insert(time_diffs, 0, 0.0)
+        else:
+            time_diffs = np.array([0.0])
+
+        features["avg_time_between_trades"] = float(np.mean(time_diffs))
+        features["std_time_between_trades"] = float(np.std(time_diffs, ddof=1)) if len(time_diffs) > 1 else 0.0
+        features["total_volume_usd"] = float(np.sum(volumes))
+        avg_vol = float(np.mean(volumes))
+        features["avg_trade_volume_usd"] = avg_vol
+        features["max_trade_volume_usd"] = float(np.max(volumes))
+        features["volume_volatility"] = float(np.std(volumes, ddof=1) / (avg_vol + 1e-9)) if len(volumes) > 1 else 0.0
+
+        senders = [t.sender for t in trades]
+        recipients = [t.recipient for t in trades]
+        unique_senders = len(set(senders))
+        unique_recipients = len(set(recipients))
+
+        features["unique_senders"] = float(unique_senders)
+        features["unique_recipients"] = float(unique_recipients)
         features["trader_diversity"] = (unique_senders + unique_recipients) / (2 * len(trades) + 1)
 
         # Optimization: O(N log N) circular trade calculation using bisect
+        # Replacing iterrows with a single-pass loop over trades
         pair_timestamps = defaultdict(list)
-        for _, row in df.iterrows():
-            pair_timestamps[(row["sender"], row["recipient"])].append(row["timestamp"])
+        for t in trades:
+            pair_timestamps[(t.sender, t.recipient)].append(t.block_timestamp)
 
         circular_count = 0
-        for _, row in df.iterrows():
-            reverse_pair = (row["recipient"], row["sender"])
+        for t in trades:
+            reverse_pair = (t.recipient, t.sender)
             if reverse_pair in pair_timestamps:
-                timestamps = pair_timestamps[reverse_pair]
-                start_time = row["timestamp"]
-                end_time = row["timestamp"] + timedelta(hours=1)
+                r_timestamps = pair_timestamps[reverse_pair]
+                start_time = t.block_timestamp
+                end_time = t.block_timestamp + timedelta(hours=1)
 
-                # Find number of trades in (start_time, end_time]
-                idx1 = bisect_right(timestamps, start_time)
-                idx2 = bisect_right(timestamps, end_time)
+                idx1 = bisect_right(r_timestamps, start_time)
+                idx2 = bisect_right(r_timestamps, end_time)
                 circular_count += (idx2 - idx1)
 
         features["circular_trade_ratio"] = circular_count / (len(trades) + 1)
-        sender_counts = df["sender"].value_counts()
-        features["max_trades_per_sender"] = sender_counts.max() if not sender_counts.empty else 0
-        features["avg_trades_per_sender"] = sender_counts.mean() if not sender_counts.empty else 0
-        self_trades = df[df["sender"] == df["recipient"]]
-        features["self_trade_ratio"] = len(self_trades) / (len(trades) + 1)
-        features["self_trade_volume"] = self_trades["volume_usd"].sum()
+
+        sender_counts = defaultdict(int)
+        for s in senders:
+            sender_counts[s] += 1
+
+        counts_vals = list(sender_counts.values())
+        features["max_trades_per_sender"] = float(max(counts_vals)) if counts_vals else 0.0
+        features["avg_trades_per_sender"] = float(np.mean(counts_vals)) if counts_vals else 0.0
+
+        self_trade_vol = 0.0
+        self_trade_count = 0
+        for t in trades:
+            if t.sender == t.recipient:
+                self_trade_count += 1
+                self_trade_vol += (t.volume_usd or 0.0)
+
+        features["self_trade_ratio"] = self_trade_count / (len(trades) + 1)
+        features["self_trade_volume"] = self_trade_vol
         return features
 
     def _get_window_trades(self, ts_list: List[datetime], trades_list: List[SwapTrade], start_ts: datetime, end_ts: datetime) -> List[SwapTrade]:
@@ -231,7 +257,8 @@ class FeatureEngineer:
 
         trade_history = {
             "by_sender": defaultdict(lambda: ([], [])),
-            "by_recipient": defaultdict(lambda: ([], []))
+            "by_recipient": defaultdict(lambda: ([], [])),
+            "by_pair": defaultdict(lambda: ([], []))
         }
         for ht in history:
             s_ts, s_tr = trade_history["by_sender"][ht.sender]
@@ -242,6 +269,10 @@ class FeatureEngineer:
             r_ts.append(ht.block_timestamp)
             r_tr.append(ht)
 
+            p_ts, p_tr = trade_history["by_pair"][(ht.sender, ht.recipient)]
+            p_ts.append(ht.block_timestamp)
+            p_tr.append(ht)
+
         feature_list = []
         for trade in trades:
             trade_features = await self.compute_trade_features(trade, session, trade_history=trade_history)
@@ -249,7 +280,8 @@ class FeatureEngineer:
         df = pd.DataFrame(feature_list)
         df["chain_id"] = chain_id
         df["pool_address"] = pool_address
-        pool_features = await self.compute_pool_features(chain_id, pool_address, session)
+        # Optimization: Pass pre-fetched trades to avoid redundant DB query
+        pool_features = await self.compute_pool_features(chain_id, pool_address, session, trades=trades)
         for key, value in pool_features.items():
             df[f"pool_{key}"] = value
         return df
