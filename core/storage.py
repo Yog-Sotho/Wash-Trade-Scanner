@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     async_sessionmaker,
 )
-from sqlalchemy import select, update, and_, func
+from sqlalchemy import select, update, delete, and_, func
 
 from models.schemas import (
     Base, SwapTrade, AddressCluster,
@@ -238,12 +238,9 @@ class Storage:
         from datetime import datetime, timedelta
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         async with await self.get_session() as session:
-            stmt = select(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
+            stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
             result = await session.execute(stmt)
-            old_trades = result.scalars().all()
-            count = len(old_trades)
-            for trade in old_trades:
-                await session.delete(trade)
             await session.commit()
+            count = result.rowcount
             logger.info(f"Cleaned up {count} old trades")
             return count
