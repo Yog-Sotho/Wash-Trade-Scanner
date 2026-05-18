@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     async_sessionmaker,
 )
-from sqlalchemy import select, update, and_, func
+from sqlalchemy import select, update, delete, and_, func
 
 from models.schemas import (
     Base, SwapTrade, AddressCluster,
@@ -239,8 +239,6 @@ class Storage:
         from sqlalchemy import delete
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         async with await self.get_session() as session:
-            # Optimization: Use a single delete statement instead of looping over objects.
-            # This is significantly faster and prevents memory exhaustion for large datasets.
             stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
             result = await session.execute(stmt)
             await session.commit()

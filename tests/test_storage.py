@@ -23,21 +23,23 @@ async def test_initialize(storage):
 
 @pytest.mark.asyncio
 async def test_close(storage):
-    storage.engine = AsyncMock()
+    mock_engine = AsyncMock()
+    storage.engine = mock_engine
     await storage.close()
+    mock_engine.dispose.assert_awaited_once()
     assert storage.engine is None
-    # No need to assert_awaited_once since engine is None now and we didn't mock properly for it
 
 @pytest.mark.asyncio
 async def test_save_trade_new(storage):
-    storage.session_factory = MagicMock()
     session = AsyncMock()
-    storage.session_factory.return_value = AsyncMock()
-    storage.session_factory.return_value.__aenter__.return_value = session
+    session_context = AsyncMock()
+    session_context.__aenter__.return_value = session
+    storage.session_factory = MagicMock(return_value=session_context)
 
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = None
     session.execute.return_value = mock_result
+
     await storage.save_trade({
         "transaction_hash": "0xabc",
         "log_index": 0,
@@ -54,4 +56,21 @@ async def test_save_trade_new(storage):
         "block_timestamp": None,
     })
     session.add.assert_called_once()
+    session.commit.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_cleanup_old_data(storage):
+    session = AsyncMock()
+    session_context = AsyncMock()
+    session_context.__aenter__.return_value = session
+    storage.session_factory = MagicMock(return_value=session_context)
+
+    mock_result = MagicMock()
+    mock_result.rowcount = 5
+    session.execute.return_value = mock_result
+
+    count = await storage.cleanup_old_data(30)
+
+    assert count == 5
+    session.execute.assert_called_once()
     session.commit.assert_awaited_once()
