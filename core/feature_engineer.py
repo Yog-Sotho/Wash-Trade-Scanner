@@ -218,16 +218,18 @@ class FeatureEngineer:
         self,
         chain_id: int,
         pool_address: str,
-        session: AsyncSession
+        session: AsyncSession,
+        trades: Optional[List[SwapTrade]] = None,
     ) -> pd.DataFrame:
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
-            )
-        ).order_by(SwapTrade.block_timestamp)
-        result = await session.execute(stmt)
-        trades = result.scalars().all()
+        if trades is None:
+            stmt = select(SwapTrade).where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
+            ).order_by(SwapTrade.block_timestamp)
+            result = await session.execute(stmt)
+            trades = result.scalars().all()
         if not trades:
             return pd.DataFrame()
 

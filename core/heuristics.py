@@ -301,20 +301,22 @@ class HeuristicDetector:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
+        trades: Optional[List[SwapTrade]] = None,
     ) -> Tuple[List[SwapTrade], Dict[str, int]]:
         """Run all heuristic detectors and return combined results."""
-        stmt = (
-            select(SwapTrade)
-            .where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
+        if trades is None:
+            stmt = (
+                select(SwapTrade)
+                .where(
+                    and_(
+                        SwapTrade.chain_id == chain_id,
+                        SwapTrade.pool_address == pool_address,
+                    )
                 )
+                .order_by(SwapTrade.block_timestamp)
             )
-            .order_by(SwapTrade.block_timestamp)
-        )
-        result = await session.execute(stmt)
-        trades = list(result.scalars().all())
+            result = await session.execute(stmt)
+            trades = list(result.scalars().all())
 
         if not trades:
             return [], {}

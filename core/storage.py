@@ -139,9 +139,11 @@ class Storage:
         pool_address: str,
         limit: Optional[int] = None,
         offset: int = 0,
+        ascending: bool = False,
     ) -> List[SwapTrade]:
         """Retrieve trades for a specific pool."""
         async with await self.get_session() as session:
+            order = SwapTrade.block_timestamp.asc() if ascending else SwapTrade.block_timestamp.desc()
             stmt = (
                 select(SwapTrade)
                 .where(
@@ -150,7 +152,7 @@ class Storage:
                         SwapTrade.pool_address == pool_address,
                     )
                 )
-                .order_by(SwapTrade.block_timestamp.desc())
+                .order_by(order)
             )
             if limit:
                 stmt = stmt.limit(limit).offset(offset)

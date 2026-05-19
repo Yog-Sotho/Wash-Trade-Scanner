@@ -11,3 +11,6 @@
 ## 2025-05-25 - [NumPy & Query Elimination in Feature Engineering]
 **Learning:** Pandas DataFrame creation and iterrows() inside tight loops (like feature engineering) introduce significant overhead (O(N) with high constant). Redundant database queries in nested function calls multiply this latency.
 **Action:** Replace Pandas operations with NumPy arrays and direct loops for statistical calculations. Implement "pass-through" parameters for pre-fetched data to eliminate redundant queries. Resulted in ~20x speedup for pool features.
+## 2025-05-30 - [Redundant Query Elimination & Storage Layer Abstraction]
+**Learning:** The detection pipeline (heuristics + ML) was fetching the same trade data multiple times. Refactoring to pass pre-fetched data through the stack yielded ~40% speedup. However, modifying core storage methods' default behavior (e.g., sort order) introduces regressions for existing callers (e.g., UI/APIs expecting latest trades).
+**Action:** Always prefer optional "pass-through" parameters for performance optimizations. If storage utility methods need modification, use optional parameters with safe defaults to maintain backward compatibility. Keep SQL logic within the storage layer rather than duplicating it in detectors.
