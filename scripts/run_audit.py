@@ -104,7 +104,7 @@ class AuditRunner:
         )
         logger.info(f"Synced {trades_synced} trades")
 
-        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
+        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address, ascending=True)
         logger.info(f"Analyzing {len(trades)} trades")
 
         wash_trades_detected = 0
@@ -114,7 +114,7 @@ class AuditRunner:
             if params.use_heuristics:
                 logger.info("Running heuristic detection...")
                 heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
-                    params.chain_id, params.pool_address, session
+                    params.chain_id, params.pool_address, session, trades=trades
                 )
                 if heuristics_wash_trades:
                     trade_ids = [t.id for t in heuristics_wash_trades]
@@ -130,7 +130,7 @@ class AuditRunner:
             if use_ml:
                 logger.info("Running ML detection...")
                 ml_wash_trades = await ml_detector.detect_wash_trades(
-                    params.chain_id, params.pool_address, threshold=0.8
+                    params.chain_id, params.pool_address, threshold=0.8, trades=trades
                 )
                 if ml_wash_trades:
                     trade_ids = [t.id for t in ml_wash_trades]

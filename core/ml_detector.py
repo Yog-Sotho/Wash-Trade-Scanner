@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import select, and_
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -80,7 +81,9 @@ class MLDetector:
 
         async with await self.storage.get_session() as session:
             for pool in pool_addresses:
-                df = await self.feature_engineer.build_ml_features(chain_id, pool, session)
+                trades = await self.storage.get_pool_trades(chain_id, pool, ascending=True)
+
+                df = await self.feature_engineer.build_ml_features(chain_id, pool, session, trades=trades)
                 if df.empty:
                     continue
 
@@ -92,15 +95,6 @@ class MLDetector:
                 all_features.append(features)
 
                 if use_heuristic_labels:
-                    from sqlalchemy import select, and_
-                    stmt = select(SwapTrade).where(
-                        and_(
-                            SwapTrade.chain_id == chain_id,
-                            SwapTrade.pool_address == pool,
-                        )
-                    )
-                    result = await session.execute(stmt)
-                    trades = result.scalars().all()
                     trade_labels = {t.id: -1 if t.is_wash_trade else 1 for t in trades}
 
                     labels = []
@@ -172,10 +166,14 @@ class MLDetector:
         pool_address: str,
         threshold: float = 0.8,
         contamination: Optional[float] = None,
+        trades: Optional[List[SwapTrade]] = None,
     ) -> List[SwapTrade]:
         """Detect wash trades using ML model."""
         async with await self.storage.get_session() as session:
-            df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session)
+            if trades is None:
+                trades = await self.storage.get_pool_trades(chain_id, pool_address, ascending=True)
+
+            df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session, trades=trades)
             if df.empty:
                 return []
 
@@ -191,16 +189,6 @@ class MLDetector:
 
             from scipy.special import expit
             probabilities = expit(-scores)
-
-            from sqlalchemy import select, and_
-            stmt = select(SwapTrade).where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
-                )
-            ).order_by(SwapTrade.block_timestamp)
-            result = await session.execute(stmt)
-            trades = result.scalars().all()
 
             wash_trades = []
             for trade, prob in zip(trades, probabilities):
