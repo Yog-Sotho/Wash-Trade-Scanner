@@ -247,12 +247,16 @@ class AuditRunner:
 
         if export_format == "json":
             export_file = export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.json"
+            # Prevent path traversal
+            export_file = os.path.basename(export_file)
             with open(export_file, "w") as f:
                 json.dump(results, f, default=str, indent=2)
             logger.info(f"Results exported to {export_file}")
 
         elif export_format == "csv":
             export_file = export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.csv"
+            # Prevent path traversal
+            export_file = os.path.basename(export_file)
             with open(export_file, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["metric", "value"])
