@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit, logit
 from sqlalchemy import select, and_
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
@@ -96,11 +97,9 @@ class MLDetector:
 
                 if use_heuristic_labels:
                     trade_labels = {t.id: -1 if t.is_wash_trade else 1 for t in trades}
-
-                    labels = []
-                    for idx, row in df.iterrows():
-                        trade_id = row.get("trade_id")
-                        labels.append(trade_labels.get(trade_id, 1))
+                    # Optimization: Use list comprehension instead of iterrows()
+                    # trade_id is added to df in feature_engineer.py:build_ml_features
+                    labels = [trade_labels.get(tid, 1) for tid in df["trade_id"]]
                     all_labels.extend(labels)
 
         if not all_features:
@@ -129,7 +128,6 @@ class MLDetector:
         X = features_df[available_cols].fillna(0).values
 
         scores = self.model.decision_function(X)
-        from scipy.special import expit
         probabilities = expit(-scores)
         return probabilities
 
@@ -184,10 +182,8 @@ class MLDetector:
                 scores = temp_model.decision_function(X)
             else:
                 probs = await self.predict(df)
-                from scipy.special import logit
                 scores = -logit(np.clip(probs, 1e-10, 1 - 1e-10))
 
-            from scipy.special import expit
             probabilities = expit(-scores)
 
             wash_trades = []
