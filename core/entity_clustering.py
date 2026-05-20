@@ -140,7 +140,9 @@ class EntityClusterer:
             return G
 
         chain_config = get_chain_config(chain_id)
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(chain_config.rpc_url))
+        # Prioritize environment-provided RPC URLs
+        rpc_url = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
+        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url))
 
         # Determine block range
         if from_block_override is None:

@@ -4,8 +4,8 @@ Uses Pydantic for validation. No hardcoded credentials.
 """
 
 import os
-from typing import Optional, Set
-from pydantic import Field, field_validator
+from typing import Optional, Set, Any
+from pydantic import Field, field_validator, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import URL
 
@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     DATABASE_PORT: int = Field(5432, ge=1, le=65535)
     DATABASE_NAME: str = Field(..., description="PostgreSQL database name")
     DATABASE_USER: str = Field(..., description="PostgreSQL username")
-    DATABASE_PASSWORD: str = Field(..., description="PostgreSQL password")
+    DATABASE_PASSWORD: SecretStr = Field(..., description="PostgreSQL password")
     DATABASE_SSL_MODE: str = Field("require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$")
 
     # Redis
@@ -93,25 +93,27 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
     # External APIs
-    COINGECKO_API_KEY: str = Field("")
+    COINGECKO_API_KEY: SecretStr = Field("")
     COINGECKO_API_URL: str = "https://api.coingecko.com/api/v3"
 
     # Bot Allowlist
     BOT_ALLOWLIST: str = Field("")
 
-    @field_validator("DATABASE_PASSWORD", mode="before")
+    @field_validator("DATABASE_PASSWORD", mode="after")
     @classmethod
-    def validate_password_not_empty(cls, v: str) -> str:
-        if not v or len(v.strip()) < 8:
+    def validate_password_not_empty(cls, v: SecretStr) -> SecretStr:
+        if len(v.get_secret_value().strip()) < 8:
             raise ValueError("DATABASE_PASSWORD must be at least 8 characters")
         return v
 
-    @field_validator("ETH_RPC_URL", "BSC_RPC_URL", "POLYGON_RPC_URL", mode="before")
-    @classmethod
-    def validate_no_placeholder(cls, v: str) -> str:
-        if "YOUR_KEY" in v or "placeholder" in v.lower():
-            raise ValueError(f"RPC URL contains placeholder: {v}")
-        return v
+    @model_validator(mode="after")
+    def validate_rpc_placeholders(self) -> "Settings":
+        """Check all RPC URL fields for common placeholders."""
+        for field_name, value in self.__dict__.items():
+            if field_name.endswith("_RPC_URL") and isinstance(value, str):
+                if "YOUR_KEY" in value or "placeholder" in value.lower():
+                    raise ValueError(f"RPC URL field {field_name} contains placeholder: {value}")
+        return self
 
     @property
     def DATABASE_URL(self) -> URL:
@@ -119,7 +121,7 @@ class Settings(BaseSettings):
         return URL.create(
             drivername="postgresql+asyncpg",
             username=self.DATABASE_USER,
-            password=self.DATABASE_PASSWORD,
+            password=self.DATABASE_PASSWORD.get_secret_value(),
             host=self.DATABASE_HOST,
             port=self.DATABASE_PORT,
             database=self.DATABASE_NAME,

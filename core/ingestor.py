@@ -342,9 +342,15 @@ class MultiChainIngestor:
 
     async def initialize(self) -> None:
         for chain in CHAINS:
+            # Prioritize environment-provided RPC URLs
+            chain_id = chain["chain_id"]
+            env_rpc = settings.rpc_urls.get(chain_id)
+            if env_rpc:
+                chain["rpc_url"] = env_rpc
+
             ingestor = ChainIngestor(chain, self.storage)
             await ingestor.connect()
-            self.ingestors[chain["chain_id"]] = ingestor
+            self.ingestors[chain_id] = ingestor
 
     async def audit_pool(
         self,
