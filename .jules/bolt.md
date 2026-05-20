@@ -14,3 +14,6 @@
 ## 2025-05-30 - [Redundant Query Elimination & Storage Layer Abstraction]
 **Learning:** The detection pipeline (heuristics + ML) was fetching the same trade data multiple times. Refactoring to pass pre-fetched data through the stack yielded ~40% speedup. However, modifying core storage methods' default behavior (e.g., sort order) introduces regressions for existing callers (e.g., UI/APIs expecting latest trades).
 **Action:** Always prefer optional "pass-through" parameters for performance optimizations. If storage utility methods need modification, use optional parameters with safe defaults to maintain backward compatibility. Keep SQL logic within the storage layer rather than duplicating it in detectors.
+## 2025-06-05 - [ML Pipeline & Feature Engineering Micro-optimizations]
+**Learning:** Repeated `from scipy.special import expit, logit` calls inside hot functions (inference/training) and `df.iterrows()` in the ML training loop introduced avoidable latency and high constant overhead. Additionally, using `max(list, key=lambda t: t.timestamp)` on already-sorted lists is an $O(N)$ tax that should be $O(1)$.
+**Action:** Hoist library-level imports to the top level. Replace `iterrows()` with list comprehensions or vectorized operations. Leverage the known sort order of trade history to use direct indexing (`[-1]`) for latest-state lookups.

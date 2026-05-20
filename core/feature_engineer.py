@@ -110,7 +110,8 @@ class FeatureEngineer:
         features["pair_trade_count_1h"] = len(pair_trades)
         features["reverse_pair_trade_count_1h"] = len(reverse_pair_trades)
         if sender_trades:
-            last_sender_trade = max(sender_trades, key=lambda t: t.block_timestamp)
+            # Optimization: trades are already sorted by block_timestamp
+            last_sender_trade = sender_trades[-1]
             features["time_since_last_sender_trade"] = (
                 trade.block_timestamp - last_sender_trade.block_timestamp
             ).total_seconds()
@@ -278,6 +279,7 @@ class FeatureEngineer:
         feature_list = []
         for trade in trades:
             trade_features = await self.compute_trade_features(trade, session, trade_history=trade_history)
+            trade_features["trade_id"] = trade.id  # Required for ML training labels mapping
             feature_list.append(trade_features)
         df = pd.DataFrame(feature_list)
         df["chain_id"] = chain_id
