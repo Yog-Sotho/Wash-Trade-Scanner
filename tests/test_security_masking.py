@@ -12,12 +12,12 @@ def test_database_url_masking():
     # Ensure string representation masks the password
     url_str = str(db_url)
     assert "***" in url_str
-    assert settings.DATABASE_PASSWORD not in url_str
+    assert settings.DATABASE_PASSWORD.get_secret_value() not in url_str
 
     # Ensure repr also masks the password
     url_repr = repr(db_url)
     assert "***" in url_repr
-    assert settings.DATABASE_PASSWORD not in url_repr
+    assert settings.DATABASE_PASSWORD.get_secret_value() not in url_repr
 
 def test_database_url_contains_components():
     """Verify that the DATABASE_URL contains necessary components."""
