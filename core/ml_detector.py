@@ -136,7 +136,10 @@ class MLDetector:
         features_df: pd.DataFrame,
         idx: int,
     ) -> Dict[str, float]:
-        """Explain a single prediction using feature importance approximation."""
+        """
+        Explain a single prediction using feature importance approximation.
+        Optimized to use batch prediction for perturbed inputs.
+        """
         if not settings.ML_EXPLAINABILITY:
             return {}
 
@@ -144,15 +147,29 @@ class MLDetector:
         if not available_cols:
             return {}
 
-        row = features_df.iloc[idx][available_cols].fillna(0)
+        # 1. Get baseline prediction (single call)
+        original_probs = await self.predict(features_df)
+        original_val = original_probs[idx]
 
-        feature_importance = {}
+        # 2. Prepare batch of perturbed inputs (one per feature)
+        # We replace each feature with its mean across the dataset to measure impact
+        perturbed_batch = []
+        feature_means = features_df[available_cols].mean()
+
         for col in available_cols:
-            perturbed = features_df.copy()
-            perturbed[col] = perturbed[col].mean()
-            probs = await self.predict(perturbed)
-            original_probs = await self.predict(features_df)
-            diff = abs(original_probs[idx] - probs[idx])
+            # Efficiently create a perturbed row: start with original, replace one feature
+            perturbed_row = features_df.iloc[idx][available_cols].copy()
+            perturbed_row[col] = feature_means[col]
+            perturbed_batch.append(perturbed_row)
+
+        # 3. Predict all perturbations in a single batch
+        batch_df = pd.DataFrame(perturbed_batch).fillna(0)
+        perturbed_probs = await self.predict(batch_df)
+
+        # 4. Compute importance scores
+        feature_importance = {}
+        for i, col in enumerate(available_cols):
+            diff = abs(original_val - perturbed_probs[i])
             feature_importance[col] = float(diff)
 
         total = sum(feature_importance.values()) or 1.0
