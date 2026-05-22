@@ -144,15 +144,27 @@ class MLDetector:
         if not available_cols:
             return {}
 
-        row = features_df.iloc[idx][available_cols].fillna(0)
+        # Optimization: reduce complexity from O(F * N) to O(F + N)
+        # by calculating baseline once and batching all perturbations
+        original_probs = await self.predict(features_df)
+        baseline_prob = original_probs[idx]
+
+        # Pre-calculate means for all columns once
+        means = features_df[available_cols].mean()
+
+        # Batch all perturbed versions into a single DataFrame
+        perturbed_rows = []
+        for col in available_cols:
+            row = features_df.iloc[idx][available_cols].copy()
+            row[col] = means[col]
+            perturbed_rows.append(row)
+
+        perturbed_df = pd.DataFrame(perturbed_rows).fillna(0)
+        perturbed_probs = await self.predict(perturbed_df)
 
         feature_importance = {}
-        for col in available_cols:
-            perturbed = features_df.copy()
-            perturbed[col] = perturbed[col].mean()
-            probs = await self.predict(perturbed)
-            original_probs = await self.predict(features_df)
-            diff = abs(original_probs[idx] - probs[idx])
+        for i, col in enumerate(available_cols):
+            diff = abs(baseline_prob - perturbed_probs[i])
             feature_importance[col] = float(diff)
 
         total = sum(feature_importance.values()) or 1.0
@@ -180,11 +192,10 @@ class MLDetector:
                 temp_model = self._build_pipeline(contamination)
                 temp_model.fit(X)
                 scores = temp_model.decision_function(X)
+                probabilities = expit(-scores)
             else:
-                probs = await self.predict(df)
-                scores = -logit(np.clip(probs, 1e-10, 1 - 1e-10))
-
-            probabilities = expit(-scores)
+                # Optimization: predict() already returns probabilities via expit(-scores)
+                probabilities = await self.predict(df)
 
             wash_trades = []
             for trade, prob in zip(trades, probabilities):
