@@ -19,3 +19,8 @@
 **Vulnerability:** The `_export_results` function in `scripts/run_audit.py` used the user-provided `export_path` directly in `open()`, allowing an attacker to write files to arbitrary locations on the file system.
 **Learning:** Even internal-use scripts must sanitize file paths derived from user input (CLI arguments) to prevent directory traversal.
 **Prevention:** Use `os.path.basename()` to strip directory components from user-provided filenames when exports should be restricted to a specific directory, or validate that the resolved path stays within an allowed base directory.
+
+## 2025-05-20 - Lack of RPC Protocol and Chain ID Validation
+**Vulnerability:** The system accepted any RPC URL protocol and did not verify that the connected node matched the expected blockchain. This could allow insecure connections (SSRF) or cross-chain data corruption/audit errors if a wrong endpoint was provided.
+**Learning:** Establishing a connection is not enough; the identity and integrity of the remote service must be verified against the local configuration.
+**Prevention:** Enforce strict protocol allowlists (e.g., http/https) and perform an initial handshake to verify the remote system's identity (e.g., Chain ID) before proceeding with operations.

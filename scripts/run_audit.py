@@ -317,7 +317,8 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (ValidationError, Exception) as exc:
+        # Catch ValidationError and general Pydantic validation errors
         logger.error(f"Invalid parameters: {exc}")
         return 1
 

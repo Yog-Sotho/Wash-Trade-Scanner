@@ -40,8 +40,9 @@ async def test_chain_ingestor_connection(mock_chain_config):
     ingestor = ChainIngestor(mock_chain_config, storage)
 
     with patch("core.ingestor.AsyncWeb3") as mock_web3_class:
-        mock_web3 = AsyncMock()
+        mock_web3 = MagicMock()
         mock_web3.is_connected = AsyncMock(return_value=True)
+        mock_web3.eth.chain_id = AsyncMock(return_value=1)
         mock_web3_class.return_value = mock_web3
 
         await ingestor.connect()
