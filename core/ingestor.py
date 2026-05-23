@@ -71,6 +71,10 @@ class ChainIngestor:
                 "Set a real endpoint in environment."
             )
 
+        # SECURITY: Ensure RPC URL uses a secure and supported protocol
+        if not rpc.startswith(("http://", "https://")):
+            raise ValueError(f"Invalid RPC URL protocol: {rpc}. Only http/https supported.")
+
         provider = AsyncHTTPProvider(rpc)
         self.web3 = AsyncWeb3(provider)
 
@@ -81,7 +85,19 @@ class ChainIngestor:
             connected = await self.circuit_breaker.call(self.web3.is_connected)
             if not connected:
                 raise ConnectionError(f"Failed to connect to {self.chain_config['name']}")
-            logger.info(f"Connected to {self.chain_config['name']} via HTTP")
+
+            # SECURITY: Verify the chain ID matches the expected configuration
+            # This prevents connecting to the wrong network (e.g. Testnet vs Mainnet)
+            actual_chain_id = await self.circuit_breaker.call(lambda: self.web3.eth.chain_id)
+            expected_chain_id = self.chain_config.get("chain_id")
+
+            if expected_chain_id and actual_chain_id != expected_chain_id:
+                raise ConnectionError(
+                    f"Chain ID mismatch for {self.chain_config['name']}: "
+                    f"expected {expected_chain_id}, got {actual_chain_id}"
+                )
+
+            logger.info(f"Connected to {self.chain_config['name']} via HTTP (Chain ID: {actual_chain_id})")
         except CircuitBreakerOpen as exc:
             raise ConnectionError(f"Circuit breaker open for {self.chain_config['name']}") from exc
 
