@@ -144,15 +144,31 @@ class MLDetector:
         if not available_cols:
             return {}
 
-        row = features_df.iloc[idx][available_cols].fillna(0)
+        # Optimization: calculate baseline once and batch perturbed inputs
+        # Reduces model calls from O(F) to O(1) by batching all features.
+        target_df = features_df.iloc[[idx]]
+        # Use np.asarray to ensure safe positional indexing regardless of return type
+        original_probs = np.asarray(await self.predict(target_df))
+        target_prob = original_probs[0]
+
+        column_means = features_df[available_cols].mean()
+
+        # Create a batch of perturbed samples for all features at once.
+        # Keep all columns to ensure model schema consistency.
+        perturbed_batch = []
+        target_row_full = features_df.iloc[idx].copy()
+
+        for col in available_cols:
+            perturbed_row = target_row_full.copy()
+            perturbed_row[col] = column_means[col]
+            perturbed_batch.append(perturbed_row)
+
+        perturbed_df = pd.DataFrame(perturbed_batch)
+        perturbed_probs = np.asarray(await self.predict(perturbed_df))
 
         feature_importance = {}
-        for col in available_cols:
-            perturbed = features_df.copy()
-            perturbed[col] = perturbed[col].mean()
-            probs = await self.predict(perturbed)
-            original_probs = await self.predict(features_df)
-            diff = abs(original_probs[idx] - probs[idx])
+        for i, col in enumerate(available_cols):
+            diff = abs(target_prob - perturbed_probs[i])
             feature_importance[col] = float(diff)
 
         total = sum(feature_importance.values()) or 1.0
@@ -180,11 +196,10 @@ class MLDetector:
                 temp_model = self._build_pipeline(contamination)
                 temp_model.fit(X)
                 scores = temp_model.decision_function(X)
+                probabilities = expit(-scores)
             else:
-                probs = await self.predict(df)
-                scores = -logit(np.clip(probs, 1e-10, 1 - 1e-10))
-
-            probabilities = expit(-scores)
+                # Optimization: bypass redundant logit/expit transformations
+                probabilities = await self.predict(df)
 
             wash_trades = []
             for trade, prob in zip(trades, probabilities):
