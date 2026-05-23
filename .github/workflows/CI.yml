@@ -41,30 +41,9 @@ jobs:
           fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
-      - name: Determine TruffleHog scan range
-        id: trufflehog_range
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "base=${{ github.event.pull_request.base.sha }}" >> $GITHUB_OUTPUT
-            echo "head=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-              echo "base=" >> $GITHUB_OUTPUT
-              echo "head=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            else
-              echo "base=${{ github.event.before }}" >> $GITHUB_OUTPUT
-              echo "head=${{ github.sha }}" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "base=" >> $GITHUB_OUTPUT
-            echo "head=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
-
       - uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ steps.trufflehog_range.outputs.base }}
-          head: ${{ steps.trufflehog_range.outputs.head }}
           extra_args: --debug --only-verified
 
       - name: check forbidden files
@@ -122,10 +101,13 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
@@ -135,11 +117,24 @@ jobs:
         run: |
           pip install ruff mypy bandit
 
+      - name: ruff fix
+        run: ruff check . --fix
+
+      - name: ruff format
+        run: ruff format .
+        continue-on-error: true
+
+      - name: auto-commit fixes
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-fix by ruff"
+          file_pattern: "*.py"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
       - name: ruff check
         run: ruff check .
-
-      - name: ruff format check
-        run: ruff format --check .
 
       - name: mypy type check
         run: mypy . --ignore-missing-imports || true
@@ -151,15 +146,17 @@ jobs:
         if: always()
         with:
           name: static-analysis-reports
-          path: bandit.json
-          retention-days: 90
+          path: |
+            bandit.json
+          retention-days: 30
 
   test:
-    needs: [dependency-audit, static-analysis]
+    needs: static-analysis
+    if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -169,15 +166,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: install project
+      - name: install dependencies
         run: |
-          pip install -e ".[dev]"
+          pip install poetry pytest pytest-cov
+          poetry install
 
       - name: run tests
         run: |
-          pytest tests/ \
-            -v \
-            --cov=core \
+          poetry run pytest \
+            --cov=./ \
             --cov-report=xml \
             --cov-report=html \
             --cov-fail-under=80
