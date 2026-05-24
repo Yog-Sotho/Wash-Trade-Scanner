@@ -8,6 +8,7 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
+from pydantic import SecretStr
 from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
 from web3.middleware import async_geth_poa_middleware
 from web3.types import LogReceipt
@@ -65,17 +66,19 @@ class ChainIngestor:
     async def connect(self) -> None:
         """Connect to RPC with validation."""
         rpc = self.chain_config["rpc_url"]
-        if "YOUR_KEY" in rpc or "placeholder" in rpc.lower():
+        rpc_str = rpc.get_secret_value() if isinstance(rpc, SecretStr) else rpc
+
+        if "YOUR_KEY" in rpc_str or "placeholder" in rpc_str.lower():
             raise ValueError(
                 f"RPC URL for {self.chain_config['name']} contains placeholder. "
                 "Set a real endpoint in environment."
             )
 
         # SECURITY: Ensure RPC URL uses a secure and supported protocol
-        if not rpc.startswith(("http://", "https://")):
+        if not rpc_str.startswith(("http://", "https://")):
             raise ValueError(f"Invalid RPC URL protocol: {rpc}. Only http/https supported.")
 
-        provider = AsyncHTTPProvider(rpc)
+        provider = AsyncHTTPProvider(rpc_str)
         self.web3 = AsyncWeb3(provider)
 
         if self.chain_config.get("chain_id") in (56, 97):

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     DATABASE_SSL_MODE: str = Field("require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$")
 
     # Redis
-    REDIS_URL: str = Field("redis://localhost:6379/0")
+    REDIS_URL: SecretStr = Field("redis://localhost:6379/0")
 
     # RPC Configuration
     RPC_RATE_LIMIT: int = Field(100, ge=1, le=10000)
@@ -32,29 +32,29 @@ class Settings(BaseSettings):
     RPC_RECOVERY_TIMEOUT: float = Field(30.0, ge=1.0, le=600.0)
 
     # Per-chain RPC URLs
-    ETH_RPC_URL: str = Field("", description="Ethereum RPC URL")
-    BSC_RPC_URL: str = Field("https://bsc-dataseed1.binance.org")
-    POLYGON_RPC_URL: str = Field("https://polygon-rpc.com")
-    ARBITRUM_RPC_URL: str = Field("https://arb1.arbitrum.io/rpc")
-    OPTIMISM_RPC_URL: str = Field("https://mainnet.optimism.io")
-    BASE_RPC_URL: str = Field("https://mainnet.base.org")
-    AVALANCHE_RPC_URL: str = Field("https://api.avax.network/ext/bc/C/rpc")
-    FANTOM_RPC_URL: str = Field("https://rpc.ftm.tools")
-    CELO_RPC_URL: str = Field("https://forno.celo.org")
-    GNOSIS_RPC_URL: str = Field("https://rpc.gnosischain.com")
-    MOONBEAM_RPC_URL: str = Field("https://rpc.api.moonbeam.network")
-    AURORA_RPC_URL: str = Field("https://mainnet.aurora.dev")
-    HARMONY_RPC_URL: str = Field("https://api.harmony.one")
-    CRONOS_RPC_URL: str = Field("https://evm.cronos.org")
-    METIS_RPC_URL: str = Field("https://andromeda.metis.io/?owner=1088")
-    BOBA_RPC_URL: str = Field("https://mainnet.boba.network")
-    ZKSYNC_RPC_URL: str = Field("https://mainnet.era.zksync.io")
-    POLYGON_ZKEVM_RPC_URL: str = Field("https://zkevm-rpc.com")
-    LINEA_RPC_URL: str = Field("https://rpc.linea.build")
-    SCROLL_RPC_URL: str = Field("https://rpc.scroll.io")
-    MANTLE_RPC_URL: str = Field("https://rpc.mantle.xyz")
-    KAVA_RPC_URL: str = Field("https://evm.kava.io")
-    KLAYTN_RPC_URL: str = Field("https://public-node-api.klaytnapi.com/v1/cypress")
+    ETH_RPC_URL: SecretStr = Field("", description="Ethereum RPC URL")
+    BSC_RPC_URL: SecretStr = Field("https://bsc-dataseed1.binance.org")
+    POLYGON_RPC_URL: SecretStr = Field("https://polygon-rpc.com")
+    ARBITRUM_RPC_URL: SecretStr = Field("https://arb1.arbitrum.io/rpc")
+    OPTIMISM_RPC_URL: SecretStr = Field("https://mainnet.optimism.io")
+    BASE_RPC_URL: SecretStr = Field("https://mainnet.base.org")
+    AVALANCHE_RPC_URL: SecretStr = Field("https://api.avax.network/ext/bc/C/rpc")
+    FANTOM_RPC_URL: SecretStr = Field("https://rpc.ftm.tools")
+    CELO_RPC_URL: SecretStr = Field("https://forno.celo.org")
+    GNOSIS_RPC_URL: SecretStr = Field("https://rpc.gnosischain.com")
+    MOONBEAM_RPC_URL: SecretStr = Field("https://rpc.api.moonbeam.network")
+    AURORA_RPC_URL: SecretStr = Field("https://mainnet.aurora.dev")
+    HARMONY_RPC_URL: SecretStr = Field("https://api.harmony.one")
+    CRONOS_RPC_URL: SecretStr = Field("https://evm.cronos.org")
+    METIS_RPC_URL: SecretStr = Field("https://andromeda.metis.io/?owner=1088")
+    BOBA_RPC_URL: SecretStr = Field("https://mainnet.boba.network")
+    ZKSYNC_RPC_URL: SecretStr = Field("https://mainnet.era.zksync.io")
+    POLYGON_ZKEVM_RPC_URL: SecretStr = Field("https://zkevm-rpc.com")
+    LINEA_RPC_URL: SecretStr = Field("https://rpc.linea.build")
+    SCROLL_RPC_URL: SecretStr = Field("https://rpc.scroll.io")
+    MANTLE_RPC_URL: SecretStr = Field("https://rpc.mantle.xyz")
+    KAVA_RPC_URL: SecretStr = Field("https://evm.kava.io")
+    KLAYTN_RPC_URL: SecretStr = Field("https://public-node-api.klaytnapi.com/v1/cypress")
 
     # Detection Parameters
     WASH_TRADE_TIME_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
@@ -110,9 +110,11 @@ class Settings(BaseSettings):
     def validate_rpc_placeholders(self) -> "Settings":
         """Check all RPC URL fields for common placeholders."""
         for field_name, value in self.__dict__.items():
-            if field_name.endswith("_RPC_URL") and isinstance(value, str):
-                if "YOUR_KEY" in value or "placeholder" in value.lower():
-                    raise ValueError(f"RPC URL field {field_name} contains placeholder: {value}")
+            if field_name.endswith("_RPC_URL"):
+                val_str = value.get_secret_value() if isinstance(value, SecretStr) else value
+                if isinstance(val_str, str):
+                    if "YOUR_KEY" in val_str or "placeholder" in val_str.lower():
+                        raise ValueError(f"RPC URL field {field_name} contains placeholder: {value}")
         return self
 
     @property
