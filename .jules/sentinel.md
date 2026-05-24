@@ -19,3 +19,8 @@
 **Vulnerability:** The `_export_results` function in `scripts/run_audit.py` used the user-provided `export_path` directly in `open()`, allowing an attacker to write files to arbitrary locations on the file system.
 **Learning:** Even internal-use scripts must sanitize file paths derived from user input (CLI arguments) to prevent directory traversal.
 **Prevention:** Use `os.path.basename()` to strip directory components from user-provided filenames when exports should be restricted to a specific directory, or validate that the resolved path stays within an allowed base directory.
+
+## 2025-08-10 - Credential leakage via plaintext RPC URLs
+**Vulnerability:** RPC URLs often contain sensitive API keys (e.g., Infura, Alchemy). Storing them as plain strings in the configuration allowed them to be exposed in logs, console output, or when debugging the configuration object.
+**Learning:** Pydantic's `SecretStr` type provides a standard way to mask sensitive values automatically in string representations while still allowing access to the raw value when needed.
+**Prevention:** Use `SecretStr` for any configuration field that contains credentials or API keys. Ensure consumers explicitly call `.get_secret_value()` to avoid accidental leakage.

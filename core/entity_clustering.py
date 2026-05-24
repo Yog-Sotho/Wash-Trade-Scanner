@@ -9,6 +9,7 @@ from typing import List, Dict, Set, Optional, Tuple
 from collections import defaultdict
 
 import networkx as nx
+from pydantic import SecretStr
 from web3 import AsyncWeb3, Web3
 from web3.types import TxData, TraceFilterParams
 from sqlalchemy import select, and_
@@ -18,6 +19,7 @@ from sqlalchemy.sql import func
 from models.schemas import AddressCluster, SwapTrade
 from core.storage import Storage
 from config.chains import get_chain_config
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +143,10 @@ class EntityClusterer:
 
         chain_config = get_chain_config(chain_id)
         # Prioritize environment-provided RPC URLs
-        rpc_url = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_url))
+        rpc = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
+        rpc_str = rpc.get_secret_value() if isinstance(rpc, SecretStr) else rpc
+
+        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_str))
 
         # Determine block range
         if from_block_override is None:
