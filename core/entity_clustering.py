@@ -11,13 +11,14 @@ from collections import defaultdict
 import networkx as nx
 from web3 import AsyncWeb3, Web3
 from web3.types import TxData, TraceFilterParams
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from models.schemas import AddressCluster, SwapTrade
 from core.storage import Storage
 from config.chains import get_chain_config
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -208,26 +209,21 @@ class EntityClusterer:
         """
         Cluster all addresses involved in a pool's trades based on funding relationships.
         """
-        # Get all unique addresses from trades in this pool
-        stmt = select(SwapTrade.sender).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
-            )
-        ).distinct()
-        result = await session.execute(stmt)
-        senders = [r[0] for r in result.fetchall()]
+        # Optimization: Consolidated query to get all unique addresses from trades in this pool
+        # Replacing two separate queries (sender and recipient) with a single UNION query
+        senders_stmt = select(SwapTrade.sender).where(
+            and_(SwapTrade.chain_id == chain_id, SwapTrade.pool_address == pool_address)
+        )
+        recipients_stmt = select(SwapTrade.recipient).where(
+            and_(SwapTrade.chain_id == chain_id, SwapTrade.pool_address == pool_address)
+        )
+        stmt = union(senders_stmt, recipients_stmt)
 
-        stmt = select(SwapTrade.recipient).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
-            )
-        ).distinct()
         result = await session.execute(stmt)
-        recipients = [r[0] for r in result.fetchall()]
+        all_addresses = [r[0] for r in result.fetchall()]
 
-        all_addresses = list(set(senders + recipients))
+        if not all_addresses:
+            return []
 
         # Build funding graph using the entire chain history relevant to these addresses
         graph = await self.build_funding_graph(
@@ -239,14 +235,19 @@ class EntityClusterer:
         # Find clusters
         components = await self.find_connected_components(graph)
 
+        # Optimization: Pre-fetch all existing clusters for this pool in a single batch query
+        # Replacing N separate database queries inside the loop with O(1) batch lookup
+        cluster_pattern = f"{chain_id}:{pool_address}:%"
+        existing_stmt = select(AddressCluster).where(
+            AddressCluster.cluster_id.like(cluster_pattern)
+        )
+        existing_result = await session.execute(existing_stmt)
+        existing_clusters_map = {c.cluster_id: c for c in existing_result.scalars().all()}
+
         clusters = []
         for i, component in enumerate(components):
             cluster_id = f"{chain_id}:{pool_address}:{i}"
-
-            # Check if cluster already exists
-            stmt = select(AddressCluster).where(AddressCluster.cluster_id == cluster_id)
-            result = await session.execute(stmt)
-            existing = result.scalar_one_or_none()
+            existing = existing_clusters_map.get(cluster_id)
 
             if existing:
                 existing.addresses = list(component)
