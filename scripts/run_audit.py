@@ -111,11 +111,25 @@ class AuditRunner:
         detection_methods = []
 
         async with await self.storage.get_session() as session:
+            tasks = []
             if params.use_heuristics:
-                logger.info("Running heuristic detection...")
-                heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
+                tasks.append(heuristic_detector.run_all_heuristics(
                     params.chain_id, params.pool_address, session, trades=trades
-                )
+                ))
+            else:
+                tasks.append(asyncio.sleep(0, result=([], {})))
+
+            if use_ml:
+                tasks.append(ml_detector.detect_wash_trades(
+                    params.chain_id, params.pool_address, threshold=0.8, trades=trades
+                ))
+            else:
+                tasks.append(asyncio.sleep(0, result=[]))
+
+            results = await asyncio.gather(*tasks)
+
+            if params.use_heuristics:
+                heuristics_wash_trades, stats = results[0]
                 if heuristics_wash_trades:
                     trade_ids = [t.id for t in heuristics_wash_trades]
                     await self.storage.update_trade_labels(
@@ -128,10 +142,7 @@ class AuditRunner:
                     detection_methods.extend(stats.keys())
 
             if use_ml:
-                logger.info("Running ML detection...")
-                ml_wash_trades = await ml_detector.detect_wash_trades(
-                    params.chain_id, params.pool_address, threshold=0.8, trades=trades
-                )
+                ml_wash_trades = results[1]
                 if ml_wash_trades:
                     trade_ids = [t.id for t in ml_wash_trades]
                     await self.storage.update_trade_labels(

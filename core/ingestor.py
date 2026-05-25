@@ -31,15 +31,24 @@ class RateLimiter:
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
+        """Acquire a token from the bucket, sleeping if necessary."""
+        wait_time = 0.0
         async with self.lock:
             now = time.time()
+            # Remove calls older than 1 second
             self.calls = [t for t in self.calls if t > now - 1.0]
+
             if len(self.calls) >= self.max_calls:
-                sleep_time = 1.0 - (now - self.calls[0])
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                self.calls = self.calls[1:]
-            self.calls.append(time.time())
+                # Calculate how long to wait until the oldest call is 1s old
+                wait_time = max(0.0, 1.0 - (now - self.calls[0]))
+                self.calls.pop(0)
+                # The next call is effectively scheduled at now + wait_time
+                self.calls.append(now + wait_time)
+            else:
+                self.calls.append(now)
+
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
 
 class ChainIngestor:
@@ -145,6 +154,41 @@ class ChainIngestor:
 
         return token0, token1
 
+    async def _fetch_log_range(
+        self,
+        address: str,
+        topics: List[str],
+        start: int,
+        end: int,
+        max_retries: int = 3,
+    ) -> List[LogReceipt]:
+        """Helper to fetch a single range of logs with retries."""
+        for attempt in range(max_retries):
+            try:
+                await self.rate_limiter.acquire()
+                logs = await self.circuit_breaker.call(
+                    self.web3.eth.get_logs,
+                    {
+                        "address": address,
+                        "topics": topics,
+                        "fromBlock": start,
+                        "toBlock": end,
+                    },
+                )
+                logger.debug(f"Fetched {len(logs)} logs from {start} to {end}")
+                return logs
+            except CircuitBreakerOpen:
+                logger.error(f"Circuit breaker open, aborting log fetch for {start}-{end}")
+                raise
+            except Exception as exc:
+                logger.error(
+                    f"Error fetching logs {start}-{end}: {exc}. "
+                    f"Attempt {attempt + 1}/{max_retries}"
+                )
+                await asyncio.sleep(2**attempt)
+        logger.error(f"Failed to fetch logs for blocks {start}-{end} after {max_retries} attempts")
+        return []
+
     async def _get_logs_batch(
         self,
         address: str,
@@ -153,40 +197,16 @@ class ChainIngestor:
         to_block: int,
         max_retries: int = 3,
     ) -> List[LogReceipt]:
-        """Fetch logs with retry and circuit breaker protection."""
+        """Fetch logs with retry and circuit breaker protection in parallel."""
         batch_size = 1000
-        all_logs = []
+        tasks = []
 
         for batch_start in range(from_block, to_block + 1, batch_size):
             batch_end = min(batch_start + batch_size - 1, to_block)
+            tasks.append(self._fetch_log_range(address, topics, batch_start, batch_end, max_retries))
 
-            for attempt in range(max_retries):
-                try:
-                    await self.rate_limiter.acquire()
-                    logs = await self.circuit_breaker.call(
-                        self.web3.eth.get_logs,
-                        {
-                            "address": address,
-                            "topics": topics,
-                            "fromBlock": batch_start,
-                            "toBlock": batch_end,
-                        },
-                    )
-                    all_logs.extend(logs)
-                    logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
-                    break
-                except CircuitBreakerOpen:
-                    logger.error(f"Circuit breaker open, aborting log fetch")
-                    raise
-                except Exception as exc:
-                    logger.error(
-                        f"Error fetching logs {batch_start}-{batch_end}: {exc}. "
-                        f"Attempt {attempt + 1}/{max_retries}"
-                    )
-                    await asyncio.sleep(2 ** attempt)
-            else:
-                logger.error(f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts")
-
+        results = await asyncio.gather(*tasks)
+        all_logs = [log for sublist in results for log in sublist]
         return all_logs
 
     async def _process_swap_event(
@@ -324,23 +344,27 @@ class ChainIngestor:
             if bn:
                 block_numbers.add(bn)
 
-        block_timestamps = {}
-        for bn in block_numbers:
+        async def fetch_timestamp(bn):
             try:
                 await self.rate_limiter.acquire()
                 block = await self.circuit_breaker.call(self.web3.eth.get_block, bn)
-                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"])
+                return bn, datetime.fromtimestamp(block["timestamp"])
             except Exception as exc:
                 logger.error(f"Failed to fetch block {bn}: {exc}")
-                block_timestamps[bn] = datetime.utcnow()
+                return bn, datetime.utcnow()
 
-        trades_data = []
+        ts_results = await asyncio.gather(*(fetch_timestamp(bn) for bn in block_numbers))
+        block_timestamps = dict(ts_results)
+
+        # Parallelize event processing
+        tasks = []
         for log in logs:
             bn = log.get("blockNumber")
             ts = block_timestamps.get(bn, datetime.utcnow())
-            trade_data = await self._process_swap_event(dex, log, ts)
-            if trade_data:
-                trades_data.append(trade_data)
+            tasks.append(self._process_swap_event(dex, log, ts))
+
+        results = await asyncio.gather(*tasks)
+        trades_data = [t for t in results if t is not None]
 
         if trades_data:
             await self.storage.save_trades_batch(trades_data)
