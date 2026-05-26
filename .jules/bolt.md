@@ -22,6 +22,10 @@
 **Learning:** The initial implementation of `explain_prediction` used a nested loop that made $2 \times F$ calls to the prediction model for every explanation (where $F$ is the number of features). For each feature, it would copy the *entire* dataset and predict on it, leading to $O(F \times N)$ complexity and extreme memory pressure.
 **Action:** Batch all perturbed rows into a single $F$-row prediction call. Move the baseline prediction outside the loop. Reduces complexity to $O(F + N)$ and results in ~4x speedup for typical datasets.
 
+## 2026-05-26 - [Audit Pipeline Parallelization]
+**Learning:** Heuristic and ML detection phases are independent but were executed sequentially, making the audit latency the sum of both. Parallelizing them with `asyncio.gather` reduces the bottleneck to the slowest individual task. Using `asyncio.sleep(0, result=...)` is an effective way to maintain consistent result structures for unpacking even when some tasks are conditionally disabled.
+**Action:** Use `asyncio.gather` for independent detection modules. Ensure stable result unpacking by returning empty default structures for disabled paths.
+
 ## 2026-06-10 - [Entity Clustering Query Batching]
 **Learning:** The `cluster_addresses` method suffered from an N+1 query pattern where it fetched existing cluster records one by one inside a loop over connected components. Additionally, fetching senders and recipients in separate queries doubled database round-trips.
 **Action:** Use SQLAlchemy `union` to consolidate address extraction into a single query. Implement batch pre-fetching of all existing clusters for a pool using a `LIKE` pattern. Reduces database calls from O(N) to O(1) and improves execution time by ~90% for typical pools.

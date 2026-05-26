@@ -110,38 +110,50 @@ class AuditRunner:
         wash_trades_detected = 0
         detection_methods = []
 
+        # Run heuristic and ML detection concurrently
+        tasks = []
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
-                logger.info("Running heuristic detection...")
-                heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
+                logger.info("Queuing heuristic detection...")
+                tasks.append(heuristic_detector.run_all_heuristics(
                     params.chain_id, params.pool_address, session, trades=trades
-                )
-                if heuristics_wash_trades:
-                    trade_ids = [t.id for t in heuristics_wash_trades]
-                    await self.storage.update_trade_labels(
-                        trade_ids,
-                        is_wash_trade=True,
-                        wash_trade_score=0.8,
-                        detection_method="heuristic",
-                    )
-                    wash_trades_detected += len(heuristics_wash_trades)
-                    detection_methods.extend(stats.keys())
+                ))
+            else:
+                tasks.append(asyncio.sleep(0, result=([], {})))
 
             if use_ml:
-                logger.info("Running ML detection...")
-                ml_wash_trades = await ml_detector.detect_wash_trades(
+                logger.info("Queuing ML detection...")
+                tasks.append(ml_detector.detect_wash_trades(
                     params.chain_id, params.pool_address, threshold=0.8, trades=trades
+                ))
+            else:
+                tasks.append(asyncio.sleep(0, result=[]))
+
+            results = await asyncio.gather(*tasks)
+            heuristics_result, ml_wash_trades = results
+
+            heuristics_wash_trades, stats = heuristics_result
+            if heuristics_wash_trades:
+                trade_ids = [t.id for t in heuristics_wash_trades]
+                await self.storage.update_trade_labels(
+                    trade_ids,
+                    is_wash_trade=True,
+                    wash_trade_score=0.8,
+                    detection_method="heuristic",
                 )
-                if ml_wash_trades:
-                    trade_ids = [t.id for t in ml_wash_trades]
-                    await self.storage.update_trade_labels(
-                        trade_ids,
-                        is_wash_trade=True,
-                        wash_trade_score=0.9,
-                        detection_method="ml",
-                    )
-                    wash_trades_detected += len(ml_wash_trades)
-                    detection_methods.append("ml")
+                wash_trades_detected += len(heuristics_wash_trades)
+                detection_methods.extend(stats.keys())
+
+            if ml_wash_trades:
+                trade_ids = [t.id for t in ml_wash_trades]
+                await self.storage.update_trade_labels(
+                    trade_ids,
+                    is_wash_trade=True,
+                    wash_trade_score=0.9,
+                    detection_method="ml",
+                )
+                wash_trades_detected += len(ml_wash_trades)
+                detection_methods.append("ml")
 
         total_volume = sum(t.volume_usd or 0 for t in trades)
         wash_volume = sum(t.volume_usd or 0 for t in trades if t.is_wash_trade)
