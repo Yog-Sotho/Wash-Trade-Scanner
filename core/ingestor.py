@@ -31,15 +31,21 @@ class RateLimiter:
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
-        async with self.lock:
-            now = time.time()
-            self.calls = [t for t in self.calls if t > now - 1.0]
-            if len(self.calls) >= self.max_calls:
+        while True:
+            async with self.lock:
+                now = time.time()
+                self.calls = [t for t in self.calls if t > now - 1.0]
+                if len(self.calls) < self.max_calls:
+                    self.calls.append(time.time())
+                    return
+
                 sleep_time = 1.0 - (now - self.calls[0])
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                self.calls = self.calls[1:]
-            self.calls.append(time.time())
+
+            # SECURITY: Release lock during sleep to prevent serializing all concurrent tasks.
+            # Holding the lock during sleep blocks other tasks from checking the window,
+            # effectively turning the parallel ingestor into a serial one (self-DoS).
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
 
 
 class ChainIngestor:
@@ -395,6 +401,16 @@ class MultiChainIngestor:
                 end_block = await ingestor.circuit_breaker.call(ingestor.web3.eth.block_number)
             except CircuitBreakerOpen as exc:
                 raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
+
+        # SECURITY: Enforce block range limits to prevent Denial of Service
+        if end_block < start_block:
+            raise ValueError(f"end_block ({end_block}) must be >= start_block ({start_block})")
+
+        if end_block - start_block > 10_000_000:
+            raise ValueError(
+                f"Block range {end_block - start_block:,} exceeds maximum of 10,000,000. "
+                "Please specify a smaller range."
+            )
 
         for dex in chain_config["dexes"]:
             swaps = await ingestor.sync_historical_swaps(

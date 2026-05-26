@@ -5,7 +5,7 @@ Input validation utilities using Pydantic.
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from web3 import Web3
 
 
@@ -32,16 +32,15 @@ class AuditParameters(BaseModel):
         except ValueError as exc:
             raise ValueError(f"Invalid checksum address: {v}") from exc
 
-    @field_validator("end_block")
-    @classmethod
-    def validate_block_range(cls, v: Optional[int], info) -> Optional[int]:
-        if v is not None:
-            start = info.data.get("start_block")
-            if start is not None and v <= start:
-                raise ValueError("end_block must be greater than start_block")
-            if start is not None and v - start > 10_000_000:
+    @model_validator(mode="after")
+    def validate_block_range(self) -> "AuditParameters":
+        if self.end_block is not None:
+            start = self.start_block or 0
+            if self.end_block < start:
+                raise ValueError("end_block must be greater than or equal to start_block")
+            if self.end_block - start > 10_000_000:
                 raise ValueError("Block range exceeds maximum of 10,000,000")
-        return v
+        return self
 
 
 class TrainingParameters(BaseModel):

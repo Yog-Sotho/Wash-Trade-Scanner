@@ -24,3 +24,13 @@
 **Vulnerability:** RPC URLs often contain sensitive API keys (e.g., Infura, Alchemy). Storing them as plain strings in the configuration allowed them to be exposed in logs, console output, or when debugging the configuration object.
 **Learning:** Pydantic's `SecretStr` type provides a standard way to mask sensitive values automatically in string representations while still allowing access to the raw value when needed.
 **Prevention:** Use `SecretStr` for any configuration field that contains credentials or API keys. Ensure consumers explicitly call `.get_secret_value()` to avoid accidental leakage.
+
+## 2025-09-05 - Denial of Service (DoS) via unbounded block ranges
+**Vulnerability:** Ingestion methods allowed fetching swap events over arbitrary block ranges without enforcement. Attackers could specify massive ranges (e.g., from block 0 to latest) to trigger memory exhaustion or excessive RPC costs.
+**Learning:** Input validation must enforce strict business logic limits (like maximum block spans) at both the data entry (Pydantic models) and implementation layers. Default values should also be subject to these limits after being resolved.
+**Prevention:** Always enforce "Reasonable Limits" on any resource-intensive operation involving ranges or batch sizes. Use Pydantic's `model_validator` for cross-field checks where one field (like `end_block`) depends on another (like `start_block`) for safety.
+
+## 2025-09-05 - Self-inflicted DoS via lock serialization in RateLimiter
+**Vulnerability:** The `RateLimiter` held an `asyncio.Lock` while performing `asyncio.sleep`, which blocked all other concurrent tasks from even checking the rate limit window, effectively serializing parallel execution.
+**Learning:** In asynchronous code, holding a lock across an `await` point (especially `sleep`) can lead to severe performance degradation and "self-DoS" by preventing concurrency.
+**Prevention:** Always release synchronization primitives (Locks, Semaphores) before performing long-running or blocking async operations like `sleep`. Use a loop to re-acquire and re-verify state after the sleep.
