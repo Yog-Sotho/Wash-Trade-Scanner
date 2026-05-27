@@ -25,3 +25,7 @@
 ## 2026-06-10 - [Entity Clustering Query Batching]
 **Learning:** The `cluster_addresses` method suffered from an N+1 query pattern where it fetched existing cluster records one by one inside a loop over connected components. Additionally, fetching senders and recipients in separate queries doubled database round-trips.
 **Action:** Use SQLAlchemy `union` to consolidate address extraction into a single query. Implement batch pre-fetching of all existing clusters for a pool using a `LIKE` pattern. Reduces database calls from O(N) to O(1) and improves execution time by ~90% for typical pools.
+
+## 2026-06-15 - [Ingestion Pipeline Parallelization & Non-blocking Rate Limiting]
+**Learning:** The data ingestion pipeline was bottlenecked by a rate limiter that held a lock during sleep, effectively serializing all RPC requests. Additionally, sequential log fetching and event processing introduced significant I/O-bound latency.
+**Action:** Release the `asyncio.Lock` during sleep in `RateLimiter.acquire`. Parallelize log fetching, block timestamp retrieval, and event processing using `asyncio.gather`. Implement optimistic cache checks to reduce lock contention.
