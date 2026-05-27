@@ -22,6 +22,7 @@ from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
 from core.ml_detector import MLDetector
 from core.entity_clustering import EntityClusterer
+from pydantic import ValidationError as PydanticValidationError
 from core.validators import AuditParameters, validate_address
 from core.exceptions import ValidationError, WashTradeError
 from config.settings import settings
@@ -317,7 +318,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 

@@ -396,6 +396,10 @@ class MultiChainIngestor:
             except CircuitBreakerOpen as exc:
                 raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
 
+        # SECURITY: Enforce block range limits after resolving defaults
+        if end_block - start_block > 10_000_000:
+            raise ValueError(f"Block range {end_block - start_block:,} exceeds maximum of 10,000,000")
+
         for dex in chain_config["dexes"]:
             swaps = await ingestor.sync_historical_swaps(
                 dex,
