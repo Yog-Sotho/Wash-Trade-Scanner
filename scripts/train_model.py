@@ -9,8 +9,11 @@ import logging
 from typing import List
 
 from core.storage import Storage
+from pydantic import ValidationError as PydanticValidationError
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
+from core.validators import TrainingParameters
+from core.exceptions import ValidationError
 from config.settings import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -46,12 +49,24 @@ async def main():
     parser.add_argument("--no-labels", action="store_true", help="Train without heuristic labels")
     parser.add_argument("--no-save", action="store_true", help="Don't save the model")
     args = parser.parse_args()
+
+    try:
+        TrainingParameters(
+            chain_id=args.chain_id,
+            pool_addresses=args.pools,
+            use_heuristic_labels=not args.no_labels,
+        )
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
+        logger.error(f"Invalid parameters: {exc}")
+        return 1
+
     await train_model(
         chain_id=args.chain_id,
         pool_addresses=args.pools,
         use_heuristic_labels=not args.no_labels,
         save_model=not args.no_save,
     )
+    return 0
 
 
 if __name__ == "__main__":
