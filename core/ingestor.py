@@ -31,15 +31,28 @@ class RateLimiter:
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
+        """Reserve a slot and sleep outside the lock if necessary."""
+        sleep_time = 0
         async with self.lock:
             now = time.time()
+            # Clean up old calls
             self.calls = [t for t in self.calls if t > now - 1.0]
+
             if len(self.calls) >= self.max_calls:
+                # Calculate sleep time based on the oldest call in the window
                 sleep_time = 1.0 - (now - self.calls[0])
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                if sleep_time < 0:
+                    sleep_time = 0
+
+                # Reserve the future timestamp for this call
+                scheduled_time = now + sleep_time
+                self.calls.append(scheduled_time)
                 self.calls = self.calls[1:]
-            self.calls.append(time.time())
+            else:
+                self.calls.append(now)
+
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
 
 
 class ChainIngestor:
@@ -107,6 +120,11 @@ class ChainIngestor:
     async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
         """Fetch token0 and token1 from pool contract with caching."""
         addr = Web3.to_checksum_address(pool_address)
+
+        # Optimistic check before acquiring lock
+        if addr in self._pool_tokens:
+            return self._pool_tokens[addr]
+
         async with self._pool_tokens_lock:
             if addr in self._pool_tokens:
                 return self._pool_tokens[addr]
@@ -153,13 +171,11 @@ class ChainIngestor:
         to_block: int,
         max_retries: int = 3,
     ) -> List[LogReceipt]:
-        """Fetch logs with retry and circuit breaker protection."""
+        """Fetch logs with parallel batching and rate limiting."""
         batch_size = 1000
-        all_logs = []
+        tasks = []
 
-        for batch_start in range(from_block, to_block + 1, batch_size):
-            batch_end = min(batch_start + batch_size - 1, to_block)
-
+        async def fetch_batch(start: int, end: int) -> List[LogReceipt]:
             for attempt in range(max_retries):
                 try:
                     await self.rate_limiter.acquire()
@@ -168,25 +184,28 @@ class ChainIngestor:
                         {
                             "address": address,
                             "topics": topics,
-                            "fromBlock": batch_start,
-                            "toBlock": batch_end,
+                            "fromBlock": start,
+                            "toBlock": end,
                         },
                     )
-                    all_logs.extend(logs)
-                    logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
-                    break
+                    logger.debug(f"Fetched {len(logs)} logs from {start} to {end}")
+                    return logs
                 except CircuitBreakerOpen:
-                    logger.error(f"Circuit breaker open, aborting log fetch")
                     raise
                 except Exception as exc:
                     logger.error(
-                        f"Error fetching logs {batch_start}-{batch_end}: {exc}. "
+                        f"Error fetching logs {start}-{end}: {exc}. "
                         f"Attempt {attempt + 1}/{max_retries}"
                     )
                     await asyncio.sleep(2 ** attempt)
-            else:
-                logger.error(f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts")
+            return []
 
+        for batch_start in range(from_block, to_block + 1, batch_size):
+            batch_end = min(batch_start + batch_size - 1, to_block)
+            tasks.append(fetch_batch(batch_start, batch_end))
+
+        results = await asyncio.gather(*tasks)
+        all_logs = [log for batch in results for log in batch]
         return all_logs
 
     async def _process_swap_event(
@@ -318,29 +337,27 @@ class ChainIngestor:
         if not logs:
             return 0
 
-        block_numbers = set()
-        for log in logs:
-            bn = log.get("blockNumber")
-            if bn:
-                block_numbers.add(bn)
+        block_numbers = sorted(list(set(log.get("blockNumber") for log in logs if log.get("blockNumber"))))
 
-        block_timestamps = {}
-        for bn in block_numbers:
+        async def fetch_timestamp(bn: int) -> Tuple[int, datetime]:
             try:
                 await self.rate_limiter.acquire()
                 block = await self.circuit_breaker.call(self.web3.eth.get_block, bn)
-                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"])
+                return bn, datetime.fromtimestamp(block["timestamp"])
             except Exception as exc:
                 logger.error(f"Failed to fetch block {bn}: {exc}")
-                block_timestamps[bn] = datetime.utcnow()
+                return bn, datetime.utcnow()
 
-        trades_data = []
-        for log in logs:
-            bn = log.get("blockNumber")
-            ts = block_timestamps.get(bn, datetime.utcnow())
-            trade_data = await self._process_swap_event(dex, log, ts)
-            if trade_data:
-                trades_data.append(trade_data)
+        ts_results = await asyncio.gather(*(fetch_timestamp(bn) for bn in block_numbers))
+        block_timestamps = dict(ts_results)
+
+        # Process swap events in parallel
+        tasks = [
+            self._process_swap_event(dex, log, block_timestamps.get(log.get("blockNumber"), datetime.utcnow()))
+            for log in logs
+        ]
+        results = await asyncio.gather(*tasks)
+        trades_data = [t for t in results if t]
 
         if trades_data:
             await self.storage.save_trades_batch(trades_data)
