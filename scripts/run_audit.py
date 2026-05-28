@@ -16,6 +16,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+import pydantic
+
 from core.ingestor import MultiChainIngestor
 from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
@@ -317,7 +319,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (pydantic.ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
@@ -336,7 +338,7 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        logger.error(f"Unexpected error: {exc}")
         return 1
     finally:
         await runner.cleanup()
