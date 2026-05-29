@@ -110,6 +110,8 @@ class AuditRunner:
         wash_trades_detected = 0
         detection_methods = []
 
+        # Run heuristic and ML detection concurrently
+        tasks = []
         async with await self.storage.get_session() as session:
             tasks = []
             if params.use_heuristics:
