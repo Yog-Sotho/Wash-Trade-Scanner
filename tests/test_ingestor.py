@@ -2,12 +2,13 @@
 Unit tests for multi-chain ingestor.
 """
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from config.chains import ChainConfig, DEXConfig
 from core.ingestor import ChainIngestor, MultiChainIngestor
 from core.storage import Storage
-from config.chains import ChainConfig, DEXConfig
 
 
 @pytest.fixture
@@ -44,6 +45,7 @@ async def test_chain_ingestor_connection(mock_chain_config):
         mock_web3.is_connected = AsyncMock(return_value=True)
         # Mock eth.chain_id as a future
         import asyncio
+
         f = asyncio.Future()
         f.set_result(mock_chain_config["chain_id"])
         mock_web3.eth.chain_id = f

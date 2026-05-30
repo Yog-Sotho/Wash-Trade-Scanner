@@ -51,14 +51,20 @@ class CircuitBreaker:
         """Execute coroutine with circuit breaker protection."""
         async with self._lock:
             if self.state == CircuitState.OPEN:
-                if time.time() - (self.last_failure_time or 0) > self.config.recovery_timeout:
+                if (
+                    time.time() - (self.last_failure_time or 0)
+                    > self.config.recovery_timeout
+                ):
                     self.state = CircuitState.HALF_OPEN
                     self.successes = 0
                     logger.info(f"Circuit {self.name} entering HALF_OPEN")
                 else:
                     raise CircuitBreakerOpen(f"Circuit {self.name} is OPEN")
 
-            if self.state == CircuitState.HALF_OPEN and self.successes >= self.config.half_open_max_calls:
+            if (
+                self.state == CircuitState.HALF_OPEN
+                and self.successes >= self.config.half_open_max_calls
+            ):
                 raise CircuitBreakerOpen(f"Circuit {self.name} half-open limit reached")
 
         try:

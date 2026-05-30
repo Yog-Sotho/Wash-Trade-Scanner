@@ -4,22 +4,16 @@ Secure connection handling with SSL enforcement.
 """
 
 import logging
-from typing import Optional, List, Dict, Any, Union
+from typing import Any, Dict, List, Optional, Union
 
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.engine import URL
-from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    AsyncSession,
-    AsyncEngine,
-    async_sessionmaker,
-)
-from sqlalchemy import select, update, delete, and_, func
+from sqlalchemy.ext.asyncio import (AsyncEngine, AsyncSession,
+                                    async_sessionmaker, create_async_engine)
 
-from models.schemas import (
-    Base, SwapTrade, AddressCluster,
-    TokenRiskProfile, DetectionAuditLog,
-)
 from config.settings import settings
+from models.schemas import (AddressCluster, Base, DetectionAuditLog, SwapTrade,
+                            TokenRiskProfile)
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +137,11 @@ class Storage:
     ) -> List[SwapTrade]:
         """Retrieve trades for a specific pool."""
         async with await self.get_session() as session:
-            order = SwapTrade.block_timestamp.asc() if ascending else SwapTrade.block_timestamp.desc()
+            order = (
+                SwapTrade.block_timestamp.asc()
+                if ascending
+                else SwapTrade.block_timestamp.desc()
+            )
             stmt = (
                 select(SwapTrade)
                 .where(
@@ -238,7 +236,9 @@ class Storage:
     async def cleanup_old_data(self, retention_days: int) -> int:
         """Remove trades older than retention period."""
         from datetime import datetime, timedelta
+
         from sqlalchemy import delete
+
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
         async with await self.get_session() as session:
             stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)

@@ -8,7 +8,6 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 from web3 import Web3
 
-
 VALID_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
@@ -42,7 +41,7 @@ class AuditParameters(BaseModel):
         elif self.end_block is not None and self.end_block > 10_000_000:
             # If start_block is None, it defaults to chain start or 0,
             # so we should still check if end_block is too far from a reasonable start
-            pass # We'll handle the fully resolved range in the ingestor
+            pass  # We'll handle the fully resolved range in the ingestor
         return self
 
 

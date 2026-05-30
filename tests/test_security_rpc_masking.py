@@ -1,10 +1,13 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from pydantic import SecretStr
+
 from config.settings import Settings
-from core.ingestor import ChainIngestor
 from core.entity_clustering import EntityClusterer
-from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
+from core.ingestor import ChainIngestor
+
 
 def test_rpc_url_masking():
     """Verify that RPC URLs are masked when converted to strings."""
@@ -13,7 +16,7 @@ def test_rpc_url_masking():
         DATABASE_NAME="test",
         DATABASE_USER="user",
         DATABASE_PASSWORD="password123",
-        ETH_RPC_URL="https://eth-mainnet.alchemy.com/v2/secret_key"
+        ETH_RPC_URL="https://eth-mainnet.alchemy.com/v2/secret_key",
     )
 
     rpc_url = settings.ETH_RPC_URL
@@ -26,6 +29,7 @@ def test_rpc_url_masking():
     # Check retrieval
     assert rpc_url.get_secret_value() == "https://eth-mainnet.alchemy.com/v2/secret_key"
 
+
 @pytest.mark.asyncio
 async def test_ingestor_handles_secret_rpc():
     """Verify that ChainIngestor correctly uses SecretStr RPC URL."""
@@ -33,13 +37,15 @@ async def test_ingestor_handles_secret_rpc():
     chain_config = {
         "chain_id": 1,
         "name": "Ethereum",
-        "rpc_url": SecretStr("https://secret.rpc.url")
+        "rpc_url": SecretStr("https://secret.rpc.url"),
     }
 
     ingestor = ChainIngestor(chain_config, storage)
 
-    with patch("core.ingestor.AsyncHTTPProvider") as mock_provider, \
-         patch("core.ingestor.AsyncWeb3") as mock_web3_cls:
+    with (
+        patch("core.ingestor.AsyncHTTPProvider") as mock_provider,
+        patch("core.ingestor.AsyncWeb3") as mock_web3_cls,
+    ):
 
         mock_web3 = mock_web3_cls.return_value
         mock_web3.is_connected = AsyncMock(return_value=True)
@@ -53,6 +59,7 @@ async def test_ingestor_handles_secret_rpc():
         # Verify that the actual URL was passed to the provider
         mock_provider.assert_called_once_with("https://secret.rpc.url")
 
+
 @pytest.mark.asyncio
 async def test_entity_clusterer_handles_secret_rpc():
     """Verify that EntityClusterer correctly uses SecretStr RPC URL."""
@@ -60,10 +67,12 @@ async def test_entity_clusterer_handles_secret_rpc():
     clusterer = EntityClusterer(storage)
 
     # Mock settings.rpc_urls to return a SecretStr
-    with patch("core.entity_clustering.settings") as mock_settings, \
-         patch("core.entity_clustering.get_chain_config") as mock_get_chain_config, \
-         patch("core.entity_clustering.AsyncWeb3") as mock_web3_cls, \
-         patch("core.entity_clustering.AsyncWeb3.AsyncHTTPProvider") as mock_provider:
+    with (
+        patch("core.entity_clustering.settings") as mock_settings,
+        patch("core.entity_clustering.get_chain_config") as mock_get_chain_config,
+        patch("core.entity_clustering.AsyncWeb3") as mock_web3_cls,
+        patch("core.entity_clustering.AsyncWeb3.AsyncHTTPProvider") as mock_provider,
+    ):
 
         mock_settings.rpc_urls = {1: SecretStr("https://secret.rpc.url")}
         mock_web3 = mock_web3_cls.return_value

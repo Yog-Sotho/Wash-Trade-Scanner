@@ -4,8 +4,9 @@ Uses Pydantic for validation. No hardcoded credentials.
 """
 
 import os
-from typing import Optional, Set, Any
-from pydantic import Field, field_validator, SecretStr, model_validator
+from typing import Any, Optional, Set
+
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import URL
 
@@ -19,7 +20,9 @@ class Settings(BaseSettings):
     DATABASE_NAME: str = Field(..., description="PostgreSQL database name")
     DATABASE_USER: str = Field(..., description="PostgreSQL username")
     DATABASE_PASSWORD: SecretStr = Field(..., description="PostgreSQL password")
-    DATABASE_SSL_MODE: str = Field("require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$")
+    DATABASE_SSL_MODE: str = Field(
+        "require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$"
+    )
 
     # Redis
     REDIS_URL: SecretStr = Field("redis://localhost:6379/0")
@@ -54,7 +57,9 @@ class Settings(BaseSettings):
     SCROLL_RPC_URL: SecretStr = Field("https://rpc.scroll.io")
     MANTLE_RPC_URL: SecretStr = Field("https://rpc.mantle.xyz")
     KAVA_RPC_URL: SecretStr = Field("https://evm.kava.io")
-    KLAYTN_RPC_URL: SecretStr = Field("https://public-node-api.klaytnapi.com/v1/cypress")
+    KLAYTN_RPC_URL: SecretStr = Field(
+        "https://public-node-api.klaytnapi.com/v1/cypress"
+    )
 
     # Detection Parameters
     WASH_TRADE_TIME_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
@@ -111,10 +116,14 @@ class Settings(BaseSettings):
         """Check all RPC URL fields for common placeholders."""
         for field_name, value in self.__dict__.items():
             if field_name.endswith("_RPC_URL"):
-                val_str = value.get_secret_value() if isinstance(value, SecretStr) else value
+                val_str = (
+                    value.get_secret_value() if isinstance(value, SecretStr) else value
+                )
                 if isinstance(val_str, str):
                     if "YOUR_KEY" in val_str or "placeholder" in val_str.lower():
-                        raise ValueError(f"RPC URL field {field_name} contains placeholder: {value}")
+                        raise ValueError(
+                            f"RPC URL field {field_name} contains placeholder: {value}"
+                        )
         return self
 
     @property
@@ -135,7 +144,11 @@ class Settings(BaseSettings):
         """Parse allowlist into lowercase set."""
         if not self.BOT_ALLOWLIST:
             return set()
-        return {addr.strip().lower() for addr in self.BOT_ALLOWLIST.split(",") if addr.strip()}
+        return {
+            addr.strip().lower()
+            for addr in self.BOT_ALLOWLIST.split(",")
+            if addr.strip()
+        }
 
     @property
     def rpc_urls(self) -> dict:

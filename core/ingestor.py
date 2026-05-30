@@ -5,19 +5,19 @@ Multi-chain swap event ingestor with circuit breaker protection.
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import SecretStr
-from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
+from web3 import AsyncHTTPProvider, AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware
 from web3.types import LogReceipt
 
 from config.chains import CHAINS, get_chain_config
 from config.settings import settings
-from core.storage import Storage
 from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
-from core.exceptions import RPCError, CircuitBreakerOpen
+from core.exceptions import CircuitBreakerOpen, RPCError
+from core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,9 @@ class ChainIngestor:
 
         # SECURITY: Ensure RPC URL uses a secure and supported protocol
         if not rpc_str.startswith(("http://", "https://")):
-            raise ValueError(f"Invalid RPC URL protocol: {rpc}. Only http/https supported.")
+            raise ValueError(
+                f"Invalid RPC URL protocol: {rpc}. Only http/https supported."
+            )
 
         provider = AsyncHTTPProvider(rpc_str)
         self.web3 = AsyncWeb3(provider)
@@ -96,11 +98,15 @@ class ChainIngestor:
         try:
             connected = await self.circuit_breaker.call(self.web3.is_connected)
             if not connected:
-                raise ConnectionError(f"Failed to connect to {self.chain_config['name']}")
+                raise ConnectionError(
+                    f"Failed to connect to {self.chain_config['name']}"
+                )
 
             # SECURITY: Verify the chain ID matches the expected configuration
             # This prevents connecting to the wrong network (e.g. Testnet vs Mainnet)
-            actual_chain_id = await self.circuit_breaker.call(lambda: self.web3.eth.chain_id)
+            actual_chain_id = await self.circuit_breaker.call(
+                lambda: self.web3.eth.chain_id
+            )
             expected_chain_id = self.chain_config.get("chain_id")
 
             if expected_chain_id and actual_chain_id != expected_chain_id:
@@ -109,9 +115,13 @@ class ChainIngestor:
                     f"expected {expected_chain_id}, got {actual_chain_id}"
                 )
 
-            logger.info(f"Connected to {self.chain_config['name']} via HTTP (Chain ID: {actual_chain_id})")
+            logger.info(
+                f"Connected to {self.chain_config['name']} via HTTP (Chain ID: {actual_chain_id})"
+            )
         except CircuitBreakerOpen as exc:
-            raise ConnectionError(f"Circuit breaker open for {self.chain_config['name']}") from exc
+            raise ConnectionError(
+                f"Circuit breaker open for {self.chain_config['name']}"
+            ) from exc
 
     async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
         """Fetch token0 and token1 from pool contract with caching."""
@@ -178,7 +188,9 @@ class ChainIngestor:
                 logger.debug(f"Fetched {len(logs)} logs from {start} to {end}")
                 return logs
             except CircuitBreakerOpen:
-                logger.error(f"Circuit breaker open, aborting log fetch for {start}-{end}")
+                logger.error(
+                    f"Circuit breaker open, aborting log fetch for {start}-{end}"
+                )
                 raise
             except Exception as exc:
                 logger.error(
@@ -186,7 +198,9 @@ class ChainIngestor:
                     f"Attempt {attempt + 1}/{max_retries}"
                 )
                 await asyncio.sleep(2**attempt)
-        logger.error(f"Failed to fetch logs for blocks {start}-{end} after {max_retries} attempts")
+        logger.error(
+            f"Failed to fetch logs for blocks {start}-{end} after {max_retries} attempts"
+        )
         return []
 
     async def _get_logs_batch(
@@ -203,7 +217,11 @@ class ChainIngestor:
 
         for batch_start in range(from_block, to_block + 1, batch_size):
             batch_end = min(batch_start + batch_size - 1, to_block)
-            tasks.append(self._fetch_log_range(address, topics, batch_start, batch_end, max_retries))
+            tasks.append(
+                self._fetch_log_range(
+                    address, topics, batch_start, batch_end, max_retries
+                )
+            )
 
         results = await asyncio.gather(*tasks)
         all_logs = [log for sublist in results for log in sublist]
@@ -323,7 +341,9 @@ class ChainIngestor:
         pool_address: Optional[str] = None,
     ) -> int:
         """Sync historical swap events."""
-        logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
+        logger.info(
+            f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}"
+        )
 
         event_signature_hash = Web3.keccak(text=dex["event_sig"]).hex()
         topics = [event_signature_hash]
@@ -353,7 +373,9 @@ class ChainIngestor:
                 logger.error(f"Failed to fetch block {bn}: {exc}")
                 return bn, datetime.utcnow()
 
-        ts_results = await asyncio.gather(*(fetch_timestamp(bn) for bn in block_numbers))
+        ts_results = await asyncio.gather(
+            *(fetch_timestamp(bn) for bn in block_numbers)
+        )
         block_timestamps = dict(ts_results)
 
         # Parallelize event processing
@@ -416,9 +438,13 @@ class MultiChainIngestor:
         if end_block is None:
             try:
                 await ingestor.rate_limiter.acquire()
-                end_block = await ingestor.circuit_breaker.call(ingestor.web3.eth.block_number)
+                end_block = await ingestor.circuit_breaker.call(
+                    ingestor.web3.eth.block_number
+                )
             except CircuitBreakerOpen as exc:
-                raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
+                raise ValueError(
+                    f"Cannot get latest block: circuit breaker open"
+                ) from exc
 
         # SECURITY: Enforce maximum block range to prevent resource exhaustion (DoS)
         if end_block - start_block > 10_000_000:
