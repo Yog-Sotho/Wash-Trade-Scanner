@@ -4,8 +4,8 @@ Main entry point for auditing a blockchain pool for wash trading.
 With input validation and graceful shutdown.
 """
 
-import asyncio
 import argparse
+import asyncio
 import csv
 import json
 import logging
@@ -16,15 +16,15 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from core.ingestor import MultiChainIngestor
-from core.storage import Storage
+from config.settings import settings
+from core.entity_clustering import EntityClusterer
+from core.exceptions import ValidationError, WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
+from core.ingestor import MultiChainIngestor
 from core.ml_detector import MLDetector
-from core.entity_clustering import EntityClusterer
+from core.storage import Storage
 from core.validators import AuditParameters, validate_address
-from core.exceptions import ValidationError, WashTradeError
-from config.settings import settings
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -95,7 +95,9 @@ class AuditRunner:
         if self._shutdown_event.is_set():
             raise WashTradeError("Audit cancelled by shutdown signal")
 
-        logger.info(f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}")
+        logger.info(
+            f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}"
+        )
         trades_synced = await ingestor.audit_pool(
             chain_id=params.chain_id,
             pool_address=params.pool_address,
@@ -104,7 +106,9 @@ class AuditRunner:
         )
         logger.info(f"Synced {trades_synced} trades")
 
-        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address, ascending=True)
+        trades = await self.storage.get_pool_trades(
+            params.chain_id, params.pool_address, ascending=True
+        )
         logger.info(f"Analyzing {len(trades)} trades")
 
         wash_trades_detected = 0
@@ -115,16 +119,23 @@ class AuditRunner:
         async with await self.storage.get_session() as session:
             tasks = []
             if params.use_heuristics:
-                tasks.append(heuristic_detector.run_all_heuristics(
-                    params.chain_id, params.pool_address, session, trades=trades
-                ))
+                tasks.append(
+                    heuristic_detector.run_all_heuristics(
+                        params.chain_id, params.pool_address, session, trades=trades
+                    )
+                )
             else:
                 tasks.append(asyncio.sleep(0, result=([], {})))
 
             if use_ml:
-                tasks.append(ml_detector.detect_wash_trades(
-                    params.chain_id, params.pool_address, threshold=0.8, trades=trades
-                ))
+                tasks.append(
+                    ml_detector.detect_wash_trades(
+                        params.chain_id,
+                        params.pool_address,
+                        threshold=0.8,
+                        trades=trades,
+                    )
+                )
             else:
                 tasks.append(asyncio.sleep(0, result=[]))
 
@@ -198,9 +209,14 @@ class AuditRunner:
 
         if export_format:
             await self._export_results(
-                params, len(trades), wash_trades_detected,
-                risk_metrics, detection_methods, duration,
-                export_format, export_path,
+                params,
+                len(trades),
+                wash_trades_detected,
+                risk_metrics,
+                detection_methods,
+                duration,
+                export_format,
+                export_path,
             )
 
         return {
@@ -259,7 +275,9 @@ class AuditRunner:
         }
 
         if export_format == "json":
-            export_file = export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.json"
+            export_file = (
+                export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.json"
+            )
             # Prevent path traversal
             export_file = os.path.basename(export_file)
             with open(export_file, "w") as f:
@@ -267,7 +285,9 @@ class AuditRunner:
             logger.info(f"Results exported to {export_file}")
 
         elif export_format == "csv":
-            export_file = export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.csv"
+            export_file = (
+                export_path or f"audit_{params.chain_id}_{params.pool_address[:8]}.csv"
+            )
             # Prevent path traversal
             export_file = os.path.basename(export_file)
             with open(export_file, "w", newline="") as f:
@@ -311,13 +331,19 @@ async def main() -> int:
     signal.signal(signal.SIGTERM, lambda s, f: None)
 
     parser = argparse.ArgumentParser(description="Wash Trade Detection Audit")
-    parser.add_argument("--chain-id", type=int, required=True, help="Blockchain chain ID")
+    parser.add_argument(
+        "--chain-id", type=int, required=True, help="Blockchain chain ID"
+    )
     parser.add_argument("--pool", type=str, required=True, help="Pool address to audit")
     parser.add_argument("--start-block", type=int, help="Starting block number")
     parser.add_argument("--end-block", type=int, help="Ending block number")
     parser.add_argument("--no-ml", action="store_true", help="Disable ML detection")
-    parser.add_argument("--no-heuristics", action="store_true", help="Disable heuristic detection")
-    parser.add_argument("--export", choices=["json", "csv"], help="Export results to file")
+    parser.add_argument(
+        "--no-heuristics", action="store_true", help="Disable heuristic detection"
+    )
+    parser.add_argument(
+        "--export", choices=["json", "csv"], help="Export results to file"
+    )
     parser.add_argument("--export-path", type=str, help="Path for export file")
     args = parser.parse_args()
 

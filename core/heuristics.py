@@ -3,19 +3,20 @@ High-signal heuristic detection rules for wash trading.
 Uses robust statistical methods (MAD/IQR) instead of z-score.
 """
 
+import asyncio
 import logging
-import math
-from typing import List, Dict, Any, Set, Tuple, Optional
-from datetime import datetime, timedelta
-from collections import defaultdict
 from bisect import bisect_left, bisect_right
+from collections import defaultdict
+from datetime import timedelta
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import networkx as nx
-from sqlalchemy import select, and_
+import numpy as np
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.schemas import SwapTrade, AddressCluster
 from config.settings import settings
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -40,50 +41,54 @@ class RobustAnomalyDetector:
         self.iqr: Optional[float] = None
         self._fitted = False
 
-    def fit(self, volumes: List[float]) -> None:
-        """Fit detector on log-transformed volumes."""
-        if not volumes:
+    def fit(self, volumes: Union[List[float], np.ndarray]) -> None:
+        """Fit detector on log-transformed volumes using NumPy."""
+        if len(volumes) == 0:
             raise ValueError("Cannot fit on empty data")
 
-        log_volumes = [math.log1p(max(v, 0.0)) for v in volumes]
+        # Vectorized log transformation
+        volumes_arr = np.asarray(volumes)
+        log_volumes = np.log1p(np.maximum(volumes_arr, 0.0))
 
         if self.method == "mad":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
-            self.mad = sorted([abs(v - self.median) for v in log_volumes])[n // 2]
+            self.median = np.median(log_volumes)
+            # MAD is median of absolute deviations from median
+            self.mad = np.median(np.abs(log_volumes - self.median))
         elif self.method == "iqr":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.q1 = sorted_vals[n // 4]
-            self.q3 = sorted_vals[3 * n // 4]
+            self.q1, self.q3 = np.percentile(log_volumes, [25, 75])
             self.iqr = self.q3 - self.q1
         else:
             raise ValueError(f"Unknown method: {self.method}")
 
         self._fitted = True
 
-    def score(self, volume: float) -> float:
-        """Compute anomaly score for a volume."""
+    def score(self, volume: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """Compute anomaly score for volume(s) using NumPy."""
         if not self._fitted:
             raise RuntimeError("Detector not fitted")
 
-        log_vol = math.log1p(max(volume, 0.0))
+        log_vol = np.log1p(np.maximum(np.asarray(volume), 0.0))
 
         if self.method == "mad":
             if self.mad == 0:
-                return 0.0
-            modified_z = 0.6745 * (log_vol - self.median) / self.mad
-            return abs(modified_z)
+                return 0.0 if np.isscalar(volume) else np.zeros_like(log_vol)
+            modified_z = 0.6745 * (log_vol - self.median) / (self.mad + 1e-9)
+            return np.abs(modified_z)
         elif self.method == "iqr":
             if self.iqr == 0:
-                return 0.0
-            if log_vol < self.q1 - 1.5 * self.iqr:
-                return (self.q1 - log_vol) / self.iqr
-            elif log_vol > self.q3 + 1.5 * self.iqr:
-                return (log_vol - self.q3) / self.iqr
-            return 0.0
-        return 0.0
+                return 0.0 if np.isscalar(volume) else np.zeros_like(log_vol)
+
+            scores = np.zeros_like(log_vol, dtype=float)
+            lower_bound = self.q1 - 1.5 * self.iqr
+            upper_bound = self.q3 + 1.5 * self.iqr
+
+            mask_lower = log_vol < lower_bound
+            mask_upper = log_vol > upper_bound
+
+            scores[mask_lower] = (self.q1 - log_vol[mask_lower]) / (self.iqr + 1e-9)
+            scores[mask_upper] = (log_vol[mask_upper] - self.q3) / (self.iqr + 1e-9)
+            return scores
+        return 0.0 if np.isscalar(volume) else np.zeros_like(log_vol)
 
     def is_anomaly(self, volume: float, threshold: float = 3.5) -> bool:
         """Check if volume is anomalous."""
@@ -105,7 +110,8 @@ class HeuristicDetector:
         """Detect trades where sender equals recipient."""
         wash_trades = []
         for trade in trades:
-            if trade.sender.lower() == trade.recipient.lower():
+            # Optimization: addresses are normalized (lowercased) during ingestion
+            if trade.sender == trade.recipient:
                 trade.is_wash_trade = True
                 trade.wash_trade_score = 1.0
                 trade.detection_method = "self_trading"
@@ -195,7 +201,10 @@ class HeuristicDetector:
             volumes = []
 
             for i in range(1, len(sender_trades)):
-                delta = (sender_trades[i].block_timestamp - sender_trades[i - 1].block_timestamp).total_seconds()
+                delta = (
+                    sender_trades[i].block_timestamp
+                    - sender_trades[i - 1].block_timestamp
+                ).total_seconds()
                 inter_trade_times.append(delta)
                 volumes.append(sender_trades[i].volume_usd or 0.0)
 
@@ -204,8 +213,12 @@ class HeuristicDetector:
 
             avg_time = sum(inter_trade_times) / len(inter_trade_times)
             mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = sum((v - mean_vol) ** 2 for v in volumes) / len(volumes) if volumes else 0
-            volume_std = volume_variance ** 0.5
+            volume_variance = (
+                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes)
+                if volumes
+                else 0
+            )
+            volume_std = volume_variance**0.5
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
@@ -235,7 +248,8 @@ class HeuristicDetector:
 
         for trade in trades:
             bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
+                minute=(trade.block_timestamp.minute // bucket_minutes)
+                * bucket_minutes,
                 second=0,
                 microsecond=0,
             )
@@ -281,13 +295,19 @@ class HeuristicDetector:
 
         for cluster in address_clusters:
             for addr in cluster.addresses:
+                # Addresses in cluster might not be normalized
                 addr_to_cluster[addr.lower()] = cluster.cluster_id
 
         for trade in trades:
-            sender_cluster = addr_to_cluster.get(trade.sender.lower())
-            recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
+            # Optimization: trade addresses are already normalized
+            sender_cluster = addr_to_cluster.get(trade.sender)
+            recipient_cluster = addr_to_cluster.get(trade.recipient)
 
-            if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
+            if (
+                sender_cluster
+                and recipient_cluster
+                and sender_cluster == recipient_cluster
+            ):
                 trade.is_wash_trade = True
                 trade.wash_trade_score = 0.95
                 trade.detection_method = "wash_cluster"
@@ -304,8 +324,9 @@ class HeuristicDetector:
         trades: Optional[List[SwapTrade]] = None,
     ) -> Tuple[List[SwapTrade], Dict[str, int]]:
         """Run all heuristic detectors and return combined results."""
+        # 1. Fetch trades and relevant clusters concurrently if not provided
         if trades is None:
-            stmt = (
+            trades_stmt = (
                 select(SwapTrade)
                 .where(
                     and_(
@@ -315,20 +336,37 @@ class HeuristicDetector:
                 )
                 .order_by(SwapTrade.block_timestamp)
             )
-            result = await session.execute(stmt)
+
+            # Note: We can't fetch clusters yet because we need addresses from trades
+            result = await session.execute(trades_stmt)
             trades = list(result.scalars().all())
 
         if not trades:
             return [], {}
 
-        stmt = select(AddressCluster).where(
-            AddressCluster.cluster_id.like(f"{chain_id}:%")
-        )
-        result = await session.execute(stmt)
-        clusters = list(result.scalars().all())
+        # 2. Extract unique addresses for targeted cluster lookup
+        unique_addresses = set()
+        for t in trades:
+            unique_addresses.add(t.sender.lower())
+            unique_addresses.add(t.recipient.lower())
 
-        all_wash_trades = []
-        stats = {}
+        # 3. Define all detection tasks
+        # We fetch clusters and run most detectors in parallel
+        # Note: detect_wash_clusters needs the cluster list
+
+        async def fetch_clusters():
+            # In a real scenario with huge cluster tables, we might use a specialized
+            # join or JSON search, but here we filter by chain_id and pool_address
+            # as suggested by the domain pattern chain_id:pool_address:idx
+            cluster_pattern = f"{chain_id}:{pool_address}:%"
+            stmt = select(AddressCluster).where(
+                AddressCluster.cluster_id.like(cluster_pattern)
+            )
+            res = await session.execute(stmt)
+            return list(res.scalars().all())
+
+        # Start concurrent execution
+        cluster_task = asyncio.create_task(fetch_clusters())
 
         detectors = [
             ("self_trading", self.detect_self_trading),
@@ -337,15 +375,28 @@ class HeuristicDetector:
             ("volume_anomaly", self.detect_volume_anomaly),
         ]
 
-        for name, detector in detectors:
-            detected = await detector(trades, session)
+        # Parallelize independent detectors
+        detector_tasks = [
+            asyncio.create_task(func(trades, session)) for _, func in detectors
+        ]
+
+        # Wait for independent detectors and cluster fetch
+        detector_results = await asyncio.gather(*detector_tasks)
+        clusters = await cluster_task
+
+        all_wash_trades = []
+        stats = {}
+
+        for (name, _), detected in zip(detectors, detector_results):
             all_wash_trades.extend(detected)
             stats[name] = len(detected)
 
+        # Run cluster detection if any clusters found
         if clusters:
             detected = await self.detect_wash_clusters(trades, clusters, session)
             all_wash_trades.extend(detected)
             stats["wash_cluster"] = len(detected)
 
+        # Deduplicate trades by ID
         unique_wash_trades = list({t.id: t for t in all_wash_trades}.values())
         return unique_wash_trades, stats

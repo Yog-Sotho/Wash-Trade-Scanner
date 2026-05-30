@@ -3,14 +3,13 @@ SQLAlchemy and Pydantic models for the database.
 """
 
 from datetime import datetime
-from typing import Optional, List
-from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Boolean,
-    BigInteger, Index, JSON
-)
+from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import (JSON, BigInteger, Boolean, Column, DateTime, Float,
+                        Index, Integer, String)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
-from pydantic import BaseModel, ConfigDict
 
 Base = declarative_base()
 
@@ -105,7 +104,12 @@ class DetectionAuditLog(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        Index("ix_detection_audit_logs_chain_pool_time", "chain_id", "pool_address", "created_at"),
+        Index(
+            "ix_detection_audit_logs_chain_pool_time",
+            "chain_id",
+            "pool_address",
+            "created_at",
+        ),
     )
 
 

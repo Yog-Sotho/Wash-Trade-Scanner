@@ -1,29 +1,60 @@
-
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from core.feature_engineer import FeatureEngineer
 from models.schemas import SwapTrade
+
 
 @pytest.fixture
 def fe():
     return FeatureEngineer(MagicMock())
 
+
 @pytest.fixture
 def sample_trades():
     base_time = datetime(2024, 1, 1, 12, 0, 0)
     trades = [
-        SwapTrade(id=1, chain_id=1, pool_address="0xpool", sender="0xAlice", recipient="0xBob",
-                  volume_usd=1000.0, amount_in_usd=1000.0, amount_out_usd=990.0,
-                  block_timestamp=base_time, gas_price=10.0),
-        SwapTrade(id=2, chain_id=1, pool_address="0xpool", sender="0xBob", recipient="0xAlice",
-                  volume_usd=500.0, amount_in_usd=500.0, amount_out_usd=495.0,
-                  block_timestamp=base_time + timedelta(minutes=10), gas_price=10.0),
-        SwapTrade(id=3, chain_id=1, pool_address="0xpool", sender="0xAlice", recipient="0xBob",
-                  volume_usd=200.0, amount_in_usd=200.0, amount_out_usd=198.0,
-                  block_timestamp=base_time + timedelta(minutes=20), gas_price=10.0),
+        SwapTrade(
+            id=1,
+            chain_id=1,
+            pool_address="0xpool",
+            sender="0xAlice",
+            recipient="0xBob",
+            volume_usd=1000.0,
+            amount_in_usd=1000.0,
+            amount_out_usd=990.0,
+            block_timestamp=base_time,
+            gas_price=10.0,
+        ),
+        SwapTrade(
+            id=2,
+            chain_id=1,
+            pool_address="0xpool",
+            sender="0xBob",
+            recipient="0xAlice",
+            volume_usd=500.0,
+            amount_in_usd=500.0,
+            amount_out_usd=495.0,
+            block_timestamp=base_time + timedelta(minutes=10),
+            gas_price=10.0,
+        ),
+        SwapTrade(
+            id=3,
+            chain_id=1,
+            pool_address="0xpool",
+            sender="0xAlice",
+            recipient="0xBob",
+            volume_usd=200.0,
+            amount_in_usd=200.0,
+            amount_out_usd=198.0,
+            block_timestamp=base_time + timedelta(minutes=20),
+            gas_price=10.0,
+        ),
     ]
     return trades
+
 
 @pytest.mark.asyncio
 async def test_compute_pool_features(fe, sample_trades):
@@ -40,6 +71,7 @@ async def test_compute_pool_features(fe, sample_trades):
     # Total 2 circular trades.
     # Ratio = 2 / (3 + 1) = 0.5
     assert features["circular_trade_ratio"] == 0.5
+
 
 @pytest.mark.asyncio
 async def test_build_ml_features(fe, sample_trades):
@@ -61,4 +93,4 @@ async def test_build_ml_features(fe, sample_trades):
     assert "sender_trade_count_1h" in df.columns
     # Trade 3 Alice -> Bob. Trade 1 is 20 mins before.
     assert df.iloc[2]["sender_trade_count_1h"] == 1
-    assert df.iloc[2]["reverse_pair_trade_count_1h"] == 1 # Trade 2 is Bob -> Alice
+    assert df.iloc[2]["reverse_pair_trade_count_1h"] == 1  # Trade 2 is Bob -> Alice

@@ -5,21 +5,21 @@ With SHAP explainability support.
 
 import logging
 import os
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from scipy.special import expit, logit
-from sqlalchemy import select, and_
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sqlalchemy import and_, select
 
-from models.schemas import SwapTrade
+from config.settings import settings
+from core.exceptions import InsufficientDataError, ModelNotTrainedError
 from core.feature_engineer import FeatureEngineer
 from core.storage import Storage
-from core.exceptions import ModelNotTrainedError, InsufficientDataError
-from config.settings import settings
+from models.schemas import SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +51,25 @@ class MLDetector:
             "pool_self_trade_ratio",
         ]
 
-    def _build_pipeline(self, contamination: float = settings.ML_CONTAMINATION) -> Pipeline:
-        return Pipeline([
-            ("scaler", StandardScaler()),
-            ("isolation_forest", IsolationForest(
-                contamination=contamination,
-                random_state=42,
-                n_estimators=100,
-                max_samples="auto",
-                bootstrap=False,
-                n_jobs=-1,
-            )),
-        ])
+    def _build_pipeline(
+        self, contamination: float = settings.ML_CONTAMINATION
+    ) -> Pipeline:
+        return Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "isolation_forest",
+                    IsolationForest(
+                        contamination=contamination,
+                        random_state=42,
+                        n_estimators=100,
+                        max_samples="auto",
+                        bootstrap=False,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        )
 
     async def train(
         self,
@@ -75,16 +82,22 @@ class MLDetector:
         if contamination is None:
             contamination = settings.ML_CONTAMINATION
 
-        logger.info(f"Training ML model on {len(pool_addresses)} pools (contamination={contamination})")
+        logger.info(
+            f"Training ML model on {len(pool_addresses)} pools (contamination={contamination})"
+        )
 
         all_features: List[np.ndarray] = []
         all_labels: List[int] = []
 
         async with await self.storage.get_session() as session:
             for pool in pool_addresses:
-                trades = await self.storage.get_pool_trades(chain_id, pool, ascending=True)
+                trades = await self.storage.get_pool_trades(
+                    chain_id, pool, ascending=True
+                )
 
-                df = await self.feature_engineer.build_ml_features(chain_id, pool, session, trades=trades)
+                df = await self.feature_engineer.build_ml_features(
+                    chain_id, pool, session, trades=trades
+                )
                 if df.empty:
                     continue
 
@@ -186,14 +199,22 @@ class MLDetector:
         """Detect wash trades using ML model."""
         async with await self.storage.get_session() as session:
             if trades is None:
-                trades = await self.storage.get_pool_trades(chain_id, pool_address, ascending=True)
+                trades = await self.storage.get_pool_trades(
+                    chain_id, pool_address, ascending=True
+                )
 
-            df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session, trades=trades)
+            df = await self.feature_engineer.build_ml_features(
+                chain_id, pool_address, session, trades=trades
+            )
             if df.empty:
                 return []
 
             if contamination is not None and contamination != settings.ML_CONTAMINATION:
-                X = df[[c for c in self.feature_columns if c in df.columns]].fillna(0).values
+                X = (
+                    df[[c for c in self.feature_columns if c in df.columns]]
+                    .fillna(0)
+                    .values
+                )
                 temp_model = self._build_pipeline(contamination)
                 temp_model.fit(X)
                 scores = temp_model.decision_function(X)
@@ -219,17 +240,22 @@ class MLDetector:
             raise ModelNotTrainedError("No trained model to save")
 
         import joblib
+
         save_path = path or settings.ML_MODEL_PATH
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-        joblib.dump({
-            "pipeline": self.model,
-            "feature_columns": self.feature_columns,
-        }, save_path)
+        joblib.dump(
+            {
+                "pipeline": self.model,
+                "feature_columns": self.feature_columns,
+            },
+            save_path,
+        )
         logger.info(f"Model saved to {save_path}")
 
     def load_model(self, path: Optional[str] = None) -> None:
         """Load trained model from disk."""
         import joblib
+
         load_path = path or settings.ML_MODEL_PATH
         if not os.path.exists(load_path):
             raise FileNotFoundError(f"ML model file not found at {load_path}")

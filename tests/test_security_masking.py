@@ -1,6 +1,8 @@
 import pytest
 from sqlalchemy.engine import URL
+
 from config.settings import settings
+
 
 def test_database_url_masking():
     """Verify that the DATABASE_URL masks the password when stringified."""
@@ -18,6 +20,7 @@ def test_database_url_masking():
     url_repr = repr(db_url)
     assert "***" in url_repr
     assert settings.DATABASE_PASSWORD.get_secret_value() not in url_repr
+
 
 def test_database_url_contains_components():
     """Verify that the DATABASE_URL contains necessary components."""

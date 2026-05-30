@@ -1,8 +1,11 @@
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from core.ingestor import ChainIngestor
 from core.storage import Storage
+
 
 @pytest.mark.asyncio
 async def test_connect_protocol_validation():
@@ -12,7 +15,7 @@ async def test_connect_protocol_validation():
     chain_config = {
         "chain_id": 1,
         "name": "Ethereum",
-        "rpc_url": "ftp://localhost:8545"
+        "rpc_url": "ftp://localhost:8545",
     }
     ingestor = ChainIngestor(chain_config, storage)
     with pytest.raises(ValueError, match="Invalid RPC URL protocol"):
@@ -27,8 +30,10 @@ async def test_connect_protocol_validation():
     # Test valid protocol (http) - should proceed past protocol check
     chain_config["rpc_url"] = "http://localhost:8545"
     ingestor = ChainIngestor(chain_config, storage)
-    with patch("core.ingestor.AsyncHTTPProvider"), \
-         patch("core.ingestor.AsyncWeb3") as mock_web3_cls:
+    with (
+        patch("core.ingestor.AsyncHTTPProvider"),
+        patch("core.ingestor.AsyncWeb3") as mock_web3_cls,
+    ):
 
         mock_web3 = mock_web3_cls.return_value
         mock_web3.is_connected = AsyncMock(return_value=True)
@@ -37,7 +42,8 @@ async def test_connect_protocol_validation():
         f.set_result(1)
         mock_web3.eth.chain_id = f
 
-        await ingestor.connect() # Should not raise ValueError
+        await ingestor.connect()  # Should not raise ValueError
+
 
 @pytest.mark.asyncio
 async def test_connect_chain_id_mismatch():
@@ -45,12 +51,14 @@ async def test_connect_chain_id_mismatch():
     chain_config = {
         "chain_id": 1,
         "name": "Ethereum",
-        "rpc_url": "http://localhost:8545"
+        "rpc_url": "http://localhost:8545",
     }
     ingestor = ChainIngestor(chain_config, storage)
 
-    with patch("core.ingestor.AsyncHTTPProvider"), \
-         patch("core.ingestor.AsyncWeb3") as mock_web3_cls:
+    with (
+        patch("core.ingestor.AsyncHTTPProvider"),
+        patch("core.ingestor.AsyncWeb3") as mock_web3_cls,
+    ):
 
         mock_web3 = mock_web3_cls.return_value
         mock_web3.is_connected = AsyncMock(return_value=True)
@@ -63,18 +71,21 @@ async def test_connect_chain_id_mismatch():
         with pytest.raises(ConnectionError, match="Chain ID mismatch"):
             await ingestor.connect()
 
+
 @pytest.mark.asyncio
 async def test_connect_success():
     storage = MagicMock(spec=Storage)
     chain_config = {
         "chain_id": 1,
         "name": "Ethereum",
-        "rpc_url": "https://eth-mainnet.example.com"
+        "rpc_url": "https://eth-mainnet.example.com",
     }
     ingestor = ChainIngestor(chain_config, storage)
 
-    with patch("core.ingestor.AsyncHTTPProvider"), \
-         patch("core.ingestor.AsyncWeb3") as mock_web3_cls:
+    with (
+        patch("core.ingestor.AsyncHTTPProvider"),
+        patch("core.ingestor.AsyncWeb3") as mock_web3_cls,
+    ):
 
         mock_web3 = mock_web3_cls.return_value
         mock_web3.is_connected = AsyncMock(return_value=True)

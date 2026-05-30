@@ -4,7 +4,7 @@ Supports 20+ blockchains and major DEXes. No placeholders.
 """
 
 from dataclasses import dataclass
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ============================================================================
 # Complete ABI definitions – verified from Etherscan / official sources
@@ -14,12 +14,42 @@ UNISWAP_V2_ROUTER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "address", "name": "sender", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amount0In", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount1In", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount0Out", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount1Out", "type": "uint256"},
-            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "sender",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount0In",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount1In",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount0Out",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount1Out",
+                "type": "uint256",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "to",
+                "type": "address",
+            },
         ],
         "name": "Swap",
         "type": "event",
@@ -30,13 +60,48 @@ UNISWAP_V3_ROUTER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "address", "name": "sender", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "recipient", "type": "address"},
-            {"indexed": False, "internalType": "int256", "name": "amount0", "type": "int256"},
-            {"indexed": False, "internalType": "int256", "name": "amount1", "type": "int256"},
-            {"indexed": False, "internalType": "uint160", "name": "sqrtPriceX96", "type": "uint160"},
-            {"indexed": False, "internalType": "uint128", "name": "liquidity", "type": "uint128"},
-            {"indexed": False, "internalType": "int24", "name": "tick", "type": "int24"},
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "sender",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "recipient",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "int256",
+                "name": "amount0",
+                "type": "int256",
+            },
+            {
+                "indexed": False,
+                "internalType": "int256",
+                "name": "amount1",
+                "type": "int256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint160",
+                "name": "sqrtPriceX96",
+                "type": "uint160",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint128",
+                "name": "liquidity",
+                "type": "uint128",
+            },
+            {
+                "indexed": False,
+                "internalType": "int24",
+                "name": "tick",
+                "type": "int24",
+            },
         ],
         "name": "Swap",
         "type": "event",
@@ -47,11 +112,36 @@ CURVE_ROUTER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "address", "name": "buyer", "type": "address"},
-            {"indexed": False, "internalType": "int128", "name": "sold_id", "type": "int128"},
-            {"indexed": False, "internalType": "uint256", "name": "tokens_sold", "type": "uint256"},
-            {"indexed": False, "internalType": "int128", "name": "bought_id", "type": "int128"},
-            {"indexed": False, "internalType": "uint256", "name": "tokens_bought", "type": "uint256"},
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "buyer",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "int128",
+                "name": "sold_id",
+                "type": "int128",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "tokens_sold",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "int128",
+                "name": "bought_id",
+                "type": "int128",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "tokens_bought",
+                "type": "uint256",
+            },
         ],
         "name": "TokenExchange",
         "type": "event",
@@ -62,11 +152,36 @@ BALANCER_VAULT_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "bytes32", "name": "poolId", "type": "bytes32"},
-            {"indexed": True, "internalType": "address", "name": "tokenIn", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "tokenOut", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amountIn", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amountOut", "type": "uint256"},
+            {
+                "indexed": True,
+                "internalType": "bytes32",
+                "name": "poolId",
+                "type": "bytes32",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "tokenIn",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "tokenOut",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amountIn",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amountOut",
+                "type": "uint256",
+            },
         ],
         "name": "Swap",
         "type": "event",
@@ -77,12 +192,42 @@ VELODROME_ROUTER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "address", "name": "sender", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amount0In", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount1In", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount0Out", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amount1Out", "type": "uint256"},
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "sender",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "to",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount0In",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount1In",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount0Out",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amount1Out",
+                "type": "uint256",
+            },
         ],
         "name": "Swap",
         "type": "event",
@@ -93,13 +238,48 @@ SYNCSWAP_ROUTER_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "internalType": "address", "name": "sender", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "pool", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
-            {"indexed": False, "internalType": "address", "name": "tokenIn", "type": "address"},
-            {"indexed": False, "internalType": "address", "name": "tokenOut", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amountIn", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "amountOut", "type": "uint256"},
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "sender",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "pool",
+                "type": "address",
+            },
+            {
+                "indexed": True,
+                "internalType": "address",
+                "name": "to",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "address",
+                "name": "tokenIn",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "address",
+                "name": "tokenOut",
+                "type": "address",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amountIn",
+                "type": "uint256",
+            },
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "amountOut",
+                "type": "uint256",
+            },
         ],
         "name": "Swap",
         "type": "event",
@@ -144,6 +324,7 @@ DRAGONSWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 @dataclass
 class DEXConfig:
     """Configuration for a single DEX."""
+
     name: str
     router: str
     factory: str
@@ -155,6 +336,7 @@ class DEXConfig:
 @dataclass
 class ChainConfig:
     """Configuration for a single blockchain."""
+
     chain_id: int
     name: str
     rpc_url: str

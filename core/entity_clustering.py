@@ -5,21 +5,21 @@ Uses node RPC tracing or fallback block scanning to identify addresses controlle
 
 import asyncio
 import logging
-from typing import List, Dict, Set, Optional, Tuple
 from collections import defaultdict
+from typing import Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 from pydantic import SecretStr
-from web3 import AsyncWeb3, Web3
-from web3.types import TxData, TraceFilterParams
-from sqlalchemy import select, and_, union
+from sqlalchemy import and_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
+from web3 import AsyncWeb3, Web3
+from web3.types import TraceFilterParams, TxData
 
-from models.schemas import AddressCluster, SwapTrade
-from core.storage import Storage
 from config.chains import get_chain_config
 from config.settings import settings
+from core.storage import Storage
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class EntityClusterer:
         # trace_filter can be heavy; we split addresses into batches if many
         batch_size = 20
         for i in range(0, len(checksum_addresses), batch_size):
-            batch = checksum_addresses[i:i + batch_size]
+            batch = checksum_addresses[i : i + batch_size]
             params = TraceFilterParams(
                 fromBlock=hex(from_block),
                 toBlock=hex(to_block),
@@ -114,7 +114,9 @@ class EntityClusterer:
                     tx_to = tx.get("to", "").lower() if tx.get("to") else None
                     value = tx.get("value", 0)
                     if value > 0:
-                        if tx_from in addresses_lower or (tx_to and tx_to in addresses_lower):
+                        if tx_from in addresses_lower or (
+                            tx_to and tx_to in addresses_lower
+                        ):
                             edges.append((tx_from, tx_to, value))
             except Exception as e:
                 logger.error(f"Failed to fetch block {block_num}: {e}")
@@ -177,7 +179,9 @@ class EntityClusterer:
                     web3, addresses_set, from_block, to_block
                 )
         else:
-            logger.info(f"trace_filter not supported, using block scan for chain {chain_id}")
+            logger.info(
+                f"trace_filter not supported, using block scan for chain {chain_id}"
+            )
             edges = await self._fetch_funding_edges_block_scan(
                 web3, addresses_set, from_block, to_block
             )
@@ -189,7 +193,9 @@ class EntityClusterer:
             if from_addr and to_addr:
                 G.add_edge(from_addr, to_addr, value=value)
 
-        logger.info(f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        logger.info(
+            f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges"
+        )
         return G
 
     async def find_connected_components(
@@ -245,7 +251,9 @@ class EntityClusterer:
             AddressCluster.cluster_id.like(cluster_pattern)
         )
         existing_result = await session.execute(existing_stmt)
-        existing_clusters_map = {c.cluster_id: c for c in existing_result.scalars().all()}
+        existing_clusters_map = {
+            c.cluster_id: c for c in existing_result.scalars().all()
+        }
 
         clusters = []
         for i, component in enumerate(components):
@@ -266,5 +274,7 @@ class EntityClusterer:
                 clusters.append(cluster)
 
         await session.commit()
-        logger.info(f"Clustered {len(all_addresses)} addresses into {len(clusters)} clusters")
+        logger.info(
+            f"Clustered {len(all_addresses)} addresses into {len(clusters)} clusters"
+        )
         return clusters

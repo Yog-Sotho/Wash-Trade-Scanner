@@ -1,18 +1,17 @@
+import asyncio
+import os
 
 import pytest
-import os
-import asyncio
-from scripts.run_audit import AuditRunner
+
 from core.validators import AuditParameters
+from scripts.run_audit import AuditRunner
+
 
 @pytest.mark.asyncio
 async def test_export_results_path_traversal_protection():
     runner = AuditRunner()
     params = AuditParameters(
-        chain_id=1,
-        pool_address="0x" + "0" * 40,
-        use_ml=False,
-        use_heuristics=False
+        chain_id=1, pool_address="0x" + "0" * 40, use_ml=False, use_heuristics=False
     )
 
     risk_metrics = {
@@ -21,7 +20,7 @@ async def test_export_results_path_traversal_protection():
         "total_trades_analyzed": 10,
         "total_volume_usd": 1000.0,
         "wash_trade_volume_usd": 100.0,
-        "first_trade_timestamp": None
+        "first_trade_timestamp": None,
     }
 
     # Attempting to export to a "traversal" path
@@ -43,7 +42,7 @@ async def test_export_results_path_traversal_protection():
         detection_methods=["heuristic"],
         duration=1.0,
         export_format="json",
-        export_path=traversal_path
+        export_path=traversal_path,
     )
 
     # Check that it DOES NOT exist in /tmp/
