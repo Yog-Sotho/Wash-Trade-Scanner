@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 import logging
+import pydantic
 import os
 import signal
 import sys
@@ -330,7 +331,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (ValidationError, pydantic.ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
@@ -349,7 +350,7 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        logger.error(f"Unexpected error: {exc}")
         return 1
     finally:
         await runner.cleanup()

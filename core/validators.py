@@ -50,7 +50,7 @@ class TrainingParameters(BaseModel):
     """Validated parameters for model training."""
 
     chain_id: int = Field(..., ge=1, le=999999999)
-    pool_addresses: list[str] = Field(..., min_length=1)
+    pool_addresses: list[str] = Field(..., min_length=1, max_length=1000)
     use_heuristic_labels: bool = Field(True)
     contamination: Optional[float] = Field(None, ge=0.001, le=0.5)
 

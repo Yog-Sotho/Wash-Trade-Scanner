@@ -29,3 +29,8 @@
 **Vulnerability:** The 10,000,000 block range limit for audits could be bypassed when `start_block` or `end_block` was `None`, as the Pydantic `field_validator` only checked the range if both were explicitly provided. This allowed potentially infinite scans, leading to resource exhaustion (DoS).
 **Learning:** Input validation for resource limits must handle cases where values are missing or defaulted. `model_validator` is more reliable for multi-field constraints.
 **Prevention:** Enforce security-critical resource limits both at the validation layer and at the execution layer after all defaults (e.g., current block height) have been resolved.
+
+## 2026-05-30 - Stack trace disclosure and missing input bounds
+**Vulnerability:** CLI scripts used `logger.exception` in global handlers, leaking full stack traces to users. Additionally, `TrainingParameters` lacked a limit on the number of pool addresses, posing a DoS risk.
+**Learning:** Entry points must act as security boundaries. Using `logger.exception` is dangerous in production-facing scripts as it exposes internal code structure and environment details.
+**Prevention:** Catch specific validation errors (`pydantic.ValidationError`, `ValueError`) early and provide clean error messages. Use `logger.error` for unexpected exceptions to log the message without the stack trace. Enforce `max_length` on all collection inputs in Pydantic models to prevent resource exhaustion.
