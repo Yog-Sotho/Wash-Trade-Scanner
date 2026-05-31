@@ -57,8 +57,8 @@ async def main() -> int:
             use_heuristic_labels=not args.no_labels,
             contamination=args.contamination,
         )
-    except Exception:
-        logger.error("Invalid training parameters provided.")
+    except (ValueError, Exception) as exc:
+        logger.error(f"Invalid training parameters provided: {exc}")
         return 1
 
     try:
