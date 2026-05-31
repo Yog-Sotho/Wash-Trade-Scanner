@@ -32,3 +32,7 @@
 ## 2024-05-24 - [Initial Assessment]
 **Learning:** The application uses sequential RPC calls for fetching block timestamps and logs, which is a major bottleneck during historical data ingestion.
 **Action:** Use `asyncio.gather` with the existing `RateLimiter` to parallelize RPC calls in `core/ingestor.py`.
+
+## 2026-06-15 - [Heuristic Detection Vectorization & Parallelization]
+**Learning:** Manual loops for statistical calculations (MAD/IQR/CV) in heuristics create a significant bottleneck as trade volume grows. Parallelizing independent detection methods (self-trading, circular, bot, anomaly) further reduces latency by leveraging concurrent execution.
+**Action:** Use NumPy for vectorized statistical calculations in all detector classes. Use `asyncio.gather` to run independent heuristic detectors concurrently in `run_all_heuristics`.
