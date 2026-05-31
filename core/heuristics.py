@@ -3,6 +3,7 @@ High-signal heuristic detection rules for wash trading.
 Uses robust statistical methods (MAD/IQR) instead of z-score.
 """
 
+import asyncio
 import logging
 import math
 from typing import List, Dict, Any, Set, Tuple, Optional
@@ -10,6 +11,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from bisect import bisect_left, bisect_right
 
+import numpy as np
 import networkx as nx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,22 +43,18 @@ class RobustAnomalyDetector:
         self._fitted = False
 
     def fit(self, volumes: List[float]) -> None:
-        """Fit detector on log-transformed volumes."""
+        """Fit detector on log-transformed volumes using NumPy for speed."""
         if not volumes:
             raise ValueError("Cannot fit on empty data")
 
-        log_volumes = [math.log1p(max(v, 0.0)) for v in volumes]
+        # Vectorized log transformation
+        log_volumes = np.log1p(np.maximum(volumes, 0.0))
 
         if self.method == "mad":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
-            self.mad = sorted([abs(v - self.median) for v in log_volumes])[n // 2]
+            self.median = np.median(log_volumes)
+            self.mad = np.median(np.abs(log_volumes - self.median))
         elif self.method == "iqr":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.q1 = sorted_vals[n // 4]
-            self.q3 = sorted_vals[3 * n // 4]
+            self.q1, self.q3 = np.percentile(log_volumes, [25, 75])
             self.iqr = self.q3 - self.q1
         else:
             raise ValueError(f"Unknown method: {self.method}")
@@ -191,21 +189,18 @@ class HeuristicDetector:
                 continue
 
             # Optimization: trades are already sorted by block_timestamp from DB
-            inter_trade_times = []
-            volumes = []
+            # Use NumPy for vectorized statistical calculations
+            v_volumes = np.array([t.volume_usd or 0.0 for t in sender_trades])
+            v_timestamps = np.array([t.block_timestamp.timestamp() for t in sender_trades])
 
-            for i in range(1, len(sender_trades)):
-                delta = (sender_trades[i].block_timestamp - sender_trades[i - 1].block_timestamp).total_seconds()
-                inter_trade_times.append(delta)
-                volumes.append(sender_trades[i].volume_usd or 0.0)
-
-            if not inter_trade_times:
+            if len(v_timestamps) < 2:
                 continue
 
-            avg_time = sum(inter_trade_times) / len(inter_trade_times)
-            mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = sum((v - mean_vol) ** 2 for v in volumes) / len(volumes) if volumes else 0
-            volume_std = volume_variance ** 0.5
+            inter_trade_times = np.diff(v_timestamps)
+            avg_time = np.mean(inter_trade_times)
+
+            mean_vol = np.mean(v_volumes)
+            volume_std = np.std(v_volumes)
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
@@ -330,22 +325,24 @@ class HeuristicDetector:
         all_wash_trades = []
         stats = {}
 
-        detectors = [
-            ("self_trading", self.detect_self_trading),
-            ("circular_trading", self.detect_circular_trading),
-            ("high_frequency_bot", self.detect_high_frequency_bot),
-            ("volume_anomaly", self.detect_volume_anomaly),
-        ]
-
-        for name, detector in detectors:
-            detected = await detector(trades, session)
-            all_wash_trades.extend(detected)
-            stats[name] = len(detected)
+        # Parallelize independent heuristic detectors to minimize overall execution time
+        detector_tasks = {
+            "self_trading": self.detect_self_trading(trades, session),
+            "circular_trading": self.detect_circular_trading(trades, session),
+            "high_frequency_bot": self.detect_high_frequency_bot(trades, session),
+            "volume_anomaly": self.detect_volume_anomaly(trades, session),
+        }
 
         if clusters:
-            detected = await self.detect_wash_clusters(trades, clusters, session)
+            detector_tasks["wash_cluster"] = self.detect_wash_clusters(trades, clusters, session)
+
+        # Run all detectors concurrently
+        detector_names = list(detector_tasks.keys())
+        results = await asyncio.gather(*detector_tasks.values())
+
+        for name, detected in zip(detector_names, results):
             all_wash_trades.extend(detected)
-            stats["wash_cluster"] = len(detected)
+            stats[name] = len(detected)
 
         unique_wash_trades = list({t.id: t for t in all_wash_trades}.values())
         return unique_wash_trades, stats
