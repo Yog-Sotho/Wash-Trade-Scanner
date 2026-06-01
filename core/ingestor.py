@@ -10,7 +10,14 @@ from datetime import datetime
 
 from pydantic import SecretStr
 from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
-from web3.middleware import async_geth_poa_middleware
+try:
+    from web3.middleware import async_geth_poa_middleware
+except ImportError:
+    # Web3 v7+ rename
+    try:
+        from web3.middleware import ExtraDataToPOAMiddleware as async_geth_poa_middleware
+    except ImportError:
+        from web3.middleware.geth_poa import async_geth_poa_middleware
 from web3.types import LogReceipt
 
 from config.chains import CHAINS, get_chain_config
@@ -116,6 +123,11 @@ class ChainIngestor:
     async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
         """Fetch token0 and token1 from pool contract with caching."""
         addr = Web3.to_checksum_address(pool_address)
+
+        # Optimistic cache check outside lock to reduce contention
+        if addr in self._pool_tokens:
+            return self._pool_tokens[addr]
+
         async with self._pool_tokens_lock:
             if addr in self._pool_tokens:
                 return self._pool_tokens[addr]
