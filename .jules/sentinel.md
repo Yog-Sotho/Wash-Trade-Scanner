@@ -29,3 +29,8 @@
 **Vulnerability:** The 10,000,000 block range limit for audits could be bypassed when `start_block` or `end_block` was `None`, as the Pydantic `field_validator` only checked the range if both were explicitly provided. This allowed potentially infinite scans, leading to resource exhaustion (DoS).
 **Learning:** Input validation for resource limits must handle cases where values are missing or defaulted. `model_validator` is more reliable for multi-field constraints.
 **Prevention:** Enforce security-critical resource limits both at the validation layer and at the execution layer after all defaults (e.g., current block height) have been resolved.
+
+## 2026-06-01 - Chain ID mismatch and DoS in Entity Clustering
+**Vulnerability:** The `EntityClusterer` did not verify the connected Chain ID or enforce block range limits, potentially leading to data from the wrong network being processed or resource exhaustion (DoS) via massive block scans.
+**Learning:** Security controls like network identity verification and resource limits must be applied consistently across all modules that interact with external infrastructure, not just the primary ingestor.
+**Prevention:** Centralize connection logic or implement mandatory validation checks (Chain ID, protocol, range limits) for every RPC-connected component to ensure defense-in-depth.

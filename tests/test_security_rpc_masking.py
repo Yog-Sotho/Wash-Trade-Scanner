@@ -70,9 +70,13 @@ async def test_entity_clusterer_handles_secret_rpc():
 
         # We just need it to get past the AsyncWeb3 initialization in build_funding_graph
         # Mocking block_number which is called early in build_funding_graph
-        f = asyncio.Future()
-        f.set_result(123)
-        mock_web3.eth.block_number = f
+        f_bn = asyncio.Future()
+        f_bn.set_result(123)
+        mock_web3.eth.block_number = f_bn
+
+        f_cid = asyncio.Future()
+        f_cid.set_result(1)
+        mock_web3.eth.chain_id = f_cid
 
         # Mock _node_supports_trace_filter to avoid more network calls
         clusterer._node_supports_trace_filter = AsyncMock(return_value=False)
