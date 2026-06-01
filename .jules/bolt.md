@@ -32,3 +32,7 @@
 ## 2024-05-24 - [Initial Assessment]
 **Learning:** The application uses sequential RPC calls for fetching block timestamps and logs, which is a major bottleneck during historical data ingestion.
 **Action:** Use `asyncio.gather` with the existing `RateLimiter` to parallelize RPC calls in `core/ingestor.py`.
+
+## 2026-06-15 - [Web3 v7 Middleware Compatibility]
+**Learning:** Web3.py v7 removed `async_geth_poa_middleware` from the top-level `web3.middleware` namespace, renaming/moving it to `web3.middleware.ExtraDataToPOAMiddleware`. This causes ImportErrors in environments with newer library versions.
+**Action:** Use a try-except block to handle both Web3 v6 and v7 middleware names to ensure cross-version compatibility for BSC/Polygon ingestion.

@@ -5,6 +5,7 @@ Uses robust statistical methods (MAD/IQR) instead of z-score.
 
 import logging
 import math
+import asyncio
 from typing import List, Dict, Any, Set, Tuple, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -330,22 +331,23 @@ class HeuristicDetector:
         all_wash_trades = []
         stats = {}
 
-        detectors = [
-            ("self_trading", self.detect_self_trading),
-            ("circular_trading", self.detect_circular_trading),
-            ("high_frequency_bot", self.detect_high_frequency_bot),
-            ("volume_anomaly", self.detect_volume_anomaly),
+        # Parallelize independent heuristic detectors
+        detector_tasks = [
+            ("self_trading", self.detect_self_trading(trades, session)),
+            ("circular_trading", self.detect_circular_trading(trades, session)),
+            ("high_frequency_bot", self.detect_high_frequency_bot(trades, session)),
+            ("volume_anomaly", self.detect_volume_anomaly(trades, session)),
         ]
 
-        for name, detector in detectors:
-            detected = await detector(trades, session)
+        if clusters:
+            detector_tasks.append(("wash_cluster", self.detect_wash_clusters(trades, clusters, session)))
+
+        names, tasks = zip(*detector_tasks)
+        results = await asyncio.gather(*tasks)
+
+        for name, detected in zip(names, results):
             all_wash_trades.extend(detected)
             stats[name] = len(detected)
-
-        if clusters:
-            detected = await self.detect_wash_clusters(trades, clusters, session)
-            all_wash_trades.extend(detected)
-            stats["wash_cluster"] = len(detected)
 
         unique_wash_trades = list({t.id: t for t in all_wash_trades}.values())
         return unique_wash_trades, stats
