@@ -10,7 +10,10 @@ from datetime import datetime
 
 from pydantic import SecretStr
 from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
-from web3.middleware import async_geth_poa_middleware
+try:
+    from web3.middleware import async_geth_poa_middleware
+except ImportError:
+    from web3.middleware import ExtraDataToPOAMiddleware as async_geth_poa_middleware
 from web3.types import LogReceipt
 
 from config.chains import CHAINS, get_chain_config
