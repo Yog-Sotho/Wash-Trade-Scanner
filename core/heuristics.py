@@ -105,7 +105,8 @@ class HeuristicDetector:
         """Detect trades where sender equals recipient."""
         wash_trades = []
         for trade in trades:
-            if trade.sender.lower() == trade.recipient.lower():
+            # OPTIMIZATION: sender/recipient are already lowercased in ingestor
+            if trade.sender == trade.recipient:
                 trade.is_wash_trade = True
                 trade.wash_trade_score = 1.0
                 trade.detection_method = "self_trading"
@@ -180,7 +181,8 @@ class HeuristicDetector:
             sender_groups[trade.sender].append(trade)
 
         for sender, sender_trades in sender_groups.items():
-            if sender.lower() in self.bot_allowlist:
+            # OPTIMIZATION: sender is already lowercased in ingestor
+            if sender in self.bot_allowlist:
                 continue
 
             count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
@@ -225,20 +227,32 @@ class HeuristicDetector:
     ) -> List[SwapTrade]:
         """Detect volume anomalies using MAD instead of z-score."""
         wash_trades = []
+        # Hoist settings
         min_trades = settings.VOLUME_ANOMALY_MIN_TRADES
+        bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
+        anomaly_method = settings.VOLUME_ANOMALY_METHOD
+        anomaly_threshold = settings.VOLUME_ANOMALY_THRESHOLD
 
         if len(trades) < min_trades:
             return wash_trades
 
-        bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
+        # Cache for bucketized timestamps to avoid redundant .replace() calls
+        bucket_cache = {}
 
         for trade in trades:
-            bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
-                second=0,
-                microsecond=0,
-            )
+            ts = trade.block_timestamp
+            # Create a cache key for the minute bucket
+            cache_key = (ts.year, ts.month, ts.day, ts.hour, ts.minute // bucket_minutes)
+            bucket = bucket_cache.get(cache_key)
+            if bucket is None:
+                bucket = ts.replace(
+                    minute=(ts.minute // bucket_minutes) * bucket_minutes,
+                    second=0,
+                    microsecond=0,
+                )
+                bucket_cache[cache_key] = bucket
+
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
@@ -249,20 +263,18 @@ class HeuristicDetector:
             volumes = [t.volume_usd or 0.0 for t in bucket_trades]
 
             try:
-                detector = RobustAnomalyDetector(method=settings.VOLUME_ANOMALY_METHOD)
+                detector = RobustAnomalyDetector(method=anomaly_method)
                 detector.fit(volumes)
             except (ValueError, RuntimeError):
                 continue
-
-            threshold = settings.VOLUME_ANOMALY_THRESHOLD
 
             for trade in bucket_trades:
                 vol = trade.volume_usd or 0.0
                 score = detector.score(vol)
 
-                if detector.is_anomaly(vol, threshold):
+                if detector.is_anomaly(vol, anomaly_threshold):
                     trade.is_wash_trade = True
-                    trade.wash_trade_score = min(0.7 + (score - threshold) * 0.05, 1.0)
+                    trade.wash_trade_score = min(0.7 + (score - anomaly_threshold) * 0.05, 1.0)
                     trade.detection_method = "volume_anomaly"
                     wash_trades.append(trade)
 
@@ -281,11 +293,13 @@ class HeuristicDetector:
 
         for cluster in address_clusters:
             for addr in cluster.addresses:
+                # Addresses are expected to be lowercased already or handled here
                 addr_to_cluster[addr.lower()] = cluster.cluster_id
 
         for trade in trades:
-            sender_cluster = addr_to_cluster.get(trade.sender.lower())
-            recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
+            # OPTIMIZATION: sender/recipient are already lowercased in ingestor
+            sender_cluster = addr_to_cluster.get(trade.sender)
+            recipient_cluster = addr_to_cluster.get(trade.recipient)
 
             if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
                 trade.is_wash_trade = True
