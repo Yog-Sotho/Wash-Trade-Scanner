@@ -29,3 +29,13 @@
 **Vulnerability:** The 10,000,000 block range limit for audits could be bypassed when `start_block` or `end_block` was `None`, as the Pydantic `field_validator` only checked the range if both were explicitly provided. This allowed potentially infinite scans, leading to resource exhaustion (DoS).
 **Learning:** Input validation for resource limits must handle cases where values are missing or defaulted. `model_validator` is more reliable for multi-field constraints.
 **Prevention:** Enforce security-critical resource limits both at the validation layer and at the execution layer after all defaults (e.g., current block height) have been resolved.
+
+## 2026-06-02 - Missing block range limit in entity clustering (DoS)
+**Vulnerability:** The `build_funding_graph` method in `core/entity_clustering.py` did not enforce a limit on the block range for RPC queries, potentially allowing massive scans that could lead to resource exhaustion (DoS) or extreme RPC costs.
+**Learning:** Security-critical resource limits must be applied consistently across all modules that interact with external APIs or heavy resources, not just the primary ingestor.
+**Prevention:** Use a shared constant or centralized validator for resource limits and ensure every entry point (even internal utility methods) respects these bounds.
+
+## 2026-06-02 - RPC protocol and placeholder validation bypass
+**Vulnerability:** While `core/ingestor.py` validated RPC URLs, `core/entity_clustering.py` used them directly from configuration without re-validation, allowing insecure protocols or placeholder values to be used if they bypassed initial checks.
+**Learning:** Input validation should follow the principle of "Trust nothing, verify everything," especially when re-using configuration values in different execution contexts.
+**Prevention:** Centralize sensitive configuration validation in the `Settings` model or a shared validator utility that is invoked by all consumers.
