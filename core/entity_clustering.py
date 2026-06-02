@@ -146,21 +146,36 @@ class EntityClusterer:
         rpc = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
         rpc_str = rpc.get_secret_value() if isinstance(rpc, SecretStr) else rpc
 
+        if "YOUR_KEY" in rpc_str or "placeholder" in rpc_str.lower():
+            raise ValueError(
+                f"RPC URL for chain {chain_id} contains placeholder. "
+                "Set a real endpoint in environment."
+            )
+
+        # SECURITY: Ensure RPC URL uses a secure and supported protocol
+        if not rpc_str.startswith(("http://", "https://")):
+            raise ValueError(f"Invalid RPC URL protocol: {rpc_str}. Only http/https supported.")
+
         web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_str))
 
         # Determine block range
-        if from_block_override is None:
-            # Use a reasonable starting block (e.g., 1 year ago or chain start)
-            # For production, this would be configurable
-            latest = await web3.eth.block_number
-            from_block = max(0, latest - 2_000_000)  # Approx 1 year for Ethereum
-        else:
-            from_block = from_block_override
-
         if to_block_override is None:
             to_block = await web3.eth.block_number
         else:
             to_block = to_block_override
+
+        if from_block_override is None:
+            # Use a reasonable starting block (e.g., 1 year ago or chain start)
+            from_block = max(0, to_block - 2_000_000)  # Approx 1 year for Ethereum
+        else:
+            from_block = from_block_override
+
+        # SECURITY: Enforce maximum block range to prevent resource exhaustion (DoS)
+        if to_block - from_block > 10_000_000:
+            raise ValueError(
+                f"Block range {to_block - from_block} exceeds maximum of 10,000,000. "
+                "Please specify a smaller range."
+            )
 
         # Check for tracing support
         supports_trace = await self._node_supports_trace_filter(web3)
