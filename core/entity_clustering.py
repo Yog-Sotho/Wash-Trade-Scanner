@@ -10,7 +10,11 @@ from collections import defaultdict
 
 import networkx as nx
 from pydantic import SecretStr
-from web3 import AsyncWeb3, Web3
+from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
+try:
+    from web3.middleware import async_geth_poa_middleware
+except ImportError:
+    from web3.middleware import ExtraDataToPOAMiddleware as async_geth_poa_middleware
 from web3.types import TxData, TraceFilterParams
 from sqlalchemy import select, and_, union
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -146,7 +150,31 @@ class EntityClusterer:
         rpc = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
         rpc_str = rpc.get_secret_value() if isinstance(rpc, SecretStr) else rpc
 
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_str))
+        # SECURITY: Ensure RPC URL uses a secure and supported protocol
+        if not rpc_str.startswith(("http://", "https://")):
+            raise ValueError(f"Invalid RPC URL protocol for chain {chain_id}. Only http/https supported.")
+
+        provider = AsyncHTTPProvider(rpc_str)
+        web3 = AsyncWeb3(provider)
+
+        if chain_id in (56, 97):
+            web3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
+
+        # SECURITY: Verify the chain ID matches the expected configuration
+        try:
+            connected = await web3.is_connected()
+            if not connected:
+                raise ConnectionError(f"Failed to connect to {chain_config['name']}")
+
+            actual_chain_id = await web3.eth.chain_id
+            if actual_chain_id != chain_id:
+                raise ConnectionError(
+                    f"Chain ID mismatch for {chain_config['name']}: "
+                    f"expected {chain_id}, got {actual_chain_id}"
+                )
+        except Exception as exc:
+            logger.error(f"Failed to verify connection for chain {chain_id}: {exc}")
+            raise ConnectionError(f"Chain {chain_id} connection failed") from exc
 
         # Determine block range
         if from_block_override is None:
@@ -161,6 +189,13 @@ class EntityClusterer:
             to_block = await web3.eth.block_number
         else:
             to_block = to_block_override
+
+        # SECURITY: Enforce maximum block range to prevent resource exhaustion (DoS)
+        if to_block - from_block > 10_000_000:
+            raise ValueError(
+                f"Block range {to_block - from_block} exceeds maximum of 10,000,000. "
+                "Please specify a smaller range."
+            )
 
         # Check for tracing support
         supports_trace = await self._node_supports_trace_filter(web3)
