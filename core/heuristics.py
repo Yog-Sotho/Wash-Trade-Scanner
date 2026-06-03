@@ -105,7 +105,8 @@ class HeuristicDetector:
         """Detect trades where sender equals recipient."""
         wash_trades = []
         for trade in trades:
-            if trade.sender.lower() == trade.recipient.lower():
+            # Optimization: sender/recipient are lowercased during ingestion
+            if trade.sender == trade.recipient:
                 trade.is_wash_trade = True
                 trade.wash_trade_score = 1.0
                 trade.detection_method = "self_trading"
@@ -180,7 +181,8 @@ class HeuristicDetector:
             sender_groups[trade.sender].append(trade)
 
         for sender, sender_trades in sender_groups.items():
-            if sender.lower() in self.bot_allowlist:
+            # Optimization: sender is lowercased during ingestion
+            if sender in self.bot_allowlist:
                 continue
 
             count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
@@ -232,13 +234,19 @@ class HeuristicDetector:
 
         bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
+        # Optimization: use bucket_cache to avoid repetitive .replace() calls
+        bucket_cache = {}
 
         for trade in trades:
-            bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
-                second=0,
-                microsecond=0,
-            )
+            ts = trade.block_timestamp
+            cache_key = (ts.year, ts.month, ts.day, ts.hour, (ts.minute // bucket_minutes))
+            if cache_key not in bucket_cache:
+                bucket_cache[cache_key] = ts.replace(
+                    minute=(ts.minute // bucket_minutes) * bucket_minutes,
+                    second=0,
+                    microsecond=0,
+                )
+            bucket = bucket_cache[cache_key]
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
@@ -281,11 +289,13 @@ class HeuristicDetector:
 
         for cluster in address_clusters:
             for addr in cluster.addresses:
-                addr_to_cluster[addr.lower()] = cluster.cluster_id
+                # Optimization: addresses are lowercased during ingestion
+                addr_to_cluster[addr] = cluster.cluster_id
 
         for trade in trades:
-            sender_cluster = addr_to_cluster.get(trade.sender.lower())
-            recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
+            # Optimization: sender/recipient are lowercased during ingestion
+            sender_cluster = addr_to_cluster.get(trade.sender)
+            recipient_cluster = addr_to_cluster.get(trade.recipient)
 
             if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
                 trade.is_wash_trade = True
