@@ -232,17 +232,23 @@ class HeuristicDetector:
 
         bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
+        bucket_cache = {}
 
         for trade in trades:
-            bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
-                second=0,
-                microsecond=0,
-            )
+            ts = trade.block_timestamp
+            cache_key = (ts.year, ts.month, ts.day, ts.hour, ts.minute)
+            bucket = bucket_cache.get(cache_key)
+            if bucket is None:
+                bucket = ts.replace(
+                    minute=(ts.minute // bucket_minutes) * bucket_minutes,
+                    second=0,
+                    microsecond=0,
+                )
+                bucket_cache[cache_key] = bucket
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
-        for (pool, hour), bucket_trades in pool_bucket_groups.items():
+        for (pool, bucket), bucket_trades in pool_bucket_groups.items():
             if len(bucket_trades) < min_trades:
                 continue
 
