@@ -63,12 +63,16 @@ async def test_entity_clusterer_handles_secret_rpc():
     with patch("core.entity_clustering.settings") as mock_settings, \
          patch("core.entity_clustering.get_chain_config") as mock_get_chain_config, \
          patch("core.entity_clustering.AsyncWeb3") as mock_web3_cls, \
-         patch("core.entity_clustering.AsyncWeb3.AsyncHTTPProvider") as mock_provider:
+         patch("core.entity_clustering.AsyncHTTPProvider") as mock_provider:
 
         mock_settings.rpc_urls = {1: SecretStr("https://secret.rpc.url")}
         mock_web3 = mock_web3_cls.return_value
 
         # We just need it to get past the AsyncWeb3 initialization in build_funding_graph
+        f_chain = asyncio.Future()
+        f_chain.set_result(1)
+        mock_web3.eth.chain_id = f_chain
+
         # Mocking block_number which is called early in build_funding_graph
         f = asyncio.Future()
         f.set_result(123)
