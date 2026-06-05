@@ -29,3 +29,8 @@
 **Vulnerability:** The 10,000,000 block range limit for audits could be bypassed when `start_block` or `end_block` was `None`, as the Pydantic `field_validator` only checked the range if both were explicitly provided. This allowed potentially infinite scans, leading to resource exhaustion (DoS).
 **Learning:** Input validation for resource limits must handle cases where values are missing or defaulted. `model_validator` is more reliable for multi-field constraints.
 **Prevention:** Enforce security-critical resource limits both at the validation layer and at the execution layer after all defaults (e.g., current block height) have been resolved.
+
+## 2026-06-05 - Stack trace disclosure in CLI entry point
+**Vulnerability:** The top-level exception handler in `scripts/run_audit.py` used `logger.exception`, which automatically appends the full stack trace to the log message.
+**Learning:** For public-facing or production CLI tools, leaking stack traces can expose internal directory structures, library versions, and implementation details to potential attackers.
+**Prevention:** Use `logger.error(f"message: {exc}")` instead of `logger.exception` in final catch-all blocks to provide a clean error message without exposing internals.

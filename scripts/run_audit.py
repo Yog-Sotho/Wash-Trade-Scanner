@@ -349,7 +349,7 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        logger.error(f"Unexpected error: {exc}")
         return 1
     finally:
         await runner.cleanup()

@@ -162,6 +162,16 @@ class EntityClusterer:
         else:
             to_block = to_block_override
 
+        # SECURITY: Enforce block range limits to prevent DoS
+        if to_block < from_block:
+            raise ValueError(f"to_block ({to_block}) cannot be less than from_block ({from_block})")
+
+        if to_block - from_block > 10_000_000:
+            raise ValueError(
+                f"Block range {to_block - from_block} exceeds maximum of 10,000,000. "
+                "Please specify a smaller range."
+            )
+
         # Check for tracing support
         supports_trace = await self._node_supports_trace_filter(web3)
 
