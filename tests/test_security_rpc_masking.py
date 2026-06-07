@@ -63,7 +63,7 @@ async def test_entity_clusterer_handles_secret_rpc():
     with patch("core.entity_clustering.settings") as mock_settings, \
          patch("core.entity_clustering.get_chain_config") as mock_get_chain_config, \
          patch("core.entity_clustering.AsyncWeb3") as mock_web3_cls, \
-         patch("core.entity_clustering.AsyncWeb3.AsyncHTTPProvider") as mock_provider:
+         patch("core.entity_clustering.AsyncHTTPProvider") as mock_provider:
 
         mock_settings.rpc_urls = {1: SecretStr("https://secret.rpc.url")}
         mock_web3 = mock_web3_cls.return_value
@@ -73,6 +73,10 @@ async def test_entity_clusterer_handles_secret_rpc():
         f = asyncio.Future()
         f.set_result(123)
         mock_web3.eth.block_number = f
+
+        f2 = asyncio.Future()
+        f2.set_result(1)
+        mock_web3.eth.chain_id = f2
 
         # Mock _node_supports_trace_filter to avoid more network calls
         clusterer._node_supports_trace_filter = AsyncMock(return_value=False)

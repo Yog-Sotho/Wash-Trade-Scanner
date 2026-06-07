@@ -29,3 +29,8 @@
 **Vulnerability:** The 10,000,000 block range limit for audits could be bypassed when `start_block` or `end_block` was `None`, as the Pydantic `field_validator` only checked the range if both were explicitly provided. This allowed potentially infinite scans, leading to resource exhaustion (DoS).
 **Learning:** Input validation for resource limits must handle cases where values are missing or defaulted. `model_validator` is more reliable for multi-field constraints.
 **Prevention:** Enforce security-critical resource limits both at the validation layer and at the execution layer after all defaults (e.g., current block height) have been resolved.
+
+## 2025-10-24 - Network Integrity and SSRF Protection in RPC Clients
+**Vulnerability:** The `EntityClusterer` initialized RPC connections without validating the protocol (SSRF risk) or verifying the Chain ID (integrity risk). It also lacked a block range limit for historical scans, creating a DoS vector.
+**Learning:** Security hardening of blockchain clients requires multi-layer defense: validating protocols, verifying network identity (Chain ID), and enforcing strict resource bounds.
+**Prevention:** Always validate RPC URL schemes, confirm the connected node's identity against expected configuration, and enforce hard ceilings on query ranges to prevent resource exhaustion.
