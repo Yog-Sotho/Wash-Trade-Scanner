@@ -349,7 +349,11 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        # SECURITY: Use logger.error instead of logger.exception to avoid
+        # leaking internal stack traces to the end user in production logs.
+        logger.error(f"Unexpected error: {exc}")
+        # Log details to debug for developers
+        logger.debug(f"Traceback for unexpected error: {exc}", exc_info=True)
         return 1
     finally:
         await runner.cleanup()
