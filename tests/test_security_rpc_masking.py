@@ -78,6 +78,10 @@ async def test_entity_clusterer_handles_secret_rpc():
         clusterer._node_supports_trace_filter = AsyncMock(return_value=False)
         clusterer._fetch_funding_edges_block_scan = AsyncMock(return_value=[])
 
+        f_chain = asyncio.Future()
+        f_chain.set_result(1)
+        mock_web3.eth.chain_id = f_chain
+
         await clusterer.build_funding_graph(1, ["0xaddr"], MagicMock())
 
         # Verify that the actual URL was passed to the provider
