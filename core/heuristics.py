@@ -232,13 +232,20 @@ class HeuristicDetector:
 
         bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
+        # Optimization: Cache normalized timestamps to avoid redundant .replace() calls
+        bucket_cache = {}
 
         for trade in trades:
-            bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
-                second=0,
-                microsecond=0,
-            )
+            ts = trade.block_timestamp
+            bucket = bucket_cache.get(ts)
+            if bucket is None:
+                bucket = ts.replace(
+                    minute=(ts.minute // bucket_minutes) * bucket_minutes,
+                    second=0,
+                    microsecond=0,
+                )
+                bucket_cache[ts] = bucket
+
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
@@ -258,9 +265,10 @@ class HeuristicDetector:
 
             for trade in bucket_trades:
                 vol = trade.volume_usd or 0.0
+                # Optimization: Compute score once and reuse it
                 score = detector.score(vol)
 
-                if detector.is_anomaly(vol, threshold):
+                if score > threshold:
                     trade.is_wash_trade = True
                     trade.wash_trade_score = min(0.7 + (score - threshold) * 0.05, 1.0)
                     trade.detection_method = "volume_anomaly"
