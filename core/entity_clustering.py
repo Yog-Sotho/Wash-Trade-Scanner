@@ -146,7 +146,18 @@ class EntityClusterer:
         rpc = settings.rpc_urls.get(chain_id) or chain_config.get("rpc_url")
         rpc_str = rpc.get_secret_value() if isinstance(rpc, SecretStr) else rpc
 
+        # SECURITY: Ensure RPC URL uses a secure and supported protocol
+        if not rpc_str.lower().startswith(("http://", "https://")):
+            raise ValueError(f"Invalid RPC URL protocol: {rpc_str}. Only http/https supported.")
+
         web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_str))
+
+        # SECURITY: Verify the chain ID matches the expected configuration
+        actual_chain_id = await web3.eth.chain_id
+        if actual_chain_id != chain_id:
+            raise ConnectionError(
+                f"Chain ID mismatch: expected {chain_id}, got {actual_chain_id}"
+            )
 
         # Determine block range
         if from_block_override is None:
@@ -161,6 +172,13 @@ class EntityClusterer:
             to_block = await web3.eth.block_number
         else:
             to_block = to_block_override
+
+        # SECURITY: Enforce maximum block range to prevent resource exhaustion (DoS)
+        if to_block - from_block > 10_000_000:
+            raise ValueError(
+                f"Block range {to_block - from_block} exceeds maximum of 10,000,000. "
+                "Please specify a smaller range."
+            )
 
         # Check for tracing support
         supports_trace = await self._node_supports_trace_filter(web3)
