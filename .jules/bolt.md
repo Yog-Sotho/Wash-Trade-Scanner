@@ -32,3 +32,7 @@
 ## 2024-05-24 - [Initial Assessment]
 **Learning:** The application uses sequential RPC calls for fetching block timestamps and logs, which is a major bottleneck during historical data ingestion.
 **Action:** Use `asyncio.gather` with the existing `RateLimiter` to parallelize RPC calls in `core/ingestor.py`.
+
+## 2026-06-12 - [Volume Anomaly Detection Optimization]
+**Learning:** SQLAlchemy ORM attribute access (e.g., `trade.volume_usd`) inside tight loops is a major bottleneck, generating hundreds of thousands of attribute lookups. Additionally, native Python statistical calculations for MAD/IQR are slow for large trade sets.
+**Action:** Use NumPy for vectorized statistical calculations in `RobustAnomalyDetector`. Implement a `bucket_cache` for timestamp normalization and a `score_cache` within each bucket to avoid re-calculating anomaly scores for identical volumes. Pre-extract ORM attributes when possible. Resulted in ~2x speedup (0.52s to 0.23s for 100k trades).
