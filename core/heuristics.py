@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from bisect import bisect_left, bisect_right
 
+import numpy as np
 import networkx as nx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,19 +46,18 @@ class RobustAnomalyDetector:
         if not volumes:
             raise ValueError("Cannot fit on empty data")
 
-        log_volumes = [math.log1p(max(v, 0.0)) for v in volumes]
+        # Optimization: use numpy for vectorized calculations
+        volumes_array = np.asarray(volumes, dtype=np.float64)
+        log_volumes = np.log1p(np.maximum(volumes_array, 0.0))
 
         if self.method == "mad":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
-            self.mad = sorted([abs(v - self.median) for v in log_volumes])[n // 2]
+            self.median = np.median(log_volumes)
+            self.mad = np.median(np.abs(log_volumes - self.median))
         elif self.method == "iqr":
-            sorted_vals = sorted(log_volumes)
-            n = len(sorted_vals)
-            self.q1 = sorted_vals[n // 4]
-            self.q3 = sorted_vals[3 * n // 4]
-            self.iqr = self.q3 - self.q1
+            q1, q3 = np.percentile(log_volumes, [25, 75])
+            self.q1 = q1
+            self.q3 = q3
+            self.iqr = q3 - q1
         else:
             raise ValueError(f"Unknown method: {self.method}")
 
@@ -233,34 +233,45 @@ class HeuristicDetector:
         bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
 
+        # Optimization: use a bucket cache for normalized datetime objects and
+        # minimize ORM attribute access by pre-extracting values.
+        bucket_cache = {}
         for trade in trades:
-            bucket = trade.block_timestamp.replace(
-                minute=(trade.block_timestamp.minute // bucket_minutes) * bucket_minutes,
-                second=0,
-                microsecond=0,
-            )
+            ts = trade.block_timestamp
+            if ts not in bucket_cache:
+                bucket_cache[ts] = ts.replace(
+                    minute=(ts.minute // bucket_minutes) * bucket_minutes,
+                    second=0,
+                    microsecond=0,
+                )
+            bucket = bucket_cache[ts]
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
-        for (pool, hour), bucket_trades in pool_bucket_groups.items():
+        threshold = settings.VOLUME_ANOMALY_THRESHOLD
+        method = settings.VOLUME_ANOMALY_METHOD
+
+        for (pool, bucket), bucket_trades in pool_bucket_groups.items():
             if len(bucket_trades) < min_trades:
                 continue
 
             volumes = [t.volume_usd or 0.0 for t in bucket_trades]
 
             try:
-                detector = RobustAnomalyDetector(method=settings.VOLUME_ANOMALY_METHOD)
+                detector = RobustAnomalyDetector(method=method)
                 detector.fit(volumes)
             except (ValueError, RuntimeError):
                 continue
 
-            threshold = settings.VOLUME_ANOMALY_THRESHOLD
-
+            # Optimization: reuse calculated scores for identical volumes within a bucket
+            score_cache = {}
             for trade in bucket_trades:
                 vol = trade.volume_usd or 0.0
-                score = detector.score(vol)
+                if vol not in score_cache:
+                    score_cache[vol] = detector.score(vol)
+                score = score_cache[vol]
 
-                if detector.is_anomaly(vol, threshold):
+                if score > threshold:
                     trade.is_wash_trade = True
                     trade.wash_trade_score = min(0.7 + (score - threshold) * 0.05, 1.0)
                     trade.detection_method = "volume_anomaly"
