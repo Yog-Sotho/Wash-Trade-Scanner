@@ -5,18 +5,19 @@ Uses robust statistical methods (MAD/IQR) instead of z-score.
 
 import logging
 import math
-from typing import List, Dict, Any, Set, Tuple, Optional
-from datetime import datetime, timedelta
-from collections import defaultdict
 from bisect import bisect_left, bisect_right
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import networkx as nx
-from sqlalchemy import select, and_
+import numpy as np
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.schemas import SwapTrade, AddressCluster
 from config.settings import settings
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +47,16 @@ class RobustAnomalyDetector:
         if not volumes:
             raise ValueError("Cannot fit on empty data")
 
+        # Vectorized log transformation
         log_volumes = np.log1p(np.maximum(volumes, 0.0))
 
         if self.method == "mad":
-            # Match original behavior: 'midpoint' interpolation for even datasets
-            self.median = np.median(log_volumes)
-            self.mad = np.median(np.abs(log_volumes - self.median))
+            self.median = float(np.median(log_volumes))
+            # MAD = median(|x_i - median(x)|)
+            self.mad = float(np.median(np.abs(log_volumes - self.median)))
         elif self.method == "iqr":
-            # Use 'nearest' for percentile to match manual indexing of original logic
-            self.q1, self.q3 = np.percentile(log_volumes, [25, 75], method="nearest")
+            self.q1 = float(np.percentile(log_volumes, 25))
+            self.q3 = float(np.percentile(log_volumes, 75))
             self.iqr = self.q3 - self.q1
         else:
             raise ValueError(f"Unknown method: {self.method}")
@@ -87,6 +89,33 @@ class RobustAnomalyDetector:
     def score(self, volume: float) -> float:
         """Compute anomaly score for a volume."""
         return float(self.score_batch([volume])[0])
+
+    def score_batch(self, volumes: np.ndarray) -> np.ndarray:
+        """Compute anomaly scores for a batch of volumes."""
+        if not self._fitted:
+            raise RuntimeError("Detector not fitted")
+
+        log_vols = np.log1p(np.maximum(volumes, 0.0))
+
+        if self.method == "mad":
+            if self.mad == 0:
+                return np.zeros_like(log_vols)
+            modified_z = 0.6745 * (log_vols - self.median) / self.mad
+            return np.abs(modified_z)
+        elif self.method == "iqr":
+            if self.iqr == 0:
+                return np.zeros_like(log_vols)
+            scores = np.zeros_like(log_vols)
+            lower_bound = self.q1 - 1.5 * self.iqr
+            upper_bound = self.q3 + 1.5 * self.iqr
+
+            low_mask = log_vols < lower_bound
+            high_mask = log_vols > upper_bound
+
+            scores[low_mask] = (self.q1 - log_vols[low_mask]) / self.iqr
+            scores[high_mask] = (log_vols[high_mask] - self.q3) / self.iqr
+            return scores
+        return np.zeros_like(log_vols)
 
     def is_anomaly(self, volume: float, threshold: float = 3.5) -> bool:
         """Check if volume is anomalous."""
@@ -202,15 +231,25 @@ class HeuristicDetector:
             # Match original behavior: skip first volume for CV calculation
             volumes_array = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
 
-            # Optimization: use NumPy for inter-trade times and stats
-            inter_trade_times = np.diff(timestamps)
+            for i in range(1, len(sender_trades)):
+                delta = (
+                    sender_trades[i].block_timestamp
+                    - sender_trades[i - 1].block_timestamp
+                ).total_seconds()
+                inter_trade_times.append(delta)
+                volumes.append(sender_trades[i].volume_usd or 0.0)
 
             if len(inter_trade_times) == 0:
                 continue
 
-            avg_time = np.mean(inter_trade_times)
-            mean_vol = np.mean(volumes_array)
-            volume_std = np.std(volumes_array)
+            avg_time = sum(inter_trade_times) / len(inter_trade_times)
+            mean_vol = sum(volumes) / len(volumes) if volumes else 0
+            volume_variance = (
+                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes)
+                if volumes
+                else 0
+            )
+            volume_std = volume_variance**0.5
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
@@ -230,8 +269,7 @@ class HeuristicDetector:
     ) -> List[SwapTrade]:
         """
         Detect volume anomalies using MAD instead of z-score.
-        Optimization: Implements bucket caching and batch scoring with NumPy.
-        Expected speedup: ~2.5x compared to sequential ORM-based processing.
+        Optimized with NumPy vectorization, attribute pre-extraction, and bucket caching.
         """
         wash_trades = []
         min_trades = settings.VOLUME_ANOMALY_MIN_TRADES
@@ -242,47 +280,57 @@ class HeuristicDetector:
         bucket_minutes = settings.VOLUME_ANOMALY_BUCKET_MINUTES
         pool_bucket_groups = defaultdict(list)
 
-        # Optimization: cache bucket calculations to avoid repeated datetime.replace
+        # Optimization: Cache bucket calculations to avoid repeated datetime.replace
         bucket_cache = {}
-
-        for trade in trades:
-            ts = trade.block_timestamp
-            bucket = bucket_cache.get(ts)
-            if bucket is None:
-                bucket = ts.replace(
+        # Optimization: Pre-extract attributes to minimize ORM access in loops
+        trade_data = []
+        for t in trades:
+            ts = t.block_timestamp
+            if ts not in bucket_cache:
+                bucket_cache[ts] = ts.replace(
                     minute=(ts.minute // bucket_minutes) * bucket_minutes,
                     second=0,
                     microsecond=0,
                 )
-                bucket_cache[ts] = bucket
+            bucket = bucket_cache[ts]
+            pool_bucket_groups[(t.pool_address, bucket)].append(t)
+            trade_data.append((t, t.volume_usd or 0.0))
 
-            key = (trade.pool_address, bucket)
-            pool_bucket_groups[key].append(trade)
+        # Optimization: Re-use detector instance and use score_batch
+        detector = RobustAnomalyDetector(method=settings.VOLUME_ANOMALY_METHOD)
+        threshold = settings.VOLUME_ANOMALY_THRESHOLD
+
+        # Cache for scores if multiple buckets have identical volume patterns
+        # (Common in low-activity pools or synthetic test data)
+        score_cache = {}
 
         for (pool, bucket), bucket_trades in pool_bucket_groups.items():
             if len(bucket_trades) < min_trades:
                 continue
 
-            # Optimization: pre-extract volumes
-            volumes = [t.volume_usd or 0.0 for t in bucket_trades]
+            volumes = np.array([t.volume_usd or 0.0 for t in bucket_trades])
 
-            try:
-                detector = RobustAnomalyDetector(method=settings.VOLUME_ANOMALY_METHOD)
-                detector.fit(volumes)
-            except (ValueError, RuntimeError):
-                continue
+            # Use tuple of volumes as cache key for small buckets
+            cache_key = tuple(volumes) if len(volumes) < 1000 else None
 
-            threshold = settings.VOLUME_ANOMALY_THRESHOLD
-            # Optimization: batch score calculation
-            scores = detector.score_batch(volumes)
+            if cache_key and cache_key in score_cache:
+                scores = score_cache[cache_key]
+            else:
+                try:
+                    detector.fit(volumes.tolist())
+                    scores = detector.score_batch(volumes)
+                    if cache_key:
+                        score_cache[cache_key] = scores
+                except (ValueError, RuntimeError):
+                    continue
 
-            for i, trade in enumerate(bucket_trades):
-                vol = volumes[i]
-                score = scores[i]
-
+            for i, score in enumerate(scores):
                 if score > threshold:
+                    trade = bucket_trades[i]
                     trade.is_wash_trade = True
-                    trade.wash_trade_score = min(0.7 + (score - threshold) * 0.05, 1.0)
+                    trade.wash_trade_score = min(
+                        0.7 + (float(score) - threshold) * 0.05, 1.0
+                    )
                     trade.detection_method = "volume_anomaly"
                     wash_trades.append(trade)
 
@@ -307,7 +355,11 @@ class HeuristicDetector:
             sender_cluster = addr_to_cluster.get(trade.sender.lower())
             recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
 
-            if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
+            if (
+                sender_cluster
+                and recipient_cluster
+                and sender_cluster == recipient_cluster
+            ):
                 trade.is_wash_trade = True
                 trade.wash_trade_score = 0.95
                 trade.detection_method = "wash_cluster"
