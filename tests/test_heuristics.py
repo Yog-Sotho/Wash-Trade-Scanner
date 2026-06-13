@@ -37,3 +37,21 @@ async def test_self_trading(detector, sample_trades):
 async def test_circular_trading(detector, sample_trades):
     wash = await detector.detect_circular_trading(sample_trades, AsyncMock())
     assert len(wash) >= 2
+
+@pytest.mark.asyncio
+async def test_high_frequency_bot(detector):
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    # Create 15 trades from the same sender with 10s intervals and identical volumes
+    bot_trades = []
+    for i in range(15):
+        bot_trades.append(SwapTrade(
+            id=i+1, chain_id=1, pool_address="0xpool", sender="0xBot", recipient="0xRecipient",
+            volume_usd=100.0, block_timestamp=base_time + timedelta(seconds=i*10), is_wash_trade=False
+        ))
+
+    wash = await detector.detect_high_frequency_bot(bot_trades, AsyncMock())
+    # Should detect 15 trades (the whole sequence from the bot)
+    assert len(wash) == 15
+    for t in wash:
+        assert t.detection_method == "high_frequency_bot"
+        assert t.is_wash_trade == True
