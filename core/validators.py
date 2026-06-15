@@ -39,10 +39,12 @@ class AuditParameters(BaseModel):
                 raise ValueError("end_block must be greater than start_block")
             if self.end_block - self.start_block > 10_000_000:
                 raise ValueError("Block range exceeds maximum of 10,000,000")
-        elif self.end_block is not None and self.end_block > 10_000_000:
+
+        if self.end_block is not None and self.end_block > 10_000_000:
             # If start_block is None, it defaults to chain start or 0,
             # so we should still check if end_block is too far from a reasonable start
-            pass # We'll handle the fully resolved range in the ingestor
+            if self.start_block is None:
+                raise ValueError("end_block exceeds maximum of 10,000,000")
         return self
 
 
