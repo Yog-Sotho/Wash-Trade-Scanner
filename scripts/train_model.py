@@ -8,6 +8,7 @@ import asyncio
 import argparse
 import logging
 import sys
+import pydantic
 from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
@@ -57,7 +58,7 @@ async def main() -> int:
             use_heuristic_labels=not args.no_labels,
             contamination=args.contamination,
         )
-    except Exception:
+    except (pydantic.ValidationError, ValueError):
         logger.error("Invalid training parameters provided.")
         return 1
 
