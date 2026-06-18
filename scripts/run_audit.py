@@ -16,6 +16,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from pydantic import ValidationError as PydanticValidationError
+
 from core.ingestor import MultiChainIngestor
 from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
@@ -330,7 +332,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
