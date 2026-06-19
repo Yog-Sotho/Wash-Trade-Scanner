@@ -34,3 +34,8 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2026-06-19 - Stack Trace Leakage and DoS via Oversized Inputs
+**Vulnerability:** Entry point scripts (`run_audit.py`, `train_model.py`) used `logger.exception` in top-level handlers, leaking full stack traces to standard output. Additionally, the training script lacked a limit on the number of pool addresses, allowing potential resource exhaustion.
+**Learning:** Default logging of exceptions in CLI tools can expose internal code structure and library versions. Pydantic validators should always enforce collection size limits.
+**Prevention:** Use `logger.error` for standard logs and `logger.debug(..., exc_info=True)` for traces. Apply `max_length` to all list-based input fields in Pydantic models.
