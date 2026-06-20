@@ -35,3 +35,6 @@
 ## 2025-06-15 - [NumPy Vectorization & ORM Optimization]
 **Learning:** High-throughput statistical loops (like volume anomaly detection) are significantly slowed by SQLAlchemy ORM attribute access and Python-level math operations. Accessing `trade.volume_usd` 500,000 times for 100,000 trades adds measurable overhead.
 **Action:** Pre-extract ORM attributes into NumPy arrays and use vectorized operations (`np.median`, `np.abs`) for statistical calculations. Implement bucket caching for `datetime.replace` to avoid redundant O(N) object creation. Resulted in ~3.3x speedup.
+## 2025-06-20 - [Heuristic Detection & ORM Bottleneck Verification]
+**Learning:** Even when optimizations are documented in comments (e.g., claiming NumPy vectorization), the actual implementation might still rely on manual loops or suffer from ORM attribute access overhead. In `detect_high_frequency_bot`, a manual loop was accessing `trade.block_timestamp` repeatedly, which is ~3-4x slower than pre-extracted NumPy arrays. Additionally, a `NameError` was found in the "optimized" path, indicating it was likely never fully verified.
+**Action:** Always verify "optimized" code paths with targeted benchmarks and tests. Ensure vectorization is truly applied across all statistical calculations (diff, mean, std) rather than just being mentioned in docstrings.
