@@ -42,7 +42,7 @@ class AuditParameters(BaseModel):
         elif self.end_block is not None and self.end_block > 10_000_000:
             # If start_block is None, it defaults to chain start or 0,
             # so we should still check if end_block is too far from a reasonable start
-            pass # We'll handle the fully resolved range in the ingestor
+            raise ValueError("Block range exceeds maximum of 10,000,000")
         return self
 
 
@@ -50,7 +50,7 @@ class TrainingParameters(BaseModel):
     """Validated parameters for model training."""
 
     chain_id: int = Field(..., ge=1, le=999999999)
-    pool_addresses: list[str] = Field(..., min_length=1)
+    pool_addresses: list[str] = Field(..., min_length=1, max_length=1000)
     use_heuristic_labels: bool = Field(True)
     contamination: Optional[float] = Field(None, ge=0.001, le=0.5)
 

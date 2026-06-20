@@ -34,3 +34,13 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2026-06-20 - Information leakage via stack traces in CLI entry points
+**Vulnerability:** Top-level exception handlers in `run_audit.py` and `train_model.py` used `logger.exception`, which prints full Python stack traces to the console/logs. This could leak internal paths, logic, and dependency versions to end users.
+**Learning:** Separating the error message from the traceback allows for a "fail-secure" behavior where users only see a clean error message, while developers can still access details via DEBUG logs.
+**Prevention:** Use `logger.error(msg)` for user-facing errors and `logger.debug("Traceback:", exc_info=True)` for the full context. Ensure Pydantic `ValidationError` is caught explicitly to prevent default stack trace disclosure during parameter initialization.
+
+## 2026-06-20 - Potential DoS via unbounded pool address list
+**Vulnerability:** `TrainingParameters` allowed an unlimited number of `pool_addresses` to be passed for model training, creating a risk of memory exhaustion or extremely long-running processes (DoS).
+**Learning:** All list-based inputs that trigger resource-intensive operations should have reasonable upper bounds at the validation layer.
+**Prevention:** Use Pydantic's `max_length` field parameter to enforce sanity limits on input collections.
