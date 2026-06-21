@@ -22,6 +22,7 @@ from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
 from core.ml_detector import MLDetector
 from core.entity_clustering import EntityClusterer
+from pydantic import ValidationError as PydanticValidationError
 from core.validators import AuditParameters, validate_address
 from core.exceptions import ValidationError, WashTradeError
 from config.settings import settings
@@ -330,7 +331,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
@@ -349,7 +350,8 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        logger.error(f"An unexpected error occurred during the audit.")
+        logger.debug(f"Unexpected error details: {exc}", exc_info=True)
         return 1
     finally:
         await runner.cleanup()
