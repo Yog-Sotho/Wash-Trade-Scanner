@@ -32,6 +32,10 @@
 ## 2024-05-24 - [Initial Assessment]
 **Learning:** The application uses sequential RPC calls for fetching block timestamps and logs, which is a major bottleneck during historical data ingestion.
 **Action:** Use `asyncio.gather` with the existing `RateLimiter` to parallelize RPC calls in `core/ingestor.py`.
+
+## 2024-06-15 - [HFT Bot Detection Optimization & Bug Fix]
+**Learning:** High-frequency trade (HFT) detection was significantly slowed by manual Python loops and SQLAlchemy ORM attribute access. Furthermore, a `NameError` (`inter_trade_times` and `volumes` were uninitialized) caused a crash in the HFT heuristic path.
+**Action:** Vectorize statistical calculations using NumPy (`np.diff`, `np.mean`, `np.std`). Pre-extract trade attributes into NumPy arrays to eliminate ORM overhead. Ensure all variables are correctly initialized or hoisted.
 ## 2025-06-15 - [NumPy Vectorization & ORM Optimization]
 **Learning:** High-throughput statistical loops (like volume anomaly detection) are significantly slowed by SQLAlchemy ORM attribute access and Python-level math operations. Accessing `trade.volume_usd` 500,000 times for 100,000 trades adds measurable overhead.
 **Action:** Pre-extract ORM attributes into NumPy arrays and use vectorized operations (`np.median`, `np.abs`) for statistical calculations. Implement bucket caching for `datetime.replace` to avoid redundant O(N) object creation. Resulted in ~3.3x speedup.
