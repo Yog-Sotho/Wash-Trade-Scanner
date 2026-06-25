@@ -10,7 +10,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import numpy as np
 import networkx as nx
 import numpy as np
 from sqlalchemy import and_, select
@@ -215,42 +214,36 @@ class HeuristicDetector:
         for trade in trades:
             sender_groups[trade.sender].append(trade)
 
+        # Hoist settings outside the loop
+        count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
+        time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
+        cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
+
         for sender, sender_trades in sender_groups.items():
             if sender.lower() in self.bot_allowlist:
                 continue
-
-            count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
-            time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
-            cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
 
             if len(sender_trades) < count_threshold:
                 continue
 
             # Optimization: pre-extract attributes to avoid ORM overhead in tight loops
-            timestamps = [t.block_timestamp.timestamp() for t in sender_trades]
+            timestamps_arr = np.array([t.block_timestamp.timestamp() for t in sender_trades])
             # Match original behavior: skip first volume for CV calculation
-            volumes_array = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
+            volumes_arr = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
 
-            for i in range(1, len(sender_trades)):
-                delta = (
-                    sender_trades[i].block_timestamp
-                    - sender_trades[i - 1].block_timestamp
-                ).total_seconds()
-                inter_trade_times.append(delta)
-                volumes.append(sender_trades[i].volume_usd or 0.0)
-
-            if len(inter_trade_times) == 0:
+            if len(timestamps_arr) < 2:
                 continue
 
-            avg_time = sum(inter_trade_times) / len(inter_trade_times)
-            mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = (
-                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes)
-                if volumes
-                else 0
-            )
-            volume_std = volume_variance**0.5
-            volume_cv = volume_std / (mean_vol + 1e-9)
+            inter_trade_times = np.diff(timestamps_arr)
+            avg_time = np.mean(inter_trade_times)
+
+            if volumes_arr.size > 0:
+                mean_vol = np.mean(volumes_arr)
+                # Use population standard deviation (ddof=0) to match original manual calculation
+                volume_std = np.std(volumes_arr, ddof=0)
+                volume_cv = volume_std / (mean_vol + 1e-9)
+            else:
+                volume_cv = 0.0
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
                 for trade in sender_trades:
@@ -283,7 +276,6 @@ class HeuristicDetector:
         # Optimization: Cache bucket calculations to avoid repeated datetime.replace
         bucket_cache = {}
         # Optimization: Pre-extract attributes to minimize ORM access in loops
-        trade_data = []
         for t in trades:
             ts = t.block_timestamp
             if ts not in bucket_cache:
@@ -293,8 +285,8 @@ class HeuristicDetector:
                     microsecond=0,
                 )
             bucket = bucket_cache[ts]
-            pool_bucket_groups[(t.pool_address, bucket)].append(t)
-            trade_data.append((t, t.volume_usd or 0.0))
+            # Store volume alongside trade to avoid ORM access during scoring loop
+            pool_bucket_groups[(t.pool_address, bucket)].append((t, t.volume_usd or 0.0))
 
         # Optimization: Re-use detector instance and use score_batch
         detector = RobustAnomalyDetector(method=settings.VOLUME_ANOMALY_METHOD)
@@ -304,11 +296,11 @@ class HeuristicDetector:
         # (Common in low-activity pools or synthetic test data)
         score_cache = {}
 
-        for (pool, bucket), bucket_trades in pool_bucket_groups.items():
-            if len(bucket_trades) < min_trades:
+        for (pool, bucket), bucket_items in pool_bucket_groups.items():
+            if len(bucket_items) < min_trades:
                 continue
 
-            volumes = np.array([t.volume_usd or 0.0 for t in bucket_trades])
+            volumes = np.array([item[1] for item in bucket_items])
 
             # Use tuple of volumes as cache key for small buckets
             cache_key = tuple(volumes) if len(volumes) < 1000 else None
@@ -317,7 +309,7 @@ class HeuristicDetector:
                 scores = score_cache[cache_key]
             else:
                 try:
-                    detector.fit(volumes.tolist())
+                    detector.fit(volumes)
                     scores = detector.score_batch(volumes)
                     if cache_key:
                         score_cache[cache_key] = scores
@@ -326,7 +318,7 @@ class HeuristicDetector:
 
             for i, score in enumerate(scores):
                 if score > threshold:
-                    trade = bucket_trades[i]
+                    trade = bucket_items[i][0]
                     trade.is_wash_trade = True
                     trade.wash_trade_score = min(
                         0.7 + (float(score) - threshold) * 0.05, 1.0
@@ -394,7 +386,7 @@ class HeuristicDetector:
             return [], {}
 
         stmt = select(AddressCluster).where(
-            AddressCluster.cluster_id.like(f"{chain_id}:%")
+            AddressCluster.cluster_id.like(f"{chain_id}:{pool_address}:%")
         )
         result = await session.execute(stmt)
         clusters = list(result.scalars().all())

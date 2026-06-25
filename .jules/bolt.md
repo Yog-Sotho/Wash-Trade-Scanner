@@ -35,3 +35,7 @@
 ## 2025-06-15 - [NumPy Vectorization & ORM Optimization]
 **Learning:** High-throughput statistical loops (like volume anomaly detection) are significantly slowed by SQLAlchemy ORM attribute access and Python-level math operations. Accessing `trade.volume_usd` 500,000 times for 100,000 trades adds measurable overhead.
 **Action:** Pre-extract ORM attributes into NumPy arrays and use vectorized operations (`np.median`, `np.abs`) for statistical calculations. Implement bucket caching for `datetime.replace` to avoid redundant O(N) object creation. Resulted in ~3.3x speedup.
+
+## 2024-06-12 - [ORM Overhead & Query Specificity]
+**Learning:** tight statistical loops in detectors were crippled by two issues: 1) SQLAlchemy ORM attribute access (e.g., `trade.volume_usd`) which is significantly slower than native Python types, and 2) overly broad database queries (fetching all clusters for a chain instead of just the pool).
+**Action:** Pre-extract all required attributes into NumPy arrays or tuples before entering loops. Always scope database queries to the specific pool/resource being audited to minimize memory and I/O overhead.
