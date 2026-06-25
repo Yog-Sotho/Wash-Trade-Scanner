@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import networkx as nx
-import numpy as np
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -215,41 +214,32 @@ class HeuristicDetector:
         for trade in trades:
             sender_groups[trade.sender].append(trade)
 
+        # Pre-fetch thresholds to avoid repeated settings access
+        count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
+        time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
+        cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
+
         for sender, sender_trades in sender_groups.items():
             if sender.lower() in self.bot_allowlist:
                 continue
 
-            count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
-            time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
-            cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
-
             if len(sender_trades) < count_threshold:
                 continue
 
-            # Optimization: pre-extract attributes to avoid ORM overhead in tight loops
-            timestamps = [t.block_timestamp.timestamp() for t in sender_trades]
+            # Optimization: pre-extract attributes and use NumPy for vectorized statistics
             # Match original behavior: skip first volume for CV calculation
-            volumes_array = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
+            ts_array = np.array([t.block_timestamp.timestamp() for t in sender_trades])
+            volumes = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
 
-            for i in range(1, len(sender_trades)):
-                delta = (
-                    sender_trades[i].block_timestamp
-                    - sender_trades[i - 1].block_timestamp
-                ).total_seconds()
-                inter_trade_times.append(delta)
-                volumes.append(sender_trades[i].volume_usd or 0.0)
-
-            if len(inter_trade_times) == 0:
+            if len(ts_array) < 2 or len(volumes) == 0:
                 continue
 
-            avg_time = sum(inter_trade_times) / len(inter_trade_times)
-            mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = (
-                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes)
-                if volumes
-                else 0
-            )
-            volume_std = volume_variance**0.5
+            inter_trade_times = np.diff(ts_array)
+            avg_time = np.mean(inter_trade_times)
+
+            mean_vol = np.mean(volumes)
+            # Use population standard deviation (ddof=0) for consistency
+            volume_std = np.std(volumes)
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:

@@ -8,6 +8,7 @@ import asyncio
 import argparse
 import logging
 import sys
+from pydantic import ValidationError
 from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
@@ -57,8 +58,8 @@ async def main() -> int:
             use_heuristic_labels=not args.no_labels,
             contamination=args.contamination,
         )
-    except Exception:
-        logger.error("Invalid training parameters provided.")
+    except (ValidationError, ValueError) as exc:
+        logger.error(f"Invalid training parameters: {exc}")
         return 1
 
     try:
@@ -66,8 +67,10 @@ async def main() -> int:
         return 0
     except WashTradeError as exc:
         logger.error(f"Training failed: {exc}")
-    except Exception:
-        logger.error("Unexpected error during training.")
+    except Exception as exc:
+        # SECURITY: Mask stack trace in standard logs, keep in debug
+        logger.error(f"Unexpected error during training: {exc}")
+        logger.debug("Stack trace:", exc_info=True)
     return 1
 
 if __name__ == "__main__":

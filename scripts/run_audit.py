@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from pydantic import ValidationError as PydanticValidationError
 from core.ingestor import MultiChainIngestor
 from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
@@ -330,7 +331,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
@@ -349,7 +350,9 @@ async def main() -> int:
         logger.error(f"Audit failed: {exc}")
         return 1
     except Exception as exc:
-        logger.exception(f"Unexpected error: {exc}")
+        # SECURITY: Mask stack trace in standard logs, keep in debug
+        logger.error(f"Unexpected error: {exc}")
+        logger.debug("Stack trace:", exc_info=True)
         return 1
     finally:
         await runner.cleanup()
