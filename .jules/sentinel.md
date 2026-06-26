@@ -34,3 +34,8 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2025-11-05 - Information leakage via internal stack traces in CLI entry points
+**Vulnerability:** CLI entry points (`run_audit.py`, `train_model.py`) used `logger.exception()` or generic exception handlers that could expose internal system details and stack traces to end-users in standard logs.
+**Learning:** Production entry points should strictly separate user-facing error messages from internal diagnostic information.
+**Prevention:** Catch specific validation errors (Pydantic, local) to provide clean feedback. For unexpected errors, use `logger.error()` for the message and `logger.debug(..., exc_info=True)` to ensure stack traces are only visible when explicitly requested via log level.
