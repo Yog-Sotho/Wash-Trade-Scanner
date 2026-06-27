@@ -34,3 +34,13 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2026-06-27 - Denial of Service (DoS) via uninitialized variables in heuristics
+**Vulnerability:** The `detect_high_frequency_bot` heuristic contained uninitialized variables (`inter_trade_times`, `volumes`) in its loop, causing a `NameError` and immediate process crash when processing valid trade data. This effectively created a DoS condition for the audit pipeline.
+**Learning:** Incomplete or broken performance optimizations can introduce critical reliability bugs that function as DoS vulnerabilities. Mixing manual loops with vectorized variable names without proper initialization is a high-risk pattern.
+**Prevention:** Always verify performance optimizations with reproduction scripts and edge-case tests (empty lists, single items). Prefer full NumPy vectorization over hybrid loop-vectorized approaches to reduce state-management errors.
+
+## 2026-06-27 - Information disclosure via unmasked Pydantic validation errors
+**Vulnerability:** CLI entry points (`run_audit.py`, `train_model.py`) failed to catch `pydantic.ValidationError` explicitly, allowing raw Pydantic tracebacks to reach the console. These tracebacks leaked internal model structures and file system paths.
+**Learning:** Standard `try...except Exception` blocks that use `logger.exception` are insecure for user-facing entry points as they expose full stack traces by default. Pydantic errors require specific handling to present clean messages to the user.
+**Prevention:** Explicitly catch `pydantic.ValidationError` and `ValueError` at the highest level of CLI scripts. Log a sanitized error message at the `ERROR` level and relegate the full traceback to `DEBUG` level using `logger.debug(..., exc_info=True)`.

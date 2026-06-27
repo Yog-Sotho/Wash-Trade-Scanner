@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import networkx as nx
-import numpy as np
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -206,11 +205,15 @@ class HeuristicDetector:
     ) -> List[SwapTrade]:
         """
         Detect high-frequency bot patterns with configurable thresholds.
-        Optimization: Uses NumPy for vectorized statistics and pre-extracts attributes
-        to avoid ORM overhead. Expected speedup: ~3.3x for large datasets.
+        Optimization: Fully vectorized with NumPy to resolve NameError and improve speed.
         """
         wash_trades = []
         sender_groups = defaultdict(list)
+
+        # Hoist thresholds outside the loop
+        count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
+        time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
+        cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
 
         for trade in trades:
             sender_groups[trade.sender].append(trade)
@@ -219,37 +222,22 @@ class HeuristicDetector:
             if sender.lower() in self.bot_allowlist:
                 continue
 
-            count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
-            time_threshold = settings.BOT_TRADE_TIME_THRESHOLD_SECONDS
-            cv_threshold = settings.BOT_VOLUME_CV_THRESHOLD
-
             if len(sender_trades) < count_threshold:
                 continue
 
-            # Optimization: pre-extract attributes to avoid ORM overhead in tight loops
-            timestamps = [t.block_timestamp.timestamp() for t in sender_trades]
-            # Match original behavior: skip first volume for CV calculation
-            volumes_array = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
+            # Vectorized calculation of inter-trade times
+            timestamps = np.array([t.block_timestamp.timestamp() for t in sender_trades])
+            inter_trade_times = np.diff(timestamps)
 
-            for i in range(1, len(sender_trades)):
-                delta = (
-                    sender_trades[i].block_timestamp
-                    - sender_trades[i - 1].block_timestamp
-                ).total_seconds()
-                inter_trade_times.append(delta)
-                volumes.append(sender_trades[i].volume_usd or 0.0)
+            # Match original behavior: skip first volume for statistics
+            volumes = np.array([t.volume_usd or 0.0 for t in sender_trades[1:]])
 
             if len(inter_trade_times) == 0:
                 continue
 
-            avg_time = sum(inter_trade_times) / len(inter_trade_times)
-            mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = (
-                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes)
-                if volumes
-                else 0
-            )
-            volume_std = volume_variance**0.5
+            avg_time = np.mean(inter_trade_times)
+            mean_vol = np.mean(volumes) if volumes.size > 0 else 0
+            volume_std = np.std(volumes, ddof=0) if volumes.size > 0 else 0
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
