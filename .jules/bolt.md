@@ -35,3 +35,7 @@
 ## 2025-06-15 - [NumPy Vectorization & ORM Optimization]
 **Learning:** High-throughput statistical loops (like volume anomaly detection) are significantly slowed by SQLAlchemy ORM attribute access and Python-level math operations. Accessing `trade.volume_usd` 500,000 times for 100,000 trades adds measurable overhead.
 **Action:** Pre-extract ORM attributes into NumPy arrays and use vectorized operations (`np.median`, `np.abs`) for statistical calculations. Implement bucket caching for `datetime.replace` to avoid redundant O(N) object creation. Resulted in ~3.3x speedup.
+
+## 2024-06-12 - [HFT Bot Detection Vectorization & Bug Fix]
+**Learning:** The `detect_high_frequency_bot` heuristic had a `NameError` because `inter_trade_times` was used before initialization in a loop. Furthermore, manual loops for mean and standard deviation are inefficient for high-frequency traders with thousands of events.
+**Action:** Fix the `NameError` by fully vectorizing the calculation using `np.diff` and `np.std`. Hoist configuration thresholds outside the sender loop to reduce redundant global settings access.
