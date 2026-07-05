@@ -18,6 +18,8 @@ from sqlalchemy.sql import func
 
 from models.schemas import AddressCluster, SwapTrade
 from core.storage import Storage
+from core.ingestor import RateLimiter
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from config.chains import get_chain_config
 from config.settings import settings
 
@@ -32,6 +34,14 @@ class EntityClusterer:
 
     def __init__(self, storage: Storage):
         self.storage = storage
+        self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
+        self.circuit_breaker = CircuitBreaker(
+            name="entity_clusterer_rpc",
+            config=CircuitBreakerConfig(
+                failure_threshold=settings.RPC_MAX_FAILURES,
+                recovery_timeout=settings.RPC_RECOVERY_TIMEOUT,
+            ),
+        )
 
     async def _node_supports_trace_filter(self, web3: AsyncWeb3) -> bool:
         """
@@ -44,7 +54,9 @@ class EntityClusterer:
                 toBlock=hex(1),
                 fromAddress=["0x0000000000000000000000000000000000000000"],
             )
-            await web3.provider.make_request("trace_filter", [test_params])
+            await self.circuit_breaker.call(
+                web3.provider.make_request, "trace_filter", [test_params]
+            )
             return True
         except Exception:
             return False
@@ -75,7 +87,10 @@ class EntityClusterer:
                 toAddress=batch,
             )
             try:
-                traces = await web3.provider.make_request("trace_filter", [params])
+                await self.rate_limiter.acquire()
+                traces = await self.circuit_breaker.call(
+                    web3.provider.make_request, "trace_filter", [params]
+                )
                 for trace in traces.get("result", []):
                     action = trace.get("action", {})
                     from_addr = action.get("from")
@@ -106,7 +121,10 @@ class EntityClusterer:
         # Scan block by block
         for block_num in range(from_block, to_block + 1):
             try:
-                block = await web3.eth.get_block(block_num, full_transactions=True)
+                await self.rate_limiter.acquire()
+                block = await self.circuit_breaker.call(
+                    web3.eth.get_block, block_num, full_transactions=True
+                )
                 for tx in block.transactions:
                     if not isinstance(tx, dict):
                         continue  # In full_transactions mode, it's a dict
@@ -120,8 +138,6 @@ class EntityClusterer:
                 logger.error(f"Failed to fetch block {block_num}: {e}")
                 continue
 
-            # Throttle to avoid hitting rate limits
-            await asyncio.sleep(0.01)
         return edges
 
     async def build_funding_graph(
@@ -160,11 +176,11 @@ class EntityClusterer:
 
         # SECURITY: Verify the chain ID matches the expected configuration
         try:
-            connected = await web3.is_connected()
+            connected = await self.circuit_breaker.call(web3.is_connected)
             if not connected:
                 raise ConnectionError(f"Failed to connect to chain {chain_id}")
 
-            actual_chain_id = await web3.eth.chain_id
+            actual_chain_id = await self.circuit_breaker.call(lambda: web3.eth.chain_id)
             if chain_id and actual_chain_id != chain_id:
                 raise ConnectionError(
                     f"Chain ID mismatch for chain {chain_id}: "
@@ -179,13 +195,13 @@ class EntityClusterer:
         if from_block_override is None:
             # Use a reasonable starting block (e.g., 1 year ago or chain start)
             # For production, this would be configurable
-            latest = await web3.eth.block_number
+            latest = await self.circuit_breaker.call(lambda: web3.eth.block_number)
             from_block = max(0, latest - 2_000_000)  # Approx 1 year for Ethereum
         else:
             from_block = from_block_override
 
         if to_block_override is None:
-            to_block = await web3.eth.block_number
+            to_block = await self.circuit_breaker.call(lambda: web3.eth.block_number)
         else:
             to_block = to_block_override
 
