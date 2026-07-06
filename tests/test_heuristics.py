@@ -37,3 +37,38 @@ async def test_self_trading(detector, sample_trades):
 async def test_circular_trading(detector, sample_trades):
     wash = await detector.detect_circular_trading(sample_trades, AsyncMock())
     assert len(wash) >= 2
+
+@pytest.mark.asyncio
+async def test_detect_high_frequency_bot(detector):
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    # 10 trades in 10 seconds (1s average)
+    trades = [
+        SwapTrade(id=i, chain_id=1, pool_address="0xpool", sender="0xBot", recipient="0xBob",
+                  volume_usd=100.0, block_timestamp=base_time + timedelta(seconds=i), is_wash_trade=False)
+        for i in range(10)
+    ]
+    # Adjust settings for the test
+    from config.settings import settings
+    settings.BOT_TRADE_COUNT_THRESHOLD = 5
+    settings.BOT_TRADE_TIME_THRESHOLD_SECONDS = 10.0
+    settings.BOT_VOLUME_CV_THRESHOLD = 0.1 # Low CV since volumes are all 100.0
+
+    wash = await detector.detect_high_frequency_bot(trades, AsyncMock())
+    assert len(wash) == 10
+    assert all(t.detection_method == "high_frequency_bot" for t in wash)
+
+@pytest.mark.asyncio
+async def test_detect_high_frequency_bot_not_suspicious(detector):
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    # 10 trades in 1000 seconds (100s average)
+    trades = [
+        SwapTrade(id=i, chain_id=1, pool_address="0xpool", sender="0xLegit", recipient="0xBob",
+                  volume_usd=100.0, block_timestamp=base_time + timedelta(seconds=i*100), is_wash_trade=False)
+        for i in range(10)
+    ]
+    from config.settings import settings
+    settings.BOT_TRADE_COUNT_THRESHOLD = 5
+    settings.BOT_TRADE_TIME_THRESHOLD_SECONDS = 10.0 # Threshold is 10s, avg is 100s
+
+    wash = await detector.detect_high_frequency_bot(trades, AsyncMock())
+    assert len(wash) == 0
