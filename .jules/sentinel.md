@@ -34,3 +34,8 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2025-11-10 - Information exposure via unhandled Pydantic validation errors
+**Vulnerability:** Top-level entry scripts (`run_audit.py`, `train_model.py`) failed to catch `pydantic.ValidationError` explicitly, causing internal schema details and stack traces to be leaked to the console when users provided invalid CLI arguments.
+**Learning:** Pydantic V2 raises `ValidationError` for model instantiation failures. Unless caught at the entry point, these exceptions propagate to the top-level handler, which often uses `logger.exception`, exposing system internals.
+**Prevention:** Always catch `pydantic.ValidationError` (and `ValueError`) at the CLI boundary. Mask detailed tracebacks using a combination of `logger.error` for the user and `logger.debug(..., exc_info=True)` for developers.

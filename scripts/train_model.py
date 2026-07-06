@@ -9,10 +9,11 @@ import argparse
 import logging
 import sys
 from core.storage import Storage
+from pydantic import ValidationError as PydanticValidationError
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
 from core.validators import TrainingParameters
-from core.exceptions import WashTradeError
+from core.exceptions import ValidationError, WashTradeError
 from config.settings import settings
 
 logging.basicConfig(
@@ -57,8 +58,8 @@ async def main() -> int:
             use_heuristic_labels=not args.no_labels,
             contamination=args.contamination,
         )
-    except Exception:
-        logger.error("Invalid training parameters provided.")
+    except (PydanticValidationError, ValidationError, ValueError) as exc:
+        logger.error(f"Invalid parameters: {exc}")
         return 1
 
     try:
@@ -66,8 +67,9 @@ async def main() -> int:
         return 0
     except WashTradeError as exc:
         logger.error(f"Training failed: {exc}")
-    except Exception:
-        logger.error("Unexpected error during training.")
+    except Exception as exc:
+        logger.error(f"Unexpected error: {exc}")
+        logger.debug("Detailed traceback:", exc_info=True)
     return 1
 
 if __name__ == "__main__":
