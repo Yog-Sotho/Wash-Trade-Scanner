@@ -85,7 +85,7 @@ class ChainIngestor:
 
         # SECURITY: Ensure RPC URL uses a secure and supported protocol
         if not rpc_str.startswith(("http://", "https://")):
-            raise ValueError(f"Invalid RPC URL protocol: {rpc}. Only http/https supported.")
+            raise ValueError(f"Invalid RPC URL protocol for {self.chain_config['name']}. Only http/https supported.")
 
         provider = AsyncHTTPProvider(rpc_str)
         self.web3 = AsyncWeb3(provider)
