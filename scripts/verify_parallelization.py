@@ -3,8 +3,10 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
-from scripts.run_audit import AuditRunner, AuditParameters
+
 from models.schemas import SwapTrade
+from scripts.run_audit import AuditParameters, AuditRunner
+
 
 async def run_benchmark():
     # 1. Setup mock trades
@@ -78,7 +80,7 @@ async def run_benchmark():
             return [], {}
         mock_hd.run_all_heuristics = slow_hd
 
-        print(f"--- run_audit parallelization benchmark ---")
+        print("--- run_audit parallelization benchmark ---")
         start_time = time.perf_counter()
         await runner.run_audit(params)
         duration = time.perf_counter() - start_time

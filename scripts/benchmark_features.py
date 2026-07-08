@@ -3,9 +3,10 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-import pandas as pd
+
 from core.feature_engineer import FeatureEngineer
 from models.schemas import SwapTrade
+
 
 async def run_benchmark():
     # 1. Setup mock trades

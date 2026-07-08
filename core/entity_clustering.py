@@ -5,21 +5,19 @@ Uses node RPC tracing or fallback block scanning to identify addresses controlle
 
 import asyncio
 import logging
-from typing import List, Dict, Set, Optional, Tuple
-from collections import defaultdict
 
 import networkx as nx
 from pydantic import SecretStr
-from web3 import AsyncWeb3, Web3
-from web3.types import TxData, TraceFilterParams
-from sqlalchemy import select, and_, union
+from sqlalchemy import and_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
+from web3 import AsyncWeb3, Web3
+from web3.types import TraceFilterParams
 
-from models.schemas import AddressCluster, SwapTrade
-from core.storage import Storage
 from config.chains import get_chain_config
 from config.settings import settings
+from core.storage import Storage
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +50,10 @@ class EntityClusterer:
     async def _fetch_funding_edges_trace_filter(
         self,
         web3: AsyncWeb3,
-        addresses: Set[str],
+        addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> List[Tuple[str, str, int]]:
+    ) -> list[tuple[str, str, int]]:
         """
         Use trace_filter to find all ETH transfers (value > 0) involving any of the given addresses.
         Returns list of (from, to, value_in_wei) tuples.
@@ -92,10 +90,10 @@ class EntityClusterer:
     async def _fetch_funding_edges_block_scan(
         self,
         web3: AsyncWeb3,
-        addresses: Set[str],
+        addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> List[Tuple[str, str, int]]:
+    ) -> list[tuple[str, str, int]]:
         """
         Fallback method: scan each block in the range and inspect transaction `value`.
         Much slower but works when tracing is unavailable.
@@ -127,10 +125,10 @@ class EntityClusterer:
     async def build_funding_graph(
         self,
         chain_id: int,
-        addresses: List[str],
+        addresses: list[str],
         session: AsyncSession,
-        from_block_override: Optional[int] = None,
-        to_block_override: Optional[int] = None,
+        from_block_override: int | None = None,
+        to_block_override: int | None = None,
     ) -> nx.DiGraph:
         """
         Build a directed graph where an edge A -> B exists if A sent ETH to B.
@@ -229,7 +227,7 @@ class EntityClusterer:
     async def find_connected_components(
         self,
         graph: nx.DiGraph,
-    ) -> List[Set[str]]:
+    ) -> list[set[str]]:
         """
         Find weakly connected components in the funding graph.
         These represent potential entity clusters.
@@ -242,7 +240,7 @@ class EntityClusterer:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
-    ) -> List[AddressCluster]:
+    ) -> list[AddressCluster]:
         """
         Cluster all addresses involved in a pool's trades based on funding relationships.
         """

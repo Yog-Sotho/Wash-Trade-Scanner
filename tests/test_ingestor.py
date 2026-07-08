@@ -2,12 +2,12 @@
 Unit tests for multi-chain ingestor.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from core.ingestor import ChainIngestor, MultiChainIngestor
 from core.storage import Storage
-from config.chains import ChainConfig, DEXConfig
 
 
 @pytest.fixture
