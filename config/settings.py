@@ -3,10 +3,8 @@ Global settings for the wash trade detection system.
 Uses Pydantic for validation. No hardcoded credentials.
 """
 
-import os
-from typing import Optional, Set
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -18,7 +16,9 @@ class Settings(BaseSettings):
     DATABASE_NAME: str = Field(..., description="PostgreSQL database name")
     DATABASE_USER: str = Field(..., description="PostgreSQL username")
     DATABASE_PASSWORD: str = Field(..., description="PostgreSQL password")
-    DATABASE_SSL_MODE: str = Field("require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$")
+    DATABASE_SSL_MODE: str = Field(
+        "require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$"
+    )
 
     # Redis
     REDIS_URL: str = Field("redis://localhost:6379/0")
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     SUSPICIOUS_ACTIVITY_THRESHOLD: float = Field(0.8, ge=0.0, le=1.0)
 
     # Heuristic Weights
-    HEURISTIC_WEIGHTS: dict = {
+    HEURISTIC_WEIGHTS: dict[str, float] = {
         "self_trading": 0.30,
         "circular_trading": 0.25,
         "high_frequency_bot": 0.20,
@@ -122,14 +122,14 @@ class Settings(BaseSettings):
         )
 
     @property
-    def bot_allowlist_set(self) -> Set[str]:
+    def bot_allowlist_set(self) -> set[str]:
         """Parse allowlist into lowercase set."""
         if not self.BOT_ALLOWLIST:
             return set()
         return {addr.strip().lower() for addr in self.BOT_ALLOWLIST.split(",") if addr.strip()}
 
     @property
-    def rpc_urls(self) -> dict:
+    def rpc_urls(self) -> dict[int, str]:
         """Map chain IDs to RPC URLs."""
         return {
             1: self.ETH_RPC_URL,
@@ -157,10 +157,12 @@ class Settings(BaseSettings):
             8217: self.KLAYTN_RPC_URL,
         }
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()

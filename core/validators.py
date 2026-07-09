@@ -3,11 +3,9 @@ Input validation utilities using Pydantic.
 """
 
 import re
-from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from web3 import Web3
-
 
 VALID_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
@@ -17,8 +15,8 @@ class AuditParameters(BaseModel):
 
     chain_id: int = Field(..., ge=1, le=999999999, description="CAIP-2 chain ID")
     pool_address: str = Field(..., min_length=42, max_length=42)
-    start_block: Optional[int] = Field(None, ge=0)
-    end_block: Optional[int] = Field(None, ge=0)
+    start_block: int | None = Field(None, ge=0)
+    end_block: int | None = Field(None, ge=0)
     use_ml: bool = Field(True)
     use_heuristics: bool = Field(True)
 
@@ -34,7 +32,7 @@ class AuditParameters(BaseModel):
 
     @field_validator("end_block")
     @classmethod
-    def validate_block_range(cls, v: Optional[int], info) -> Optional[int]:
+    def validate_block_range(cls, v: int | None, info: ValidationInfo) -> int | None:
         if v is not None:
             start = info.data.get("start_block")
             if start is not None and v <= start:
@@ -50,12 +48,12 @@ class TrainingParameters(BaseModel):
     chain_id: int = Field(..., ge=1, le=999999999)
     pool_addresses: list[str] = Field(..., min_length=1)
     use_heuristic_labels: bool = Field(True)
-    contamination: Optional[float] = Field(None, ge=0.001, le=0.5)
+    contamination: float | None = Field(None, ge=0.001, le=0.5)
 
     @field_validator("pool_addresses")
     @classmethod
     def validate_pool_addresses(cls, v: list[str]) -> list[str]:
-        validated = []
+        validated: list[str] = []
         for addr in v:
             if not VALID_ADDRESS_RE.match(addr):
                 raise ValueError(f"Invalid address: {addr}")

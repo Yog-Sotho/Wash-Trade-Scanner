@@ -4,21 +4,26 @@ Secure connection handling with SSL enforcement.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
+from sqlalchemy import CursorResult, and_, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    AsyncSession,
     AsyncEngine,
+    AsyncSession,
     async_sessionmaker,
+    create_async_engine,
 )
-from sqlalchemy import select, update, and_, func
 
-from models.schemas import (
-    Base, SwapTrade, AddressCluster,
-    TokenRiskProfile, DetectionAuditLog,
-)
 from config.settings import settings
+from models.schemas import (
+    AddressCluster,
+    Base,
+    DetectionAuditLog,
+    SwapTrade,
+    TokenRiskProfile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +31,10 @@ logger = logging.getLogger(__name__)
 class Storage:
     """Async database storage with connection pooling."""
 
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, database_url: str | None = None):
         self.database_url = database_url or settings.DATABASE_URL
-        self.engine: Optional[AsyncEngine] = None
-        self.session_factory: Optional[async_sessionmaker] = None
+        self.engine: AsyncEngine | None = None
+        self.session_factory: async_sessionmaker[AsyncSession] | None = None
 
     async def initialize(self) -> None:
         """Initialize database engine and create tables."""
@@ -76,7 +81,7 @@ class Storage:
             raise RuntimeError("Storage not initialized. Call initialize() first.")
         return self.session_factory()
 
-    async def save_trade(self, trade_data: Dict[str, Any]) -> SwapTrade:
+    async def save_trade(self, trade_data: dict[str, Any]) -> SwapTrade:
         """Save or update a single trade."""
         async with await self.get_session() as session:
             stmt = select(SwapTrade).where(
@@ -98,19 +103,27 @@ class Storage:
             await session.refresh(trade)
             return trade
 
-    async def save_trades_batch(self, trades_data: List[Dict[str, Any]]) -> int:
-        """Bulk insert trades for performance."""
+    async def save_trades_batch(self, trades_data: list[dict[str, Any]]) -> int:
+        """Bulk upsert trades for performance.
+
+        Uses ON CONFLICT DO NOTHING on (transaction_hash, log_index) so that
+        re-syncing overlapping block ranges is idempotent instead of raising
+        an IntegrityError that aborts the whole batch.
+        """
         if not trades_data:
             return 0
         async with await self.get_session() as session:
-            trades = [SwapTrade(**data) for data in trades_data]
-            session.add_all(trades)
+            stmt = pg_insert(SwapTrade).values(trades_data)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["transaction_hash", "log_index"])
+            # INSERT/UPDATE/DELETE always execute via CursorResult (which has .rowcount);
+            # Session.execute() is typed generically as Result[Any] regardless of statement kind.
+            result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
-            return len(trades)
+            return result.rowcount
 
     async def update_trade_labels(
         self,
-        trade_ids: List[int],
+        trade_ids: list[int],
         is_wash_trade: bool,
         wash_trade_score: float,
         detection_method: str,
@@ -128,7 +141,7 @@ class Storage:
                     detection_method=detection_method,
                 )
             )
-            result = await session.execute(stmt)
+            result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
             return result.rowcount
 
@@ -136,9 +149,9 @@ class Storage:
         self,
         chain_id: int,
         pool_address: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Retrieve trades for a specific pool."""
         async with await self.get_session() as session:
             stmt = (
@@ -161,7 +174,7 @@ class Storage:
         chain_id: int,
         pool_address: str,
         token_address: str,
-        risk_metrics: Dict[str, Any],
+        risk_metrics: dict[str, Any],
     ) -> TokenRiskProfile:
         """Update or create token risk profile."""
         async with await self.get_session() as session:
@@ -201,8 +214,8 @@ class Storage:
         trades_processed: int,
         wash_trades_detected: int,
         detection_duration_seconds: float,
-        parameters_used: Dict[str, Any],
-        results_summary: Dict[str, Any],
+        parameters_used: dict[str, Any],
+        results_summary: dict[str, Any],
     ) -> DetectionAuditLog:
         """Create audit log entry."""
         async with await self.get_session() as session:
@@ -223,26 +236,19 @@ class Storage:
             await session.refresh(log)
             return log
 
-    async def get_address_clusters(self, chain_id: int) -> List[AddressCluster]:
+    async def get_address_clusters(self, chain_id: int) -> list[AddressCluster]:
         """Retrieve address clusters for a chain."""
         async with await self.get_session() as session:
-            stmt = select(AddressCluster).where(
-                AddressCluster.cluster_id.like(f"{chain_id}:%")
-            )
+            stmt = select(AddressCluster).where(AddressCluster.cluster_id.like(f"{chain_id}:%"))
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
     async def cleanup_old_data(self, retention_days: int) -> int:
         """Remove trades older than retention period."""
-        from datetime import datetime, timedelta
-        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=retention_days)
         async with await self.get_session() as session:
-            stmt = select(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
-            result = await session.execute(stmt)
-            old_trades = result.scalars().all()
-            count = len(old_trades)
-            for trade in old_trades:
-                await session.delete(trade)
+            stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
+            result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
-            logger.info(f"Cleaned up {count} old trades")
-            return count
+            logger.info(f"Cleaned up {result.rowcount} old trades")
+            return result.rowcount

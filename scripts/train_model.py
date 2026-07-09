@@ -3,15 +3,14 @@
 Train the ML model for wash trade detection.
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
-from typing import List
 
-from core.storage import Storage
+from config.settings import settings
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
-from config.settings import settings
+from core.storage import Storage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 async def train_model(
     chain_id: int,
-    pool_addresses: List[str],
+    pool_addresses: list[str],
     use_heuristic_labels: bool = True,
     save_model: bool = True,
-):
+) -> None:
     storage = Storage()
     await storage.initialize()
     feature_engineer = FeatureEngineer(storage)
@@ -39,7 +38,7 @@ async def train_model(
     logger.info("Training complete")
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Train ML model for wash trade detection")
     parser.add_argument("--chain-id", type=int, required=True, help="Blockchain chain ID")
     parser.add_argument("--pools", nargs="+", required=True, help="Pool addresses for training")
@@ -54,5 +53,10 @@ async def main():
     )
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Synchronous entry point for the `wash-train` console script."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

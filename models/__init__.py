@@ -1,13 +1,13 @@
 from .schemas import (
-    Base,
-    SwapTrade,
     AddressCluster,
-    TokenRiskProfile,
-    DetectionAuditLog,
-    SwapTradeResponse,
-    TokenRiskProfileResponse,
     AuditRequest,
     AuditResponse,
+    Base,
+    DetectionAuditLog,
+    SwapTrade,
+    SwapTradeResponse,
+    TokenRiskProfile,
+    TokenRiskProfileResponse,
 )
 
 __all__ = [

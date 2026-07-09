@@ -50,6 +50,8 @@ dev = [
    "ruff>=0.2.0",
    "mypy>=1.8.0",
    "types-python-dateutil>=2.8.0",
+   "pandas-stubs>=2.2.0",
+   "types-networkx>=3.2.0",
    "coverage>=7.4.0",
    "hypothesis>=6.98.0",
    "pip-audit>=2.7.0",
@@ -59,14 +61,24 @@ dev = [
 ]
 
 [project.scripts]
-wash-audit = "scripts.run_audit:main"
-wash-train = "scripts.train_model:main"
+wash-audit = "scripts.run_audit:cli"
+wash-train = "scripts.train_model:cli"
+
+[tool.setuptools.packages.find]
+include = ["config*", "core*", "models*", "scripts*"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "ARG"]
-ignore = ["E501"]
+ignore = [
+   "E501",   # line length handled by ruff format
+   "ARG002", # detector methods share a common (session) signature by design
+   "N806",   # `G` is the conventional name for a networkx graph
+   "N802",   # settings fields/properties intentionally mirror env var names (e.g. DATABASE_URL)
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -74,6 +86,7 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.11"
+plugins = ["pydantic.mypy"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -83,6 +96,13 @@ show_error_codes = true
 strict = true
 exclude = ["tests/", "migrations/"]
 
+# No official type stubs / py.typed marker for these; the numpy/scipy ML stack has
+# long-standing gaps here rather than anything specific to this project. pandas and
+# networkx have dedicated stub packages (see dev dependencies) so aren't listed here.
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "scipy.*", "joblib.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -90,7 +110,9 @@ addopts = "-v --tb=short"
 
 [tool.bandit]
 exclude_dirs = ["tests"]
-skips = ["B101"]
+# B101: internal use of assert is intentional (not a prod input-validation path)
+# B105: false positives on native-token symbols in config/chains.py (e.g. "KAVA", "KLAY")
+skips = ["B101", "B105"]
 
 [tool.coverage.run]
 source = ["core", "config", "models", "scripts"]

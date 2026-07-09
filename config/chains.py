@@ -4,7 +4,7 @@ Supports 20+ blockchains and major DEXes. No placeholders.
 """
 
 from dataclasses import dataclass
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any
 
 # ============================================================================
 # Complete ABI definitions – verified from Etherscan / official sources
@@ -34,7 +34,12 @@ UNISWAP_V3_ROUTER_ABI = [
             {"indexed": True, "internalType": "address", "name": "recipient", "type": "address"},
             {"indexed": False, "internalType": "int256", "name": "amount0", "type": "int256"},
             {"indexed": False, "internalType": "int256", "name": "amount1", "type": "int256"},
-            {"indexed": False, "internalType": "uint160", "name": "sqrtPriceX96", "type": "uint160"},
+            {
+                "indexed": False,
+                "internalType": "uint160",
+                "name": "sqrtPriceX96",
+                "type": "uint160",
+            },
             {"indexed": False, "internalType": "uint128", "name": "liquidity", "type": "uint128"},
             {"indexed": False, "internalType": "int24", "name": "tick", "type": "int24"},
         ],
@@ -51,7 +56,12 @@ CURVE_ROUTER_ABI = [
             {"indexed": False, "internalType": "int128", "name": "sold_id", "type": "int128"},
             {"indexed": False, "internalType": "uint256", "name": "tokens_sold", "type": "uint256"},
             {"indexed": False, "internalType": "int128", "name": "bought_id", "type": "int128"},
-            {"indexed": False, "internalType": "uint256", "name": "tokens_bought", "type": "uint256"},
+            {
+                "indexed": False,
+                "internalType": "uint256",
+                "name": "tokens_bought",
+                "type": "uint256",
+            },
         ],
         "name": "TokenExchange",
         "type": "event",
@@ -144,17 +154,19 @@ DRAGONSWAP_ROUTER_ABI = UNISWAP_V2_ROUTER_ABI
 @dataclass
 class DEXConfig:
     """Configuration for a single DEX."""
+
     name: str
     router: str
     factory: str
     event_sig: str
-    abi: List[Dict[str, Any]]
+    abi: list[dict[str, Any]]
     type: str
 
 
 @dataclass
 class ChainConfig:
     """Configuration for a single blockchain."""
+
     chain_id: int
     name: str
     rpc_url: str
@@ -163,14 +175,14 @@ class ChainConfig:
     block_time: float
     explorer_api: str
     start_block: int
-    dexes: List[Dict[str, Any]]
+    dexes: list[dict[str, Any]]
 
 
 # ============================================================================
 # Full chain configurations – dictionaries with “type” field
 # ============================================================================
 
-CHAINS: List[Dict[str, Any]] = [
+CHAINS: list[dict[str, Any]] = [
     {
         "chain_id": 1,
         "name": "Ethereum",
@@ -1066,7 +1078,7 @@ CHAINS: List[Dict[str, Any]] = [
 ]
 
 
-def get_chain_config(chain_id: int) -> Dict[str, Any]:
+def get_chain_config(chain_id: int) -> dict[str, Any]:
     """Retrieve chain configuration by chain ID."""
     for chain in CHAINS:
         if chain["chain_id"] == chain_id:
@@ -1074,9 +1086,10 @@ def get_chain_config(chain_id: int) -> Dict[str, Any]:
     raise ValueError(f"Chain ID {chain_id} not found in configuration.")
 
 
-def get_dex_config(chain_id: int, dex_name: str) -> Dict[str, Any]:
+def get_dex_config(chain_id: int, dex_name: str) -> dict[str, Any]:
     """Retrieve DEX configuration by chain ID and DEX name."""
     chain = get_chain_config(chain_id)
+    dex: dict[str, Any]
     for dex in chain["dexes"]:
         if dex["name"].lower() == dex_name.lower():
             return dex

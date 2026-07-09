@@ -3,23 +3,24 @@ High-signal heuristic detection rules for wash trading.
 Uses robust statistical methods (MAD/IQR) instead of z-score.
 """
 
+from __future__ import annotations
+
 import logging
 import math
-from typing import List, Dict, Any, Set, Tuple, Optional
-from datetime import datetime, timedelta
 from collections import defaultdict
+from datetime import timedelta
 
 import networkx as nx
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.schemas import SwapTrade, AddressCluster
 from config.settings import settings
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
 
-def _load_allowlist() -> Set[str]:
+def _load_allowlist() -> set[str]:
     """Load allowed bot addresses from settings."""
     return settings.bot_allowlist_set
 
@@ -32,14 +33,14 @@ class RobustAnomalyDetector:
 
     def __init__(self, method: str = "mad"):
         self.method = method
-        self.median: Optional[float] = None
-        self.mad: Optional[float] = None
-        self.q1: Optional[float] = None
-        self.q3: Optional[float] = None
-        self.iqr: Optional[float] = None
+        self.median: float | None = None
+        self.mad: float | None = None
+        self.q1: float | None = None
+        self.q3: float | None = None
+        self.iqr: float | None = None
         self._fitted = False
 
-    def fit(self, volumes: List[float]) -> None:
+    def fit(self, volumes: list[float]) -> None:
         """Fit detector on log-transformed volumes."""
         if not volumes:
             raise ValueError("Cannot fit on empty data")
@@ -49,7 +50,11 @@ class RobustAnomalyDetector:
         if self.method == "mad":
             sorted_vals = sorted(log_volumes)
             n = len(sorted_vals)
-            self.median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+            self.median = (
+                sorted_vals[n // 2]
+                if n % 2
+                else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+            )
             self.mad = sorted([abs(v - self.median) for v in log_volumes])[n // 2]
         elif self.method == "iqr":
             sorted_vals = sorted(log_volumes)
@@ -70,11 +75,13 @@ class RobustAnomalyDetector:
         log_vol = math.log1p(max(volume, 0.0))
 
         if self.method == "mad":
+            assert self.median is not None and self.mad is not None
             if self.mad == 0:
                 return 0.0
             modified_z = 0.6745 * (log_vol - self.median) / self.mad
             return abs(modified_z)
         elif self.method == "iqr":
+            assert self.q1 is not None and self.q3 is not None and self.iqr is not None
             if self.iqr == 0:
                 return 0.0
             if log_vol < self.q1 - 1.5 * self.iqr:
@@ -92,15 +99,15 @@ class RobustAnomalyDetector:
 class HeuristicDetector:
     """Wash trade detection using configurable heuristics."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.confidence_threshold = settings.SUSPICIOUS_ACTIVITY_THRESHOLD
         self.bot_allowlist = _load_allowlist()
 
     async def detect_self_trading(
         self,
-        trades: List[SwapTrade],
+        trades: list[SwapTrade],
         session: AsyncSession,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Detect trades where sender equals recipient."""
         wash_trades = []
         for trade in trades:
@@ -114,18 +121,18 @@ class HeuristicDetector:
 
     async def detect_circular_trading(
         self,
-        trades: List[SwapTrade],
+        trades: list[SwapTrade],
         session: AsyncSession,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Detect circular trading via strongly connected components."""
         wash_trades = []
         pool_groups = defaultdict(list)
         for trade in trades:
             pool_groups[trade.pool_address].append(trade)
 
-        for pool_address, pool_trades in pool_groups.items():
-            G = nx.DiGraph()
-            edges = defaultdict(float)
+        for _pool_address, pool_trades in pool_groups.items():
+            G: nx.DiGraph[str] = nx.DiGraph()
+            edges: dict[tuple[str, str], float] = defaultdict(float)
             for trade in pool_trades:
                 key = (trade.sender, trade.recipient)
                 edges[key] += trade.volume_usd or 0.0
@@ -143,7 +150,8 @@ class HeuristicDetector:
                     window_start = trade.block_timestamp - timedelta(minutes=window_minutes)
                     window_end = trade.block_timestamp + timedelta(minutes=window_minutes)
                     reverse_trades = [
-                        t for t in pool_trades
+                        t
+                        for t in pool_trades
                         if t.sender == trade.recipient
                         and t.recipient == trade.sender
                         and window_start <= t.block_timestamp <= window_end
@@ -159,9 +167,9 @@ class HeuristicDetector:
 
     async def detect_high_frequency_bot(
         self,
-        trades: List[SwapTrade],
+        trades: list[SwapTrade],
         session: AsyncSession,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Detect high-frequency bot patterns with configurable thresholds."""
         wash_trades = []
         sender_groups = defaultdict(list)
@@ -185,7 +193,9 @@ class HeuristicDetector:
             volumes = []
 
             for i in range(1, len(sender_trades)):
-                delta = (sender_trades[i].block_timestamp - sender_trades[i - 1].block_timestamp).total_seconds()
+                delta = (
+                    sender_trades[i].block_timestamp - sender_trades[i - 1].block_timestamp
+                ).total_seconds()
                 inter_trade_times.append(delta)
                 volumes.append(sender_trades[i].volume_usd or 0.0)
 
@@ -194,8 +204,10 @@ class HeuristicDetector:
 
             avg_time = sum(inter_trade_times) / len(inter_trade_times)
             mean_vol = sum(volumes) / len(volumes) if volumes else 0
-            volume_variance = sum((v - mean_vol) ** 2 for v in volumes) / len(volumes) if volumes else 0
-            volume_std = volume_variance ** 0.5
+            volume_variance = (
+                sum((v - mean_vol) ** 2 for v in volumes) / len(volumes) if volumes else 0
+            )
+            volume_std = volume_variance**0.5
             volume_cv = volume_std / (mean_vol + 1e-9)
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
@@ -210,11 +222,11 @@ class HeuristicDetector:
 
     async def detect_volume_anomaly(
         self,
-        trades: List[SwapTrade],
+        trades: list[SwapTrade],
         session: AsyncSession,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Detect volume anomalies using MAD instead of z-score."""
-        wash_trades = []
+        wash_trades: list[SwapTrade] = []
         min_trades = settings.VOLUME_ANOMALY_MIN_TRADES
 
         if len(trades) < min_trades:
@@ -232,7 +244,7 @@ class HeuristicDetector:
             key = (trade.pool_address, bucket)
             pool_bucket_groups[key].append(trade)
 
-        for (pool, hour), bucket_trades in pool_bucket_groups.items():
+        for (_pool, _hour), bucket_trades in pool_bucket_groups.items():
             if len(bucket_trades) < min_trades:
                 continue
 
@@ -261,10 +273,10 @@ class HeuristicDetector:
 
     async def detect_wash_clusters(
         self,
-        trades: List[SwapTrade],
-        address_clusters: List[AddressCluster],
+        trades: list[SwapTrade],
+        address_clusters: list[AddressCluster],
         session: AsyncSession,
-    ) -> List[SwapTrade]:
+    ) -> list[SwapTrade]:
         """Detect trades within same address cluster."""
         wash_trades = []
         addr_to_cluster = {}
@@ -291,9 +303,9 @@ class HeuristicDetector:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
-    ) -> Tuple[List[SwapTrade], Dict[str, int]]:
+    ) -> tuple[list[SwapTrade], dict[str, int]]:
         """Run all heuristic detectors and return combined results."""
-        stmt = (
+        trades_stmt = (
             select(SwapTrade)
             .where(
                 and_(
@@ -303,20 +315,20 @@ class HeuristicDetector:
             )
             .order_by(SwapTrade.block_timestamp)
         )
-        result = await session.execute(stmt)
-        trades = list(result.scalars().all())
+        trades_result = await session.execute(trades_stmt)
+        trades = list(trades_result.scalars().all())
 
         if not trades:
             return [], {}
 
-        stmt = select(AddressCluster).where(
+        clusters_stmt = select(AddressCluster).where(
             AddressCluster.cluster_id.like(f"{chain_id}:%")
         )
-        result = await session.execute(stmt)
-        clusters = list(result.scalars().all())
+        clusters_result = await session.execute(clusters_stmt)
+        clusters = list(clusters_result.scalars().all())
 
-        all_wash_trades = []
-        stats = {}
+        all_wash_trades: list[SwapTrade] = []
+        stats: dict[str, int] = {}
 
         detectors = [
             ("self_trading", self.detect_self_trading),
