@@ -3,9 +3,7 @@ Global settings for the wash trade detection system.
 Uses Pydantic for validation. No hardcoded credentials.
 """
 
-import os
-from typing import Optional, Set, Any
-from pydantic import Field, field_validator, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from sqlalchemy.engine import URL
 
@@ -131,7 +129,7 @@ class Settings(BaseSettings):
         )
 
     @property
-    def bot_allowlist_set(self) -> Set[str]:
+    def bot_allowlist_set(self) -> set[str]:
         """Parse allowlist into lowercase set."""
         if not self.BOT_ALLOWLIST:
             return set()

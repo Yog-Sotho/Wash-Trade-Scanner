@@ -1,8 +1,11 @@
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from core.entity_clustering import EntityClusterer
 from core.storage import Storage
+
 
 @pytest.mark.asyncio
 async def test_build_funding_graph_protocol_validation():

@@ -3,14 +3,11 @@ SQLAlchemy and Pydantic models for the database.
 """
 
 from datetime import datetime
-from typing import Optional, List
-from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Boolean,
-    BigInteger, Index, JSON
-)
+
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Float, Index, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
-from pydantic import BaseModel, ConfigDict
 
 Base = declarative_base()
 
@@ -126,10 +123,10 @@ class SwapTradeResponse(BaseModel):
     transaction_hash: str
     block_number: int
     block_timestamp: datetime
-    volume_usd: Optional[float] = None
+    volume_usd: float | None = None
     is_wash_trade: bool = False
     wash_trade_score: float = 0.0
-    detection_method: Optional[str] = None
+    detection_method: str | None = None
 
 
 class TokenRiskProfileResponse(BaseModel):
@@ -152,8 +149,8 @@ class TokenRiskProfileResponse(BaseModel):
 class AuditRequest(BaseModel):
     chain_id: int
     pool_address: str
-    start_block: Optional[int] = None
-    end_block: Optional[int] = None
+    start_block: int | None = None
+    end_block: int | None = None
     use_ml: bool = True
     use_heuristics: bool = True
 
@@ -167,6 +164,6 @@ class AuditResponse(BaseModel):
     wash_trade_volume_usd: float
     wash_trade_ratio: float
     risk_score: float
-    detection_methods_used: List[str]
+    detection_methods_used: list[str]
     duration_seconds: float
     timestamp: datetime

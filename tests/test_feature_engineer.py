@@ -1,9 +1,12 @@
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from core.feature_engineer import FeatureEngineer
 from models.schemas import SwapTrade
+
 
 @pytest.fixture
 def fe():

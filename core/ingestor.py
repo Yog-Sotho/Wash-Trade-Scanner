@@ -5,19 +5,19 @@ Multi-chain swap event ingestor with circuit breaker protection.
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from typing import Any
 
 from pydantic import SecretStr
-from web3 import AsyncWeb3, Web3, AsyncHTTPProvider
+from web3 import AsyncHTTPProvider, AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware
 from web3.types import LogReceipt
 
 from config.chains import CHAINS, get_chain_config
 from config.settings import settings
-from core.storage import Storage
 from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
-from core.exceptions import RPCError, CircuitBreakerOpen
+from core.exceptions import CircuitBreakerOpen, RPCError
+from core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class RateLimiter:
 
     def __init__(self, max_calls_per_second: int):
         self.max_calls = max_calls_per_second
-        self.calls: List[float] = []
+        self.calls: list[float] = []
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
@@ -54,10 +54,10 @@ class RateLimiter:
 class ChainIngestor:
     """Per-chain blockchain data ingestor."""
 
-    def __init__(self, chain_config: Dict[str, Any], storage: Storage):
+    def __init__(self, chain_config: dict[str, Any], storage: Storage):
         self.chain_config = chain_config
         self.storage = storage
-        self.web3: Optional[AsyncWeb3] = None
+        self.web3: AsyncWeb3 | None = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
         self.circuit_breaker = CircuitBreaker(
             name=f"rpc_{chain_config['chain_id']}",
@@ -68,8 +68,8 @@ class ChainIngestor:
         )
         self.is_running = False
         self.latest_block = 0
-        self.contracts: Dict[str, Any] = {}
-        self._pool_tokens: Dict[str, Tuple[str, str]] = {}
+        self.contracts: dict[str, Any] = {}
+        self._pool_tokens: dict[str, tuple[str, str]] = {}
         self._pool_tokens_lock = asyncio.Lock()
 
     async def connect(self) -> None:
@@ -116,7 +116,7 @@ class ChainIngestor:
         except CircuitBreakerOpen as exc:
             raise ConnectionError(f"Circuit breaker open for {self.chain_config['name']}") from exc
 
-    async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
+    async def _get_pool_tokens(self, pool_address: str) -> tuple[str, str]:
         """Fetch token0 and token1 from pool contract with caching."""
         addr = Web3.to_checksum_address(pool_address)
         async with self._pool_tokens_lock:
@@ -160,11 +160,11 @@ class ChainIngestor:
     async def _fetch_log_range(
         self,
         address: str,
-        topics: List[str],
+        topics: list[str],
         start: int,
         end: int,
         max_retries: int = 3,
-    ) -> List[LogReceipt]:
+    ) -> list[LogReceipt]:
         """Helper to fetch a single range of logs with retries."""
         for attempt in range(max_retries):
             try:
@@ -195,11 +195,11 @@ class ChainIngestor:
     async def _get_logs_batch(
         self,
         address: str,
-        topics: List[str],
+        topics: list[str],
         from_block: int,
         to_block: int,
         max_retries: int = 3,
-    ) -> List[LogReceipt]:
+    ) -> list[LogReceipt]:
         """Fetch logs with retry and circuit breaker protection in parallel."""
         batch_size = 1000
         tasks = []
@@ -214,10 +214,10 @@ class ChainIngestor:
 
     async def _process_swap_event(
         self,
-        dex: Dict[str, Any],
+        dex: dict[str, Any],
         log: LogReceipt,
         block_timestamp: datetime,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Process a single swap event log."""
         try:
             event_type = dex["type"]
@@ -320,10 +320,10 @@ class ChainIngestor:
 
     async def sync_historical_swaps(
         self,
-        dex: Dict[str, Any],
+        dex: dict[str, Any],
         from_block: int,
         to_block: int,
-        pool_address: Optional[str] = None,
+        pool_address: str | None = None,
     ) -> int:
         """Sync historical swap events."""
         logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
@@ -384,7 +384,7 @@ class MultiChainIngestor:
 
     def __init__(self, storage: Storage):
         self.storage = storage
-        self.ingestors: Dict[int, ChainIngestor] = {}
+        self.ingestors: dict[int, ChainIngestor] = {}
 
     async def initialize(self) -> None:
         for chain in CHAINS:
@@ -402,8 +402,8 @@ class MultiChainIngestor:
         self,
         chain_id: int,
         pool_address: str,
-        start_block: Optional[int] = None,
-        end_block: Optional[int] = None,
+        start_block: int | None = None,
+        end_block: int | None = None,
     ) -> int:
         """Sync trades for a specific pool."""
         ingestor = self.ingestors.get(chain_id)
@@ -421,7 +421,7 @@ class MultiChainIngestor:
                 await ingestor.rate_limiter.acquire()
                 end_block = await ingestor.circuit_breaker.call(ingestor.web3.eth.block_number)
             except CircuitBreakerOpen as exc:
-                raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
+                raise ValueError("Cannot get latest block: circuit breaker open") from exc
 
         # SECURITY: Enforce maximum block range to prevent resource exhaustion (DoS)
         if end_block - start_block > 10_000_000:
