@@ -1,10 +1,13 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from pydantic import SecretStr
+
 from config.settings import Settings
-from core.ingestor import ChainIngestor
 from core.entity_clustering import EntityClusterer
-from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
+from core.ingestor import ChainIngestor
+
 
 def test_rpc_url_masking():
     """Verify that RPC URLs are masked when converted to strings."""

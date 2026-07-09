@@ -4,16 +4,17 @@ Train the ML model for wash trade detection.
 With input validation and secure error handling.
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
 import sys
-from core.storage import Storage
+
+from config.settings import settings
+from core.exceptions import WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
+from core.storage import Storage
 from core.validators import TrainingParameters
-from core.exceptions import WashTradeError
-from config.settings import settings
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),

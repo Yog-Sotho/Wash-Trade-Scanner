@@ -2,12 +2,12 @@
 Tests for the Storage layer.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from sqlalchemy.ext.asyncio import AsyncSession
+
+import pytest
 
 from core.storage import Storage
-from models.schemas import SwapTrade
+
 
 @pytest.fixture
 def storage():

@@ -4,8 +4,8 @@ Main entry point for auditing a blockchain pool for wash trading.
 With input validation and graceful shutdown.
 """
 
-import asyncio
 import argparse
+import asyncio
 import csv
 import json
 import logging
@@ -14,17 +14,16 @@ import signal
 import sys
 import time
 from datetime import datetime
-from typing import Optional
 
-from core.ingestor import MultiChainIngestor
-from core.storage import Storage
+from config.settings import settings
+from core.entity_clustering import EntityClusterer
+from core.exceptions import ValidationError, WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
+from core.ingestor import MultiChainIngestor
 from core.ml_detector import MLDetector
-from core.entity_clustering import EntityClusterer
-from core.validators import AuditParameters, validate_address
-from core.exceptions import ValidationError, WashTradeError
-from config.settings import settings
+from core.storage import Storage
+from core.validators import AuditParameters
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -37,8 +36,8 @@ class AuditRunner:
     """Manages audit lifecycle with graceful shutdown."""
 
     def __init__(self):
-        self.storage: Optional[Storage] = None
-        self.ingestor: Optional[MultiChainIngestor] = None
+        self.storage: Storage | None = None
+        self.ingestor: MultiChainIngestor | None = None
         self._shutdown_event = asyncio.Event()
 
     async def initialize(self) -> None:
@@ -60,15 +59,15 @@ class AuditRunner:
                 # Fallback for Windows or systems where add_signal_handler is not available
                 signal.signal(sig, self._signal_handler)
 
-    def _signal_handler(self, signum: int, frame: Optional[object]) -> None:
+    def _signal_handler(self, signum: int, frame: object | None) -> None:
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self._shutdown_event.set()
 
     async def run_audit(
         self,
         params: AuditParameters,
-        export_format: Optional[str] = None,
-        export_path: Optional[str] = None,
+        export_format: str | None = None,
+        export_path: str | None = None,
     ) -> dict:
         """Execute full audit pipeline."""
         start_time = time.time()
@@ -245,7 +244,7 @@ class AuditRunner:
         detection_methods: list,
         duration: float,
         export_format: str,
-        export_path: Optional[str],
+        export_path: str | None,
     ) -> None:
         results = {
             "chain_id": params.chain_id,
@@ -281,12 +280,12 @@ class AuditRunner:
 async def run_audit(
     chain_id: int,
     pool_address: str,
-    start_block: Optional[int] = None,
-    end_block: Optional[int] = None,
+    start_block: int | None = None,
+    end_block: int | None = None,
     use_ml: bool = True,
     use_heuristics: bool = True,
-    export_format: Optional[str] = None,
-    export_path: Optional[str] = None,
+    export_format: str | None = None,
+    export_path: str | None = None,
     sync_historical: bool = True,  # Maintained for backward compatibility
 ) -> dict:
     """Programmatic entry point for audits."""

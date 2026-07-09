@@ -3,10 +3,12 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
+
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
 from core.ml_detector import MLDetector
-from models.schemas import SwapTrade, AddressCluster
+from models.schemas import SwapTrade
+
 
 async def run_benchmark():
     # 1. Setup mock trades
