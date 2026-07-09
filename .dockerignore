@@ -35,14 +35,15 @@ coverage.xml
 docs/_build/
 
 # Project specific
+# NOTE: README.md and pyproject.toml are intentionally NOT excluded here -
+# the Dockerfile runs `pip install .`, and pyproject.toml declares
+# readme = "README.md", so setuptools needs both present in the build context.
 models/*.pkl
 docker-compose.yml
 .env
 .env.example
 Makefile
-README.md
 MANIFEST.in
-pyproject.toml
 tox.ini
 requirements-dev.txt
 tests/
