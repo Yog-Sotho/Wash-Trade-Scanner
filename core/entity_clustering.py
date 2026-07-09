@@ -152,7 +152,10 @@ class EntityClusterer:
 
         # SECURITY: Ensure RPC URL uses a secure and supported protocol
         if not rpc_str.startswith(("http://", "https://")):
-            raise ValueError(f"Invalid RPC URL protocol: {rpc}. Only http/https supported.")
+            raise ValueError(
+                f"Invalid RPC URL protocol for chain {chain_id}. "
+                "Only http/https supported."
+            )
 
         web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc_str))
 

@@ -8,9 +8,8 @@ import argparse
 import asyncio
 import logging
 import sys
-
-from config.settings import settings
-from core.exceptions import WashTradeError
+from pydantic import ValidationError as PydanticValidationError
+from core.storage import Storage
 from core.feature_engineer import FeatureEngineer
 from core.ml_detector import MLDetector
 from core.storage import Storage
@@ -58,8 +57,8 @@ async def main() -> int:
             use_heuristic_labels=not args.no_labels,
             contamination=args.contamination,
         )
-    except Exception:
-        logger.error("Invalid training parameters provided.")
+    except (PydanticValidationError, ValueError) as exc:
+        logger.error(f"Invalid training parameters provided: {exc}")
         return 1
 
     try:
@@ -67,8 +66,9 @@ async def main() -> int:
         return 0
     except WashTradeError as exc:
         logger.error(f"Training failed: {exc}")
-    except Exception:
-        logger.error("Unexpected error during training.")
+    except Exception as exc:
+        logger.error(f"Unexpected error during training: {exc}")
+        logger.debug("Stack trace:", exc_info=True)
     return 1
 
 if __name__ == "__main__":
