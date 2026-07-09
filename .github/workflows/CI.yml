@@ -45,11 +45,15 @@ jobs:
           fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
+      # For pull_request events the checkout only fetches the PR ref, so a bare
+      # branch name like "main" doesn't resolve locally; use the event's own
+      # base/head SHAs instead (falls back to a full-history diff on push events,
+      # where github.event.before is empty on a branch's first push).
       - uses: trufflesecurity/trufflehog@00155c9dc586f34d189adc83d3ac2698c2ec551f # v3.95.8
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           extra_args: --debug --only-verified
 
       - name: check forbidden files
@@ -78,19 +82,20 @@ jobs:
 
       - name: install dependencies
         run: |
-          pip install pip-audit safety
+          pip install --upgrade pip
+          pip install -e ".[dev]"
 
       - name: pip-audit scan
         run: |
           pip-audit --format=json --output=pip-audit.json || true
 
-      - name: safety scan
-        run: |
-          safety scan --json --output safety.json || true
+      # Note: `safety scan` (the current safety-cli command) requires an interactive
+      # Safety Platform login/API key and cannot run unattended without one being
+      # configured as a secret; pip-audit above already covers dependency CVE scanning
+      # without that requirement, so we don't run safety here.
 
       - name: generate sbom
         run: |
-          pip install cyclonedx-bom
           cyclonedx-py environment --output-format json --output-file sbom.json
 
       - uses: actions/upload-artifact@v4
@@ -99,7 +104,6 @@ jobs:
           name: dependency-reports
           path: |
             pip-audit.json
-            safety.json
             sbom.json
           retention-days: 90
 
@@ -121,7 +125,8 @@ jobs:
 
       - name: install dependencies
         run: |
-          pip install ruff mypy bandit
+          pip install --upgrade pip
+          pip install -e ".[dev]"
 
       - name: ruff fix
         run: ruff check . --fix
@@ -146,7 +151,7 @@ jobs:
         run: mypy . --ignore-missing-imports || true
 
       - name: bandit security scan
-        run: bandit -r . -f json -o bandit.json || true
+        run: bandit -c pyproject.toml -r core config models scripts -f json -o bandit.json || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -172,9 +177,22 @@ jobs:
 
       - name: install project
         run: |
+          pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: run tests
+        # Settings() is a required-field pydantic model instantiated at import time,
+        # so merely collecting the test modules needs these present. Values are
+        # test-only placeholders - nothing here talks to a real database or chain;
+        # every test that touches Storage/web3 mocks them out.
+        env:
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: wash_detector_test
+          DATABASE_USER: test
+          DATABASE_PASSWORD: test-password-not-a-secret
+          DATABASE_SSL_MODE: disable
+          ETH_RPC_URL: http://localhost:8545
         run: |
           pytest tests/ \
             -v \

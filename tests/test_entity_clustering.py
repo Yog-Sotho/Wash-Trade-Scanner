@@ -81,3 +81,158 @@ async def test_cluster_addresses_no_edges_yields_no_clusters(clusterer):
 
     assert clusters == []
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_node_supports_trace_filter_true(clusterer):
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(return_value={"result": []})
+    assert await clusterer._node_supports_trace_filter(web3) is True
+
+
+@pytest.mark.asyncio
+async def test_node_supports_trace_filter_false(clusterer):
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(side_effect=RuntimeError("method not found"))
+    assert await clusterer._node_supports_trace_filter(web3) is False
+
+
+ALICE = "0x" + "1" * 40
+BOB = "0x" + "2" * 40
+CAROL = "0x" + "3" * 40
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_edges_trace_filter(clusterer):
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(
+        return_value={
+            "result": [
+                {
+                    "action": {
+                        "from": ALICE,
+                        "to": BOB,
+                        "value": "0x64",  # 100 wei
+                    }
+                },
+                {
+                    "action": {
+                        "from": ALICE,
+                        "to": CAROL,
+                        "value": "0x0",  # zero-value transfer, should be skipped
+                    }
+                },
+            ]
+        }
+    )
+
+    edges = await clusterer._fetch_funding_edges_trace_filter(
+        web3, {ALICE, BOB}, from_block=1, to_block=100
+    )
+
+    assert edges == [(ALICE.lower(), BOB.lower(), 100)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_edges_trace_filter_raises_on_failure(clusterer):
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(side_effect=RuntimeError("rpc error"))
+
+    with pytest.raises(RuntimeError):
+        await clusterer._fetch_funding_edges_trace_filter(web3, {ALICE}, from_block=1, to_block=100)
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_edges_block_scan(clusterer):
+    web3 = AsyncMock()
+    web3.eth.get_block = AsyncMock(
+        return_value={
+            "transactions": [
+                {"from": "0xAlice", "to": "0xBob", "value": 500},
+                {"from": "0xStranger", "to": "0xNobody", "value": 999},  # unrelated, skipped
+                "0xnot-a-dict-should-be-skipped",
+            ]
+        }
+    )
+
+    edges = await clusterer._fetch_funding_edges_block_scan(
+        web3, {"0xalice", "0xbob"}, from_block=1, to_block=1
+    )
+
+    assert edges == [("0xalice", "0xbob", 500)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_edges_block_scan_handles_block_error(clusterer):
+    web3 = AsyncMock()
+    web3.eth.get_block = AsyncMock(side_effect=RuntimeError("boom"))
+
+    edges = await clusterer._fetch_funding_edges_block_scan(
+        web3, {"0xalice"}, from_block=1, to_block=1
+    )
+    assert edges == []
+
+
+@pytest.mark.asyncio
+async def test_build_funding_graph_no_addresses(clusterer):
+    graph = await clusterer.build_funding_graph(1, [], session=AsyncMock())
+    assert graph.number_of_nodes() == 0
+
+
+@pytest.mark.asyncio
+async def test_build_funding_graph_uses_trace_filter(clusterer):
+    with patch("core.entity_clustering.AsyncWeb3") as MockWeb3:
+        web3 = AsyncMock()
+        web3.eth.block_number = 1000
+        MockWeb3.return_value = web3
+        MockWeb3.AsyncHTTPProvider = MagicMock()
+
+        with (
+            patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+            patch.object(
+                clusterer,
+                "_fetch_funding_edges_trace_filter",
+                AsyncMock(return_value=[("0xalice", "0xbob", 100)]),
+            ),
+        ):
+            graph = await clusterer.build_funding_graph(
+                1,
+                ["0xalice", "0xbob"],
+                session=AsyncMock(),
+                from_block_override=0,
+                to_block_override=1000,
+            )
+
+    assert graph.has_edge("0xalice", "0xbob")
+    assert graph.number_of_nodes() == 2
+
+
+@pytest.mark.asyncio
+async def test_build_funding_graph_falls_back_to_block_scan(clusterer):
+    with patch("core.entity_clustering.AsyncWeb3") as MockWeb3:
+        web3 = AsyncMock()
+        MockWeb3.return_value = web3
+        MockWeb3.AsyncHTTPProvider = MagicMock()
+
+        with (
+            patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+            patch.object(
+                clusterer,
+                "_fetch_funding_edges_trace_filter",
+                AsyncMock(side_effect=RuntimeError("trace_filter unsupported mid-scan")),
+            ),
+            patch.object(
+                clusterer,
+                "_fetch_funding_edges_block_scan",
+                AsyncMock(return_value=[("0xalice", "0xbob", 50)]),
+            ),
+        ):
+            graph = await clusterer.build_funding_graph(
+                1,
+                ["0xalice", "0xbob"],
+                session=AsyncMock(),
+                from_block_override=0,
+                to_block_override=1,
+            )
+
+    assert graph.has_edge("0xalice", "0xbob")
