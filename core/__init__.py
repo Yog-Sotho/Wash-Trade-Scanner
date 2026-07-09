@@ -1,9 +1,9 @@
-from .storage import Storage
-from .ingestor import MultiChainIngestor, ChainIngestor
+from .entity_clustering import EntityClusterer
 from .feature_engineer import FeatureEngineer
 from .heuristics import HeuristicDetector
+from .ingestor import ChainIngestor, MultiChainIngestor
 from .ml_detector import MLDetector
-from .entity_clustering import EntityClusterer
+from .storage import Storage
 
 __all__ = [
     "Storage",

@@ -2,12 +2,14 @@
 Unit tests for heuristic detectors using configurable thresholds.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
-from models.schemas import SwapTrade
+import pytest
+
 from core.heuristics import HeuristicDetector
+from models.schemas import SwapTrade
+
 
 @pytest.fixture
 def detector():

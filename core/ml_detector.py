@@ -5,21 +5,19 @@ With SHAP explainability support.
 
 import logging
 import os
-from typing import List, Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
 from scipy.special import expit, logit
-from sqlalchemy import select, and_
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-from models.schemas import SwapTrade
+from config.settings import settings
+from core.exceptions import InsufficientDataError, ModelNotTrainedError
 from core.feature_engineer import FeatureEngineer
 from core.storage import Storage
-from core.exceptions import ModelNotTrainedError, InsufficientDataError
-from config.settings import settings
+from models.schemas import SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +28,7 @@ class MLDetector:
     def __init__(self, storage: Storage, feature_engineer: FeatureEngineer):
         self.storage = storage
         self.feature_engineer = feature_engineer
-        self.model: Optional[Pipeline] = None
+        self.model: Pipeline | None = None
         self.is_trained = False
         self.feature_columns = [
             "volume_usd",
@@ -67,9 +65,9 @@ class MLDetector:
     async def train(
         self,
         chain_id: int,
-        pool_addresses: List[str],
+        pool_addresses: list[str],
         use_heuristic_labels: bool = True,
-        contamination: Optional[float] = None,
+        contamination: float | None = None,
     ) -> None:
         """Train ML model on pool data."""
         if contamination is None:
@@ -77,8 +75,8 @@ class MLDetector:
 
         logger.info(f"Training ML model on {len(pool_addresses)} pools (contamination={contamination})")
 
-        all_features: List[np.ndarray] = []
-        all_labels: List[int] = []
+        all_features: list[np.ndarray] = []
+        all_labels: list[int] = []
 
         async with await self.storage.get_session() as session:
             for pool in pool_addresses:
@@ -135,7 +133,7 @@ class MLDetector:
         self,
         features_df: pd.DataFrame,
         idx: int,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Explain a single prediction using feature importance approximation.
         Optimized to use batch prediction for perturbed inputs.
@@ -180,9 +178,9 @@ class MLDetector:
         chain_id: int,
         pool_address: str,
         threshold: float = 0.8,
-        contamination: Optional[float] = None,
-        trades: Optional[List[SwapTrade]] = None,
-    ) -> List[SwapTrade]:
+        contamination: float | None = None,
+        trades: list[SwapTrade] | None = None,
+    ) -> list[SwapTrade]:
         """Detect wash trades using ML model."""
         async with await self.storage.get_session() as session:
             if trades is None:
@@ -213,7 +211,7 @@ class MLDetector:
 
             return wash_trades
 
-    def save_model(self, path: Optional[str] = None) -> None:
+    def save_model(self, path: str | None = None) -> None:
         """Save trained model to disk."""
         if not self.is_trained:
             raise ModelNotTrainedError("No trained model to save")
@@ -227,7 +225,7 @@ class MLDetector:
         }, save_path)
         logger.info(f"Model saved to {save_path}")
 
-    def load_model(self, path: Optional[str] = None) -> None:
+    def load_model(self, path: str | None = None) -> None:
         """Load trained model from disk."""
         import joblib
         load_path = path or settings.ML_MODEL_PATH

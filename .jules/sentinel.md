@@ -34,3 +34,8 @@
 **Vulnerability:** The `EntityClusterer` lacked the same security protections as `ChainIngestor`, specifically missing RPC protocol validation, Chain ID verification, and block range limit enforcement. This allowed insecure protocols and potential resource exhaustion (DoS) through unbounded block scans.
 **Learning:** Security controls must be applied consistently across all components that interact with external resources or perform heavy operations. Modularizing shared validation logic is better than duplicating checks.
 **Prevention:** When introducing new data-fetching components, audit them against the security checklist of existing components (e.g., RPC validation, DoS limits, credential masking).
+
+## 2026-07-08 - Information leakage via exception messages
+**Vulnerability:** raw RPC URLs (which often contain API keys) and internal stack traces were exposed in exception messages and standard CLI output.
+**Learning:** Even if a field is a `SecretStr`, explicitly including the variable in a `ValueError` or using `logger.exception` can bypass masking and leak secrets or internal paths.
+**Prevention:** Sanitize all exception messages that involve credentials to use non-sensitive identifiers (like chain names). Use `logger.error` for high-level errors and reserve `logger.debug(..., exc_info=True)` for full stack traces to prevent internal disclosure in standard logs.

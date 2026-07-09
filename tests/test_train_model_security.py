@@ -1,8 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from core.validators import TrainingParameters
-from scripts.train_model import train_model, main
+
+import pytest
+
 from core.exceptions import WashTradeError
+from core.validators import TrainingParameters
+from scripts.train_model import main, train_model
+
 
 @pytest.mark.asyncio
 async def test_train_model_success(mocker):

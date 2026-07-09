@@ -2,9 +2,12 @@
 Tests for the audit runner.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from scripts.run_audit import validate_address, run_audit
+
+import pytest
+
+from scripts.run_audit import run_audit, validate_address
+
 
 def test_validate_address_valid():
     validate_address("0x" + "a"*40)
