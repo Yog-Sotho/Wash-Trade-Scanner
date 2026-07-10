@@ -22,7 +22,7 @@ format: ## Auto-format code
 	ruff format .
 
 security: ## Run security scans (matches CI: bandit + pip-audit)
-	bandit -c pyproject.toml -r core config models scripts
+	bandit -c pyproject.toml -r api core config models scripts
 	pip-audit
 
 clean: ## Remove build artifacts

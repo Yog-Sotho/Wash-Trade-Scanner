@@ -39,6 +39,8 @@ dependencies = [
    "redis>=5.0.0,<6.0.0",
    "python-json-logger>=2.0.0,<3.0.0",
    "tqdm>=4.66.0,<5.0.0",
+   "fastapi>=0.110.0,<1.0.0",
+   "uvicorn>=0.29.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -58,14 +60,17 @@ dev = [
    "safety>=3.0.0",
    "bandit>=1.7.7",
    "cyclonedx-bom>=4.0.0",
+   "httpx>=0.27.0",
 ]
 
 [project.scripts]
 wash-audit = "scripts.run_audit:cli"
 wash-train = "scripts.train_model:cli"
+wash-api = "api.server:cli"
+wash-genkey = "scripts.generate_api_key:cli"
 
 [tool.setuptools.packages.find]
-include = ["config*", "core*", "models*", "scripts*"]
+include = ["api*", "config*", "core*", "models*", "scripts*"]
 
 [tool.ruff]
 line-length = 100

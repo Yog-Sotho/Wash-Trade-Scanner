@@ -71,6 +71,26 @@ Research‑grade detectors in `core/advanced_heuristics.py`:
 | `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount by a sender before flagging                   | `5`          |
 | `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3`          |
 
+## API Server
+
+| Variable                    | Description                                                        | Default     |
+|-----------------------------|--------------------------------------------------------------------|-------------|
+| `API_HOST`                  | Bind address; non-loopback requires auth (enforced at startup)     | `127.0.0.1` |
+| `API_PORT`                  | Bind port                                                          | `8000`      |
+| `API_AUTH_ENABLED`          | Require `X-API-Key` on all API routes and websockets               | `false`     |
+| `API_KEY_HASHES`            | Comma-separated SHA-256 hashes of accepted keys (`wash-genkey`)    | (empty)     |
+| `API_CORS_ORIGINS`          | Comma-separated allowed CORS origins (empty = CORS disabled)       | (empty)     |
+| `API_RATE_LIMIT_PER_MINUTE` | Per-client-IP request budget                                       | `120`       |
+| `API_DOCS_ENABLED`          | Serve interactive docs at `/docs`                                  | `true`      |
+| `API_HSTS_ENABLED`          | Emit `Strict-Transport-Security` (enable behind TLS proxy only)    | `false`     |
+
+## Real-Time Monitor
+
+| Variable                        | Description                                    | Default |
+|---------------------------------|------------------------------------------------|---------|
+| `MONITOR_POLL_INTERVAL_SECONDS` | Chain-head poll cadence for websocket monitors | `12`    |
+| `MONITOR_WINDOW_MINUTES`        | Rolling detection window size                  | `60`    |
+
 ## Logging
 
 `LOG_LEVEL` – Standard Python logging levels. Default `INFO`.

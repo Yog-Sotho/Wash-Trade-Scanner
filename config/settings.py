@@ -108,6 +108,23 @@ class Settings(BaseSettings):
     # Data Retention
     TRADE_RETENTION_DAYS: int = Field(90, ge=1, le=3650)
 
+    # API Server — binds to loopback by default; opening it to the internet
+    # requires auth to be enabled (enforced at startup).
+    API_HOST: str = Field("127.0.0.1")
+    API_PORT: int = Field(8000, ge=1, le=65535)
+    API_AUTH_ENABLED: bool = Field(False)
+    # Comma-separated SHA-256 hex digests of accepted API keys. Plaintext keys
+    # are never stored; generate a key + hash pair with `wash-genkey`.
+    API_KEY_HASHES: str = Field("")
+    API_CORS_ORIGINS: str = Field("", description="Comma-separated allowed origins")
+    API_RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, le=100000)
+    API_DOCS_ENABLED: bool = Field(True)
+    API_HSTS_ENABLED: bool = Field(False)
+
+    # Real-time Monitor
+    MONITOR_POLL_INTERVAL_SECONDS: float = Field(12.0, ge=1.0, le=3600.0)
+    MONITOR_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
+
     # Logging
     LOG_LEVEL: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
@@ -147,6 +164,20 @@ class Settings(BaseSettings):
         if not self.BOT_ALLOWLIST:
             return set()
         return {addr.strip().lower() for addr in self.BOT_ALLOWLIST.split(",") if addr.strip()}
+
+    @property
+    def api_key_hash_set(self) -> set[str]:
+        """Parse configured API key hashes into a lowercase set."""
+        if not self.API_KEY_HASHES:
+            return set()
+        return {h.strip().lower() for h in self.API_KEY_HASHES.split(",") if h.strip()}
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse allowed CORS origins."""
+        if not self.API_CORS_ORIGINS:
+            return []
+        return [o.strip() for o in self.API_CORS_ORIGINS.split(",") if o.strip()]
 
     @property
     def rpc_urls(self) -> dict[int, str]:

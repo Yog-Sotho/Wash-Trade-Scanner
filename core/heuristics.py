@@ -290,34 +290,19 @@ class HeuristicDetector:
         logger.info(f"Detected {len(wash_trades)} wash cluster trades")
         return wash_trades
 
-    async def run_all_heuristics(
+    async def run_detectors_on_trades(
         self,
-        chain_id: int,
-        pool_address: str,
+        trades: list[SwapTrade],
         session: AsyncSession,
+        clusters: list[AddressCluster] | None = None,
     ) -> tuple[list[SwapTrade], dict[str, int]]:
-        """Run all heuristic detectors and return combined results."""
-        trades_stmt = (
-            select(SwapTrade)
-            .where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
-                )
-            )
-            .order_by(SwapTrade.block_timestamp)
-        )
-        trades_result = await session.execute(trades_stmt)
-        trades = list(trades_result.scalars().all())
+        """Run every detector over an in-memory trade list.
 
+        Used both for full-pool audits and for the rolling window of the
+        real-time monitor.
+        """
         if not trades:
             return [], {}
-
-        clusters_stmt = select(AddressCluster).where(
-            AddressCluster.cluster_id.like(f"{chain_id}:%")
-        )
-        clusters_result = await session.execute(clusters_stmt)
-        clusters = list(clusters_result.scalars().all())
 
         all_wash_trades: list[SwapTrade] = []
         stats: dict[str, int] = {}
@@ -344,3 +329,34 @@ class HeuristicDetector:
 
         unique_wash_trades = list({t.id: t for t in all_wash_trades}.values())
         return unique_wash_trades, stats
+
+    async def run_all_heuristics(
+        self,
+        chain_id: int,
+        pool_address: str,
+        session: AsyncSession,
+    ) -> tuple[list[SwapTrade], dict[str, int]]:
+        """Run all heuristic detectors over a pool's stored trades."""
+        trades_stmt = (
+            select(SwapTrade)
+            .where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
+            )
+            .order_by(SwapTrade.block_timestamp)
+        )
+        trades_result = await session.execute(trades_stmt)
+        trades = list(trades_result.scalars().all())
+
+        if not trades:
+            return [], {}
+
+        clusters_stmt = select(AddressCluster).where(
+            AddressCluster.cluster_id.like(f"{chain_id}:%")
+        )
+        clusters_result = await session.execute(clusters_stmt)
+        clusters = list(clusters_result.scalars().all())
+
+        return await self.run_detectors_on_trades(trades, session, clusters)

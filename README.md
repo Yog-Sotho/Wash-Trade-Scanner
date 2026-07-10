@@ -18,6 +18,7 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
 - **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
 - **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
+- **REST API + WebSocket streaming** – `wash-api` serves on‑demand audits, risk reports and **live streaming detection** over websockets; hardened with hashed API‑key auth, per‑IP rate limiting and security headers (see [docs/api.md](docs/api.md)).
 - **Real‑time Monitoring** – HTTP‑based listeners with circuit breaker protection.
 - **Full Audit Reports** – JSON/CSV export.
 - **Production‑Ready** – Retry logic, rate limiting, circuit breaker, graceful shutdown, input validation, SSL/TLS enforcement.
@@ -128,6 +129,7 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 
 - [Installation](docs/installation.md)
 - [Configuration Reference](docs/configuration.md)
+- [API & Real-Time Monitoring](docs/api.md)
 - [Architecture Overview](docs/architecture.md)
 - [Security Guide](docs/security.md)
 
@@ -142,6 +144,21 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 - Database SSL/TLS enforcement
 - Secret scanning and dependency audit in CI
 - See `docs/security.md` for full details
+
+## API Server & Live Monitoring
+
+Start the API (binds `127.0.0.1:8000` by default):
+
+    wash-api
+
+Stream live detections for a pool over websocket:
+
+    /api/v1/ws/monitor/{chain_id}/{pool_address}
+
+To expose the API beyond localhost you must enable authentication — generate
+a key with `wash-genkey`, set `API_AUTH_ENABLED=true` and `API_KEY_HASHES`;
+the server refuses to bind a public interface otherwise. Full reference:
+[docs/api.md](docs/api.md).
 
 ## Export & Reporting
 

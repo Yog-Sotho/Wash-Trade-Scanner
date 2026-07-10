@@ -151,7 +151,7 @@ jobs:
         run: mypy . --ignore-missing-imports || true
 
       - name: bandit security scan
-        run: bandit -c pyproject.toml -r core config models scripts -f json -o bandit.json || true
+        run: bandit -c pyproject.toml -r api core config models scripts -f json -o bandit.json || true
 
       - uses: actions/upload-artifact@v4
         if: always()
