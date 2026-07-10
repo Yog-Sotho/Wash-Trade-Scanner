@@ -235,10 +235,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker/OCI image references must be lowercase; github.repository preserves
+      # the repo's actual case ("Yog-Sotho/Wash-Trade-Scanner"), so computing this
+      # once here and reusing it (rather than lowercasing independently wherever
+      # a tag is needed) keeps the built image and the trivy scan target in sync.
+      - name: compute image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=sha,format=long
             type=ref,event=branch
@@ -261,7 +269,7 @@ jobs:
       - name: trivy scan
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          image-ref: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
 
