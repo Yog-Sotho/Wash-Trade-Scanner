@@ -1,8 +1,11 @@
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from core.ingestor import ChainIngestor
 from core.storage import Storage
+
 
 @pytest.mark.asyncio
 async def test_connect_protocol_validation():

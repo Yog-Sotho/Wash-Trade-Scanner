@@ -3,18 +3,18 @@ Feature engineering for wash trade detection.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from collections import defaultdict
 from bisect import bisect_left, bisect_right
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select, and_, or_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.schemas import SwapTrade
 from core.storage import Storage
+from models.schemas import SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ class FeatureEngineer:
         self,
         trade: SwapTrade,
         session: AsyncSession,
-        trade_history: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, float]:
+        trade_history: dict[str, Any] | None = None
+    ) -> dict[str, float]:
         features = {}
         features["volume_usd"] = trade.volume_usd or 0.0
         features["amount_in_usd"] = trade.amount_in_usd or 0.0
@@ -125,8 +125,8 @@ class FeatureEngineer:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
-        trades: Optional[List[SwapTrade]] = None
-    ) -> Dict[str, float]:
+        trades: list[SwapTrade] | None = None
+    ) -> dict[str, float]:
         features = {}
         if trades is None:
             stmt = select(SwapTrade).where(
@@ -209,7 +209,7 @@ class FeatureEngineer:
         features["self_trade_volume"] = self_trade_vol
         return features
 
-    def _get_window_trades(self, ts_list: List[datetime], trades_list: List[SwapTrade], start_ts: datetime, end_ts: datetime) -> List[SwapTrade]:
+    def _get_window_trades(self, ts_list: list[datetime], trades_list: list[SwapTrade], start_ts: datetime, end_ts: datetime) -> list[SwapTrade]:
         """Helper for binary search window lookups."""
         idx_start = bisect_left(ts_list, start_ts)
         idx_end = bisect_left(ts_list, end_ts)
@@ -220,7 +220,7 @@ class FeatureEngineer:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
-        trades: Optional[List[SwapTrade]] = None,
+        trades: list[SwapTrade] | None = None,
     ) -> pd.DataFrame:
         if trades is None:
             stmt = select(SwapTrade).where(
