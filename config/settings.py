@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     API_DOCS_ENABLED: bool = Field(True)
     API_HSTS_ENABLED: bool = Field(False)
 
+    # Web Panel
+    PANEL_ENABLED: bool = Field(True)
+    PANEL_SESSION_TTL_MINUTES: int = Field(720, ge=5, le=43200)
+
     # Real-time Monitor
     MONITOR_POLL_INTERVAL_SECONDS: float = Field(12.0, ge=1.0, le=3600.0)
     MONITOR_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)

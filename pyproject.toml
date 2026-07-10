@@ -72,6 +72,9 @@ wash-genkey = "scripts.generate_api_key:cli"
 [tool.setuptools.packages.find]
 include = ["api*", "config*", "core*", "models*", "scripts*"]
 
+[tool.setuptools.package-data]
+api = ["static/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

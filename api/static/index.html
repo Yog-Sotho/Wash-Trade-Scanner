@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Wash Trade Scanner</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/panel/static/panel.css">
+</head>
+<body>
+  <div id="login-overlay" class="overlay hidden">
+    <form id="login-form" class="login-card">
+      <h1>Wash Trade Scanner</h1>
+      <p class="muted">This server requires an API key.</p>
+      <label for="login-key">API key</label>
+      <input id="login-key" type="password" autocomplete="current-password" placeholder="paste your API key">
+      <button type="submit" class="primary">Sign in</button>
+      <p id="login-error" class="error hidden">Invalid API key.</p>
+    </form>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Wash Trade Scanner</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-view="overview" class="tab active">Overview</button>
+      <button data-view="pool" class="tab">Pool inspector</button>
+      <button data-view="monitor" class="tab">Live monitor</button>
+      <button data-view="audit" class="tab">Audits</button>
+    </nav>
+    <div class="session">
+      <span id="conn-status" class="pill">connecting…</span>
+      <button id="logout-btn" class="ghost hidden">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================================== overview -->
+    <section id="view-overview" class="view">
+      <div class="tiles" id="overview-tiles"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>Wash volume by detection method</h2>
+          <div id="method-chart" class="chart"></div>
+        </div>
+        <div class="card">
+          <h2>Activity by chain</h2>
+          <div class="table-wrap">
+            <table id="chain-table">
+              <thead><tr><th>Chain</th><th>Trades</th><th>Volume</th><th>Wash trades</th><th>Wash volume</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>Top pools by wash volume</h2>
+          <div class="table-wrap">
+            <table id="top-pools-table">
+              <thead><tr><th>Pool</th><th>Chain</th><th>Wash trades</th><th>Wash volume</th><th>Share</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Recent audits</h2>
+          <div class="table-wrap">
+            <table id="recent-audits-table">
+              <thead><tr><th>When</th><th>Pool</th><th>Trades</th><th>Wash</th><th>Duration</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================== pool inspector -->
+    <section id="view-pool" class="view hidden">
+      <form id="pool-form" class="card form-row">
+        <label>Chain ID <input id="pool-chain" type="number" value="1" min="1" required></label>
+        <label class="grow">Pool address <input id="pool-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <label class="check"><input id="pool-wash-only" type="checkbox"> wash only</label>
+        <button type="submit" class="primary">Inspect</button>
+      </form>
+      <div id="pool-results" class="hidden">
+        <div class="tiles" id="pool-tiles"></div>
+        <div class="grid-2">
+          <div class="card">
+            <h2>Wash volume by method</h2>
+            <div id="pool-method-chart" class="chart"></div>
+          </div>
+          <div class="card">
+            <h2>Trades</h2>
+            <div class="table-wrap">
+              <table id="pool-trades-table">
+                <thead><tr><th>Time</th><th>Sender</th><th>Recipient</th><th>Volume</th><th>Flag</th><th>Score</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <button id="pool-prev" class="ghost">‹ Prev</button>
+              <span id="pool-page" class="muted">page 1</span>
+              <button id="pool-next" class="ghost">Next ›</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================== live monitor -->
+    <section id="view-monitor" class="view hidden">
+      <form id="monitor-form" class="card form-row">
+        <label>Chain ID <input id="monitor-chain" type="number" value="1" min="1" required></label>
+        <label class="grow">Pool address <input id="monitor-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <button type="submit" class="primary" id="monitor-toggle">Start monitoring</button>
+      </form>
+      <div class="tiles" id="monitor-tiles"></div>
+      <div class="card">
+        <h2>Event feed</h2>
+        <ul id="monitor-feed" class="feed"></ul>
+      </div>
+    </section>
+
+    <!-- ============================================== audits -->
+    <section id="view-audit" class="view hidden">
+      <form id="audit-form" class="card form-row wrap">
+        <label>Chain ID <input id="audit-chain" type="number" value="1" min="1" required></label>
+        <label class="grow">Pool address <input id="audit-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <label>Start block <input id="audit-start" type="number" min="0" placeholder="auto"></label>
+        <label>End block <input id="audit-end" type="number" min="0" placeholder="latest"></label>
+        <label class="check"><input id="audit-ml" type="checkbox" checked> ML</label>
+        <label class="check"><input id="audit-heuristics" type="checkbox" checked> heuristics</label>
+        <button type="submit" class="primary">Run audit</button>
+      </form>
+      <div class="card">
+        <h2>Task log</h2>
+        <ul id="audit-log" class="feed"></ul>
+      </div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip hidden" role="tooltip"></div>
+  <script src="/panel/static/panel.js"></script>
+</body>
+</html>

@@ -47,6 +47,29 @@ Additional hardening, always on:
 Run the process behind a TLS-terminating reverse proxy (Caddy, nginx,
 Traefik) when exposed publicly — the API itself speaks plain HTTP.
 
+## Web panel
+
+A self-contained dashboard ships with the server at **`/panel`** (no build
+step, no CDN assets - everything is served same-origin under a strict CSP):
+
+- **Overview** - global stats tiles, wash-volume-by-method chart, per-chain
+  activity, top wash pools, recent audits.
+- **Pool inspector** - severity, wash ratio and per-method breakdown for any
+  pool, plus a paginated trade table with a wash-only filter.
+- **Live monitor** - streams the websocket detection feed with alert/stats
+  events in real time.
+- **Audits** - launch background audits and follow task status.
+
+With auth disabled (loopback) the panel needs no login. With
+`API_AUTH_ENABLED=true` it shows a sign-in view: entering an API key calls
+`POST /panel/login`, which verifies the key and sets an **HttpOnly,
+SameSite=Strict session cookie** signed with a per-process HMAC secret and
+expiring after `PANEL_SESSION_TTL_MINUTES` (default 12h; restarting the
+server invalidates all sessions). The cookie authenticates REST calls and
+the websocket alike - browsers cannot attach custom headers to websockets,
+which is why cookie auth exists. Set `PANEL_ENABLED=false` to not serve the
+panel at all.
+
 ## REST endpoints
 
 All endpoints are under `/api/v1` and require `X-API-Key` when auth is

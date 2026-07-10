@@ -18,6 +18,7 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
 - **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
 - **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
+- **Web Panel** – built‑in dashboard at `/panel`: global statistics, per‑method wash‑volume charts, pool inspector, live monitor feed and audit controls; session‑cookie login backed by the API‑key system, dark/light theme, zero external assets.
 - **REST API + WebSocket streaming** – `wash-api` serves on‑demand audits, risk reports and **live streaming detection** over websockets; hardened with hashed API‑key auth, per‑IP rate limiting and security headers (see [docs/api.md](docs/api.md)).
 - **Real‑time Monitoring** – HTTP‑based listeners with circuit breaker protection.
 - **Full Audit Reports** – JSON/CSV export.
@@ -145,11 +146,14 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 - Secret scanning and dependency audit in CI
 - See `docs/security.md` for full details
 
-## API Server & Live Monitoring
+## API Server, Web Panel & Live Monitoring
 
 Start the API (binds `127.0.0.1:8000` by default):
 
     wash-api
+
+Open the dashboard at `http://127.0.0.1:8000/panel` — statistics, charts,
+pool inspection, live monitoring and audit management in the browser.
 
 Stream live detections for a pool over websocket:
 

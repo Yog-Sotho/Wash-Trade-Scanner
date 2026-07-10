@@ -83,6 +83,8 @@ Research‑grade detectors in `core/advanced_heuristics.py`:
 | `API_RATE_LIMIT_PER_MINUTE` | Per-client-IP request budget                                       | `120`       |
 | `API_DOCS_ENABLED`          | Serve interactive docs at `/docs`                                  | `true`      |
 | `API_HSTS_ENABLED`          | Emit `Strict-Transport-Security` (enable behind TLS proxy only)    | `false`     |
+| `PANEL_ENABLED`             | Serve the web panel at `/panel`                                    | `true`      |
+| `PANEL_SESSION_TTL_MINUTES` | Panel session cookie lifetime (minutes)                            | `720`       |
 
 ## Real-Time Monitor
 
