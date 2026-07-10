@@ -15,12 +15,30 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
+from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from api.auth import authorize_websocket, require_api_key
+from api.auth import (
+    SESSION_COOKIE,
+    authorize_websocket,
+    create_session_token,
+    require_api_key,
+    verify_api_key,
+)
 from api.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from config.settings import settings
 from core.realtime_monitor import RealtimeMonitor
@@ -33,6 +51,11 @@ logger = logging.getLogger(__name__)
 
 API_VERSION = "1"
 PREFIX = f"/api/v{API_VERSION}"
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+class LoginRequest(BaseModel):
+    api_key: str = ""
 
 
 def _validated_pool(pool_address: str) -> str:
@@ -176,6 +199,72 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         if entry is None:
             raise HTTPException(status_code=404, detail="Unknown audit task")
         return {k: v for k, v in entry.items() if k != "task"}
+
+    @app.get(f"{PREFIX}/stats/overview", dependencies=[Depends(require_api_key)])
+    async def stats_overview() -> dict[str, Any]:
+        """Dashboard aggregates: totals, per-method/per-chain breakdowns,
+        top wash pools and recent audit runs."""
+        storage = get_storage()
+        stats = await storage.get_global_stats()
+        stats["top_wash_pools"] = await storage.get_top_wash_pools()
+        stats["recent_audits"] = [
+            {
+                "id": log.id,
+                "chain_id": log.chain_id,
+                "pool_address": log.pool_address,
+                "trades_processed": log.trades_processed,
+                "wash_trades_detected": log.wash_trades_detected,
+                "duration_seconds": log.detection_duration_seconds,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "results_summary": log.results_summary,
+            }
+            for log in await storage.get_recent_audit_logs()
+        ]
+        return stats
+
+    # ------------------------------------------------------------- panel
+
+    @app.post("/panel/login")
+    async def panel_login(body: LoginRequest, response: Response) -> dict[str, bool]:
+        """Exchange an API key for an HttpOnly session cookie.
+
+        With auth disabled (local mode) the login always succeeds so the
+        panel works out of the box on loopback.
+        """
+        if settings.API_AUTH_ENABLED and not verify_api_key(body.api_key):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        response.set_cookie(
+            SESSION_COOKIE,
+            create_session_token(),
+            max_age=settings.PANEL_SESSION_TTL_MINUTES * 60,
+            httponly=True,
+            samesite="strict",
+            secure=settings.API_HSTS_ENABLED,
+            path="/",
+        )
+        return {"authenticated": True}
+
+    @app.post("/panel/logout")
+    async def panel_logout(response: Response) -> dict[str, bool]:
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return {"authenticated": False}
+
+    @app.get("/panel/session", dependencies=[Depends(require_api_key)])
+    async def panel_session() -> dict[str, bool]:
+        """Probe used by the panel to decide whether to show the login view.
+
+        Returns 401 (handled client-side) when the caller has no valid
+        credential; succeeding means the current cookie/key is accepted.
+        """
+        return {"authenticated": True, "auth_required": settings.API_AUTH_ENABLED}
+
+    if settings.PANEL_ENABLED and STATIC_DIR.is_dir():
+
+        @app.get("/panel", include_in_schema=False)
+        async def panel_index() -> FileResponse:
+            return FileResponse(STATIC_DIR / "index.html")
+
+        app.mount("/panel/static", StaticFiles(directory=STATIC_DIR), name="panel-static")
 
     @app.websocket(f"{PREFIX}/ws/monitor/{{chain_id}}/{{pool_address}}")
     async def ws_monitor(websocket: WebSocket, chain_id: int, pool_address: str) -> None:

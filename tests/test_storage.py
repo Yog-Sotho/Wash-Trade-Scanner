@@ -258,3 +258,61 @@ async def test_get_address_clusters(storage):
 
     clusters = await storage.get_address_clusters(chain_id=1)
     assert clusters == ["cluster1"]
+
+
+@pytest.mark.asyncio
+async def test_get_global_stats(storage):
+    session = _mock_session(storage)
+
+    totals = MagicMock()
+    totals.one.return_value = (100, 50_000.0, 4, 2)
+    wash = MagicMock()
+    wash.one.return_value = (10, 8_000.0)
+    methods = MagicMock()
+    methods.all.return_value = [("self_trading", 6, 5_000.0), (None, 4, 3_000.0)]
+    chains = MagicMock()
+    chains.all.return_value = [(1, 80, 40_000.0, 8, 6_000.0), (56, 20, 10_000.0, 2, 2_000.0)]
+    session.execute = AsyncMock(side_effect=[totals, wash, methods, chains])
+
+    stats = await storage.get_global_stats()
+
+    assert stats["total_trades"] == 100
+    assert stats["wash_volume_usd"] == 8_000.0
+    assert stats["by_method"]["self_trading"]["trades"] == 6
+    assert stats["by_method"]["unknown"]["volume_usd"] == 3_000.0
+    assert stats["by_chain"][1]["wash_trades"] == 8
+    assert stats["chains_active"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_top_wash_pools(storage):
+    session = _mock_session(storage)
+    rows = MagicMock()
+    rows.all.return_value = [(1, "0xpool", 50, 10_000.0, 5, 4_000.0)]
+    session.execute = AsyncMock(return_value=rows)
+
+    pools = await storage.get_top_wash_pools(limit=5)
+
+    assert pools == [
+        {
+            "chain_id": 1,
+            "pool_address": "0xpool",
+            "trades": 50,
+            "volume_usd": 10_000.0,
+            "wash_trades": 5,
+            "wash_volume_usd": 4_000.0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_recent_audit_logs(storage):
+    session = _mock_session(storage)
+    result = MagicMock()
+    fake_log = MagicMock()
+    result.scalars.return_value.all.return_value = [fake_log]
+    session.execute = AsyncMock(return_value=result)
+
+    logs = await storage.get_recent_audit_logs(limit=5)
+
+    assert logs == [fake_log]

@@ -62,9 +62,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Cache-Control", "no-store")
-        # The interactive docs pages need scripts/styles; everything else is
-        # a JSON API and gets a deny-all policy.
-        if not request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+        path = request.url.path
+        if path.startswith("/panel"):
+            # The panel is fully self-hosted: same-origin scripts/styles only,
+            # websockets for the live monitor, no external requests possible.
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self' ws: wss:; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            )
+        elif not path.startswith(("/docs", "/redoc", "/openapi.json")):
+            # The interactive docs pages need scripts/styles; everything else
+            # is a JSON API and gets a deny-all policy.
             response.headers.setdefault(
                 "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
             )

@@ -236,6 +236,123 @@ class Storage:
             await session.refresh(log)
             return log
 
+    async def get_global_stats(self) -> dict[str, Any]:
+        """Aggregate dashboard statistics across all stored data."""
+        async with await self.get_session() as session:
+            totals_row = (
+                await session.execute(
+                    select(
+                        func.count(SwapTrade.id),
+                        func.coalesce(func.sum(SwapTrade.volume_usd), 0.0),
+                        func.count(func.distinct(SwapTrade.pool_address)),
+                        func.count(func.distinct(SwapTrade.chain_id)),
+                    )
+                )
+            ).one()
+            total_trades, total_volume, pool_count, chain_count = totals_row
+
+            wash_row = (
+                await session.execute(
+                    select(
+                        func.count(SwapTrade.id),
+                        func.coalesce(func.sum(SwapTrade.volume_usd), 0.0),
+                    ).where(SwapTrade.is_wash_trade)
+                )
+            ).one()
+            wash_trades, wash_volume = wash_row
+
+            method_rows = (
+                await session.execute(
+                    select(
+                        SwapTrade.detection_method,
+                        func.count(SwapTrade.id),
+                        func.coalesce(func.sum(SwapTrade.volume_usd), 0.0),
+                    )
+                    .where(SwapTrade.is_wash_trade)
+                    .group_by(SwapTrade.detection_method)
+                )
+            ).all()
+
+            chain_rows = (
+                await session.execute(
+                    select(
+                        SwapTrade.chain_id,
+                        func.count(SwapTrade.id),
+                        func.coalesce(func.sum(SwapTrade.volume_usd), 0.0),
+                        func.count(SwapTrade.id).filter(SwapTrade.is_wash_trade),
+                        func.coalesce(
+                            func.sum(SwapTrade.volume_usd).filter(SwapTrade.is_wash_trade), 0.0
+                        ),
+                    ).group_by(SwapTrade.chain_id)
+                )
+            ).all()
+
+        return {
+            "total_trades": int(total_trades or 0),
+            "total_volume_usd": float(total_volume or 0.0),
+            "pools_tracked": int(pool_count or 0),
+            "chains_active": int(chain_count or 0),
+            "wash_trades": int(wash_trades or 0),
+            "wash_volume_usd": float(wash_volume or 0.0),
+            "by_method": {
+                (method or "unknown"): {"trades": int(count), "volume_usd": float(volume)}
+                for method, count, volume in method_rows
+            },
+            "by_chain": {
+                int(chain): {
+                    "trades": int(count),
+                    "volume_usd": float(volume),
+                    "wash_trades": int(wash_count),
+                    "wash_volume_usd": float(wash_vol),
+                }
+                for chain, count, volume, wash_count, wash_vol in chain_rows
+            },
+        }
+
+    async def get_top_wash_pools(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Pools ranked by flagged wash volume (only pools with detections)."""
+        wash_volume = func.coalesce(
+            func.sum(SwapTrade.volume_usd).filter(SwapTrade.is_wash_trade), 0.0
+        )
+        wash_count = func.count(SwapTrade.id).filter(SwapTrade.is_wash_trade)
+        async with await self.get_session() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        SwapTrade.chain_id,
+                        SwapTrade.pool_address,
+                        func.count(SwapTrade.id),
+                        func.coalesce(func.sum(SwapTrade.volume_usd), 0.0),
+                        wash_count,
+                        wash_volume,
+                    )
+                    .group_by(SwapTrade.chain_id, SwapTrade.pool_address)
+                    .having(wash_count > 0)
+                    .order_by(wash_volume.desc())
+                    .limit(limit)
+                )
+            ).all()
+        return [
+            {
+                "chain_id": int(chain),
+                "pool_address": pool,
+                "trades": int(count),
+                "volume_usd": float(volume),
+                "wash_trades": int(n_wash),
+                "wash_volume_usd": float(v_wash),
+            }
+            for chain, pool, count, volume, n_wash, v_wash in rows
+        ]
+
+    async def get_recent_audit_logs(self, limit: int = 20) -> list[DetectionAuditLog]:
+        """Most recent audit runs, newest first."""
+        async with await self.get_session() as session:
+            stmt = (
+                select(DetectionAuditLog).order_by(DetectionAuditLog.created_at.desc()).limit(limit)
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
     async def get_address_clusters(self, chain_id: int) -> list[AddressCluster]:
         """Retrieve address clusters for a chain."""
         async with await self.get_session() as session:
