@@ -3,7 +3,9 @@ Feature engineering for wash trade detection.
 """
 
 import logging
-from datetime import timedelta
+import math
+from collections import Counter
+from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import and_, select
@@ -13,6 +15,54 @@ from core.storage import Storage
 from models.schemas import SwapTrade
 
 logger = logging.getLogger(__name__)
+
+# Benford's law: expected frequency of each first significant digit 1-9.
+_BENFORD = {d: math.log10(1 + 1 / d) for d in range(1, 10)}
+
+
+def significant_digits(value: float, max_digits: int = 8) -> int:
+    """Count significant digits of a number, capped at `max_digits`.
+
+    Round amounts (1000, 2.5) need few digits; organic on-chain amounts carry
+    long mantissas from AMM pricing. Low values are a wash/bot fingerprint.
+    """
+    if not value or not math.isfinite(value):
+        return 0
+    mantissa = f"{abs(value):.{max_digits - 1}e}".split("e")[0].rstrip("0").replace(".", "")
+    return max(len(mantissa), 1)
+
+
+def benford_deviation(values: list[float]) -> float:
+    """Mean absolute deviation of first-digit frequencies from Benford's law.
+
+    Organic trade amounts follow Benford closely (deviation near 0); fabricated
+    or repeated amounts do not. Returns 0.0 when no usable values exist.
+    """
+    digits = []
+    for v in values:
+        if v and v > 0 and math.isfinite(v):
+            first = int(f"{v:e}"[0])
+            if 1 <= first <= 9:
+                digits.append(first)
+    if not digits:
+        return 0.0
+    counts = Counter(digits)
+    total = len(digits)
+    return sum(abs(counts.get(d, 0) / total - _BENFORD[d]) for d in range(1, 10)) / 9
+
+
+def normalized_hour_entropy(timestamps: list[datetime]) -> float:
+    """Shannon entropy of the hour-of-day distribution, normalized to [0, 1].
+
+    Human trading has diurnal structure (entropy well below 1); wash bots
+    trade uniformly around the clock (entropy near 1).
+    """
+    if not timestamps:
+        return 0.0
+    counts = Counter(ts.hour for ts in timestamps)
+    total = len(timestamps)
+    entropy = -sum((c / total) * math.log2(c / total) for c in counts.values())
+    return entropy / math.log2(24)
 
 
 class FeatureEngineer:
@@ -35,18 +85,27 @@ class FeatureEngineer:
         else:
             features["slippage_ratio"] = 0.0
         one_hour_ago = trade.block_timestamp - timedelta(hours=1)
+        # Fetch a 24h sender window in one query; the 1h stats are derived from
+        # it in Python so this stays a single round-trip.
+        one_day_ago = trade.block_timestamp - timedelta(hours=24)
         stmt = select(SwapTrade).where(
             and_(
                 SwapTrade.chain_id == trade.chain_id,
                 SwapTrade.sender == trade.sender,
-                SwapTrade.block_timestamp >= one_hour_ago,
+                SwapTrade.block_timestamp >= one_day_ago,
                 SwapTrade.block_timestamp < trade.block_timestamp,
             )
         )
         result = await session.execute(stmt)
-        sender_trades = result.scalars().all()
+        sender_trades_24h = result.scalars().all()
+        sender_trades = [t for t in sender_trades_24h if t.block_timestamp >= one_hour_ago]
         features["sender_trade_count_1h"] = len(sender_trades)
         features["sender_volume_1h"] = sum(t.volume_usd or 0 for t in sender_trades)
+        features["sender_trade_count_24h"] = len(sender_trades_24h)
+        features["sender_hour_entropy_24h"] = normalized_hour_entropy(
+            [t.block_timestamp for t in sender_trades_24h] + [trade.block_timestamp]
+        )
+        features["amount_significant_digits"] = significant_digits(trade.amount_in)
         stmt = select(SwapTrade).where(
             and_(
                 SwapTrade.chain_id == trade.chain_id,
@@ -149,6 +208,8 @@ class FeatureEngineer:
         self_trades = df[df["sender"] == df["recipient"]]
         features["self_trade_ratio"] = len(self_trades) / (len(trades) + 1)
         features["self_trade_volume"] = self_trades["volume_usd"].sum()
+        features["benford_deviation"] = benford_deviation([t.amount_in for t in trades])
+        features["hour_entropy"] = normalized_hour_entropy([t.block_timestamp for t in trades])
         return features
 
     async def build_ml_features(

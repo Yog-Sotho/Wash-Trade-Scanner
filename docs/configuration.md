@@ -51,7 +51,25 @@ If an RPC URL contains the placeholder `YOUR_KEY`, the system will raise an erro
 | `BOT_ALLOWLIST`                  | Comma‑separated list of addresses to skip in high‑frequency bot detection   | (empty)   |
 | `BOT_TRADE_TIME_THRESHOLD`       | Maximum average inter‑trade time (seconds) to flag as bot activity          | `60`      |
 | `BOT_VOLUME_CV_THRESHOLD`        | Maximum coefficient of variation in volume to flag as bot activity          | `0.5`     |
-| `Z_SCORE_THRESHOLD`              | Z‑score threshold for volume anomaly detection                              | `3.0`     |
+| `VOLUME_ANOMALY_METHOD`          | Volume anomaly method: `mad`, `iqr`, or `zscore`                            | `mad`     |
+| `VOLUME_ANOMALY_THRESHOLD`       | Anomaly score threshold for the selected method                             | `3.5`     |
+
+## Advanced Detection Parameters
+
+Research‑grade detectors in `core/advanced_heuristics.py`:
+
+| Variable                            | Description                                                                       | Default      |
+|-------------------------------------|-----------------------------------------------------------------------------------|--------------|
+| `POSITION_NEUTRAL_WINDOWS_HOURS`    | Multi‑pass window sizes (hours) for position‑neutral SCC analysis                 | `[1,24,168]` |
+| `POSITION_NEUTRAL_MARGIN`           | Max net‑position change relative to gross volume to call a window position‑neutral | `0.01`       |
+| `POSITION_NEUTRAL_MIN_TRADES`       | Minimum trades in a window before it can be flagged                               | `4`          |
+| `CLOSED_CLUSTER_INTERNAL_RATIO`     | Minimum fraction of a community's volume that must be internal                    | `0.9`        |
+| `CLOSED_CLUSTER_MIN_TRADES`         | Minimum internal trades for a community to be considered                          | `6`          |
+| `CLOSED_CLUSTER_MIN_MEMBERS`        | Minimum community size                                                            | `2`          |
+| `CLOSED_CLUSTER_MAX_MEMBERS`        | Maximum community size                                                            | `50`         |
+| `CLOSED_CLUSTER_BALANCE_TOLERANCE`  | Max per‑member internal in/out volume imbalance                                   | `0.2`        |
+| `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount by a sender before flagging                   | `5`          |
+| `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3`          |
 
 ## Logging
 

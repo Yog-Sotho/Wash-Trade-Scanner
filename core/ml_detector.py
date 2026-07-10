@@ -14,6 +14,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from config.settings import settings
+from core.advanced_heuristics import flag_trade
 from core.exceptions import InsufficientDataError, ModelNotTrainedError
 from core.feature_engineer import FeatureEngineer
 from core.storage import Storage
@@ -39,6 +40,9 @@ class MLDetector:
             "pair_trade_count_1h",
             "reverse_pair_trade_count_1h",
             "time_since_last_sender_trade",
+            "sender_trade_count_24h",
+            "sender_hour_entropy_24h",
+            "amount_significant_digits",
             "gas_price",
             "pool_avg_time_between_trades",
             "pool_total_volume_usd",
@@ -47,6 +51,8 @@ class MLDetector:
             "pool_circular_trade_ratio",
             "pool_max_trades_per_sender",
             "pool_self_trade_ratio",
+            "pool_benford_deviation",
+            "pool_hour_entropy",
         ]
 
     def _build_pipeline(self, contamination: float = settings.ML_CONTAMINATION) -> Pipeline:
@@ -222,10 +228,15 @@ class MLDetector:
             wash_trades = []
             for trade, prob in zip(trades, probabilities, strict=True):
                 if prob >= threshold:
-                    trade.is_wash_trade = True
-                    trade.wash_trade_score = float(prob)
-                    trade.detection_method = "ml_isolation_forest"
+                    # flag_trade keeps a higher-confidence heuristic label if one
+                    # was already persisted for this trade.
+                    flag_trade(trade, float(prob), "ml_isolation_forest")
                     wash_trades.append(trade)
+
+            if wash_trades:
+                # Persist the exact per-trade probabilities rather than leaving
+                # it to callers to re-label with a flat score.
+                await session.commit()
 
             return wash_trades
 

@@ -10,7 +10,16 @@ import pytest
 
 from core.storage import Storage
 from core.validators import AuditParameters, validate_address
-from scripts.run_audit import AuditRunner, main
+from models.schemas import SwapTrade
+from scripts.run_audit import AuditRunner, classify_severity, main
+
+
+def test_classify_severity_levels():
+    assert classify_severity(0.75) == "CRITICAL"
+    assert classify_severity(0.30) == "HIGH"
+    assert classify_severity(0.15) == "MEDIUM"
+    assert classify_severity(0.05) == "LOW"
+    assert classify_severity(0.001) == "MINIMAL"
 
 
 def test_validate_address_valid():
@@ -57,6 +66,72 @@ async def test_run_audit_basic():
         assert result["trades_processed"] == 0
         MockIngestor.return_value.audit_pool.assert_awaited_once()
         runner.storage.create_audit_log.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_audit_reports_severity_and_method_breakdown():
+    from datetime import datetime
+
+    wash = SwapTrade(
+        id=1,
+        chain_id=1,
+        pool_address="0x" + "b" * 40,
+        sender="0x" + "a" * 40,
+        recipient="0x" + "a" * 40,
+        volume_usd=600.0,
+        is_wash_trade=True,
+        wash_trade_score=0.95,
+        detection_method="position_neutral_scc",
+        block_timestamp=datetime(2024, 1, 1, 12, 0, 0),
+    )
+    clean = SwapTrade(
+        id=2,
+        chain_id=1,
+        pool_address="0x" + "b" * 40,
+        sender="0x" + "c" * 40,
+        recipient="0x" + "d" * 40,
+        volume_usd=400.0,
+        is_wash_trade=False,
+        block_timestamp=datetime(2024, 1, 1, 13, 0, 0),
+    )
+
+    with (
+        patch("scripts.run_audit.MultiChainIngestor") as MockIngestor,
+        patch("scripts.run_audit.FeatureEngineer"),
+        patch("scripts.run_audit.HeuristicDetector"),
+        patch("scripts.run_audit.MLDetector") as MockMLDetector,
+        patch("scripts.run_audit.EntityClusterer"),
+    ):
+        MockIngestor.return_value.initialize = AsyncMock()
+        MockIngestor.return_value.audit_pool = AsyncMock(return_value=2)
+        MockMLDetector.return_value.load_model.side_effect = FileNotFoundError
+
+        runner = AuditRunner()
+        runner.storage = AsyncMock(spec=Storage)
+        # get_pool_trades returns newest-first
+        runner.storage.get_pool_trades.return_value = [clean, wash]
+
+        session = AsyncMock()
+        session_cm = AsyncMock()
+        session_cm.__aenter__.return_value = session
+        runner.storage.get_session.return_value = session_cm
+
+        params = AuditParameters(
+            chain_id=1,
+            pool_address="0x" + "b" * 40,
+            use_ml=True,
+            use_heuristics=False,
+        )
+
+        result = await runner.run_audit(params)
+
+    metrics = result["risk_metrics"]
+    assert metrics["wash_trade_volume_usd"] == 600.0
+    assert metrics["wash_trade_volume_ratio"] == pytest.approx(0.6)
+    assert metrics["severity"] == "CRITICAL"
+    assert metrics["wash_volume_by_method"] == {"position_neutral_scc": 600.0}
+    # first_trade_timestamp must be the chronologically earliest trade.
+    assert metrics["first_trade_timestamp"] == wash.block_timestamp
 
 
 @pytest.mark.asyncio

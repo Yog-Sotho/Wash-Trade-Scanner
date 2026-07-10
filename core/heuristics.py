@@ -15,6 +15,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
+from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ class HeuristicDetector:
     def __init__(self) -> None:
         self.confidence_threshold = settings.SUSPICIOUS_ACTIVITY_THRESHOLD
         self.bot_allowlist = _load_allowlist()
+        self.advanced = AdvancedHeuristicDetector()
 
     async def detect_self_trading(
         self,
@@ -112,9 +114,7 @@ class HeuristicDetector:
         wash_trades = []
         for trade in trades:
             if trade.sender.lower() == trade.recipient.lower():
-                trade.is_wash_trade = True
-                trade.wash_trade_score = 1.0
-                trade.detection_method = "self_trading"
+                flag_trade(trade, 1.0, "self_trading")
                 wash_trades.append(trade)
         logger.info(f"Detected {len(wash_trades)} self-trades")
         return wash_trades
@@ -157,9 +157,7 @@ class HeuristicDetector:
                         and window_start <= t.block_timestamp <= window_end
                     ]
                     if reverse_trades:
-                        trade.is_wash_trade = True
-                        trade.wash_trade_score = 0.9
-                        trade.detection_method = "circular_trading"
+                        flag_trade(trade, 0.9, "circular_trading")
                         wash_trades.append(trade)
 
         logger.info(f"Detected {len(wash_trades)} circular trades")
@@ -212,9 +210,7 @@ class HeuristicDetector:
 
             if avg_time < time_threshold and volume_cv < cv_threshold:
                 for trade in sender_trades:
-                    trade.is_wash_trade = True
-                    trade.wash_trade_score = 0.8
-                    trade.detection_method = "high_frequency_bot"
+                    flag_trade(trade, 0.8, "high_frequency_bot")
                     wash_trades.append(trade)
 
         logger.info(f"Detected {len(wash_trades)} bot trades")
@@ -263,9 +259,7 @@ class HeuristicDetector:
                 score = detector.score(vol)
 
                 if detector.is_anomaly(vol, threshold):
-                    trade.is_wash_trade = True
-                    trade.wash_trade_score = min(0.7 + (score - threshold) * 0.05, 1.0)
-                    trade.detection_method = "volume_anomaly"
+                    flag_trade(trade, min(0.7 + (score - threshold) * 0.05, 1.0), "volume_anomaly")
                     wash_trades.append(trade)
 
         logger.info(f"Detected {len(wash_trades)} volume anomalies")
@@ -290,9 +284,7 @@ class HeuristicDetector:
             recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
 
             if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
-                trade.is_wash_trade = True
-                trade.wash_trade_score = 0.95
-                trade.detection_method = "wash_cluster"
+                flag_trade(trade, 0.95, "wash_cluster")
                 wash_trades.append(trade)
 
         logger.info(f"Detected {len(wash_trades)} wash cluster trades")
@@ -333,6 +325,9 @@ class HeuristicDetector:
         detectors = [
             ("self_trading", self.detect_self_trading),
             ("circular_trading", self.detect_circular_trading),
+            ("position_neutral_scc", self.advanced.detect_position_neutral_scc),
+            ("closed_cluster", self.advanced.detect_closed_cluster),
+            ("repeated_amounts", self.advanced.detect_repeated_amounts),
             ("high_frequency_bot", self.detect_high_frequency_bot),
             ("volume_anomaly", self.detect_volume_anomaly),
         ]

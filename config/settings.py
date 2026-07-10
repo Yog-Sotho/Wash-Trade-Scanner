@@ -62,12 +62,32 @@ class Settings(BaseSettings):
 
     # Heuristic Weights
     HEURISTIC_WEIGHTS: dict[str, float] = {
-        "self_trading": 0.30,
-        "circular_trading": 0.25,
-        "high_frequency_bot": 0.20,
-        "volume_anomaly": 0.15,
+        "self_trading": 0.20,
+        "circular_trading": 0.15,
+        "position_neutral_scc": 0.20,
+        "closed_cluster": 0.10,
+        "high_frequency_bot": 0.10,
+        "volume_anomaly": 0.10,
         "wash_cluster": 0.10,
+        "repeated_amounts": 0.05,
     }
+
+    # Position-Neutral SCC Detection (Victor & Weintraud, WWW '21)
+    # Multi-pass windows over which per-trader net position change is evaluated.
+    POSITION_NEUTRAL_WINDOWS_HOURS: list[int] = [1, 24, 168]
+    POSITION_NEUTRAL_MARGIN: float = Field(0.01, ge=0.0, le=0.5)
+    POSITION_NEUTRAL_MIN_TRADES: int = Field(4, ge=2, le=1000)
+
+    # Closed-Cluster Detection (network-based, 2025)
+    CLOSED_CLUSTER_INTERNAL_RATIO: float = Field(0.9, ge=0.5, le=1.0)
+    CLOSED_CLUSTER_MIN_TRADES: int = Field(6, ge=2, le=1000)
+    CLOSED_CLUSTER_MIN_MEMBERS: int = Field(2, ge=2, le=100)
+    CLOSED_CLUSTER_MAX_MEMBERS: int = Field(50, ge=2, le=1000)
+    CLOSED_CLUSTER_BALANCE_TOLERANCE: float = Field(0.2, ge=0.0, le=1.0)
+
+    # Repeated-Amount Fingerprinting
+    REPEATED_AMOUNT_MIN_COUNT: int = Field(5, ge=2, le=1000)
+    REPEATED_AMOUNT_SIG_FIGS: int = Field(3, ge=1, le=8)
 
     # Bot Detection — configurable thresholds
     BOT_TRADE_COUNT_THRESHOLD: int = Field(10, ge=2, le=1000)
