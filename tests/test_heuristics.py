@@ -181,3 +181,49 @@ class TestRobustAnomalyDetector:
         d = RobustAnomalyDetector(method="bogus")
         with pytest.raises(ValueError):
             d.fit([1.0, 2.0])
+
+
+@pytest.mark.asyncio
+async def test_run_all_heuristics_combines_detectors(detector, sample_trades):
+    from unittest.mock import MagicMock
+
+    session = AsyncMock()
+    trades_result = MagicMock()
+    trades_result.scalars.return_value.all.return_value = sample_trades
+    clusters_result = MagicMock()
+    clusters_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(side_effect=[trades_result, clusters_result])
+
+    wash, stats = await detector.run_all_heuristics(1, "0xpool", session)
+
+    # All seven detectors (incl. the research-grade ones) must report stats.
+    assert set(stats) == {
+        "self_trading",
+        "circular_trading",
+        "position_neutral_scc",
+        "closed_cluster",
+        "repeated_amounts",
+        "high_frequency_bot",
+        "volume_anomaly",
+    }
+    assert stats["self_trading"] == 1  # Carol self-trade
+    assert stats["circular_trading"] == 2  # Dave<->Eve round trip
+    ids = {t.id for t in wash}
+    assert {2, 3, 4} <= ids
+    # results are de-duplicated by trade id
+    assert len(ids) == len(wash)
+
+
+@pytest.mark.asyncio
+async def test_run_all_heuristics_no_trades(detector):
+    from unittest.mock import MagicMock
+
+    session = AsyncMock()
+    empty_result = MagicMock()
+    empty_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=empty_result)
+
+    wash, stats = await detector.run_all_heuristics(1, "0xpool", session)
+
+    assert wash == []
+    assert stats == {}

@@ -10,10 +10,14 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 - **Heuristic Detection** with near‑zero false positives:
   - Self‑trading (same sender/recipient)
   - Circular trading (strongly connected components)
+  - **Position‑neutral SCC analysis** (Victor & Weintraud, WWW '21) – multi‑window zero‑net‑position detection
+  - **Closed‑cluster detection** – volume‑balanced collusive trading rings (network‑based, 2025 research)
+  - **Repeated‑amount fingerprinting** – senders recycling identical trade sizes
   - High‑frequency bot patterns (allow‑listable via `BOT_ALLOWLIST`, thresholds configurable)
   - Volume anomaly detection (MAD/IQR/z‑score, method and threshold configurable)
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
-- **Machine Learning** – Isolation Forest with per‑pool contamination control and feature explainability.
+- **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
+- **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
 - **Real‑time Monitoring** – HTTP‑based listeners with circuit breaker protection.
 - **Full Audit Reports** – JSON/CSV export.
 - **Production‑Ready** – Retry logic, rate limiting, circuit breaker, graceful shutdown, input validation, SSL/TLS enforcement.
@@ -87,12 +91,29 @@ Full reference: see `docs/configuration.md`.
 
 ## Detection Methodology
 
+The detection stack layers fast pairwise heuristics, research‑grade graph analysis, statistical fingerprinting, and ML anomaly detection. Every detector assigns a per‑trade confidence score; when several detectors hit the same trade, the highest‑confidence label wins.
+
+### Pairwise & statistical heuristics
+
 1. **Self‑Trading**: `sender == recipient` ⇒ instant wash trade (score 1.0).
-2. **Circular Trading**: Strongly Connected Components in the trade graph with reverse trades within a configurable time window.
-3. **High‑Frequency Bot**: Configurable thresholds (default: >10 trades, average inter‑trade time < 60s, CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored. All thresholds tunable via environment.
-4. **Volume Anomaly**: MAD (default) or IQR on log‑transformed trade volumes within configurable buckets. Z‑score available for backward compatibility. Threshold configurable in settings.
-5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning). Optional due to privacy implications.
-6. **ML Isolation Forest**: Anomaly detection on 16 trade‑level features. Per‑pool contamination control. Feature explainability available via `ML_EXPLAINABILITY=true`.
+2. **Circular Trading**: Strongly Connected Components in the trade graph with reverse trades within a configurable time window (score 0.9).
+3. **High‑Frequency Bot**: Configurable thresholds (default: >10 trades, average inter‑trade time < 60s, CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored. All thresholds tunable via environment (score 0.8).
+4. **Volume Anomaly**: MAD (default) or IQR on log‑transformed trade volumes within configurable buckets. Z‑score available for backward compatibility. Threshold configurable in settings (score ≥ 0.7).
+5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning). Optional due to privacy implications (score 0.95).
+
+### Research‑grade graph detectors (`core/advanced_heuristics.py`)
+
+6. **Position‑Neutral SCC** (score 0.95): implements the method of Victor & Weintraud, [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001) (WWW '21). Within each strongly connected component of the trade graph, multi‑pass time windows (default 1h / 24h / 7d, `POSITION_NEUTRAL_WINDOWS_HOURS`) are scanned for trade sets in which **every participant's net token position change is ≈ zero** (within `POSITION_NEUTRAL_MARGIN`, default 1%) while gross volume is large — the legal definition of wash trading.
+7. **Closed Clusters** (score 0.85): network‑based detection following 2025 research on collusive trading rings — wash traders form *approximately closed clusters* that seldom transact outside the ring. Volume‑weighted communities (greedy modularity) are flagged when their volume is ≥ `CLOSED_CLUSTER_INTERNAL_RATIO` (default 90%) internal **and** each member's internal in/out flow is balanced (`CLOSED_CLUSTER_BALANCE_TOLERANCE`), which separates recycling rings from organic directional flow.
+8. **Repeated Amounts** (score 0.75): senders recycling the same trade size (rounded to `REPEATED_AMOUNT_SIG_FIGS` significant digits) ≥ `REPEATED_AMOUNT_MIN_COUNT` times — a volume‑bot fingerprint; organic flow almost never repeats exact sizes at scale.
+
+### Machine learning
+
+9. **ML Isolation Forest**: anomaly detection on 21 trade‑ and pool‑level features, including statistical fingerprints used by forensic platforms: **Benford's‑law first‑digit deviation** of pool amounts, **amount roundness** (significant‑digit count), and **hour‑of‑day entropy** (humans trade diurnally; wash bots trade uniformly around the clock). Per‑pool contamination control; feature explainability via `ML_EXPLAINABILITY=true`.
+
+### Reporting
+
+Audit reports quantify wash activity, not just count it: wash volume in USD, wash‑volume ratio, a per‑method volume breakdown, and a severity grade (`MINIMAL` → `CRITICAL`) derived from the wash‑volume ratio.
 
 ## Architecture
 

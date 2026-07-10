@@ -1,3 +1,4 @@
+from .advanced_heuristics import AdvancedHeuristicDetector
 from .entity_clustering import EntityClusterer
 from .feature_engineer import FeatureEngineer
 from .heuristics import HeuristicDetector
@@ -9,6 +10,7 @@ __all__ = [
     "Storage",
     "MultiChainIngestor",
     "ChainIngestor",
+    "AdvancedHeuristicDetector",
     "FeatureEngineer",
     "HeuristicDetector",
     "MLDetector",

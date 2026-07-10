@@ -12,6 +12,7 @@ import logging
 import signal
 import sys
 import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,6 +33,19 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def classify_severity(wash_volume_ratio: float) -> str:
+    """Map the wash-trade volume ratio to a human-readable severity level."""
+    if wash_volume_ratio >= 0.5:
+        return "CRITICAL"
+    if wash_volume_ratio >= 0.25:
+        return "HIGH"
+    if wash_volume_ratio >= 0.10:
+        return "MEDIUM"
+    if wash_volume_ratio >= 0.01:
+        return "LOW"
+    return "MINIMAL"
 
 
 class AuditRunner:
@@ -106,7 +120,7 @@ class AuditRunner:
         trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
         logger.info(f"Analyzing {len(trades)} trades")
 
-        wash_trades_detected = 0
+        flagged_trade_ids: set[int] = set()
         detection_methods: list[str] = []
 
         async with await self.storage.get_session() as session:
@@ -124,14 +138,21 @@ class AuditRunner:
                     params.chain_id, params.pool_address, session
                 )
                 if heuristics_wash_trades:
-                    trade_ids = [t.id for t in heuristics_wash_trades]
-                    await self.storage.update_trade_labels(
-                        trade_ids,
-                        is_wash_trade=True,
-                        wash_trade_score=0.8,
-                        detection_method="heuristic",
-                    )
-                    wash_trades_detected += len(heuristics_wash_trades)
+                    # Persist each trade's real detector score and method instead
+                    # of flattening everything to one label.
+                    by_label: dict[tuple[str, float], list[int]] = defaultdict(list)
+                    for t in heuristics_wash_trades:
+                        method = t.detection_method or "heuristic"
+                        score = t.wash_trade_score or 0.8
+                        by_label[(method, score)].append(t.id)
+                        flagged_trade_ids.add(t.id)
+                    for (method, score), trade_ids in by_label.items():
+                        await self.storage.update_trade_labels(
+                            trade_ids,
+                            is_wash_trade=True,
+                            wash_trade_score=score,
+                            detection_method=method,
+                        )
                     detection_methods.extend(stats.keys())
 
             if use_ml:
@@ -140,26 +161,32 @@ class AuditRunner:
                     params.chain_id, params.pool_address, threshold=0.8
                 )
                 if ml_wash_trades:
-                    trade_ids = [t.id for t in ml_wash_trades]
-                    await self.storage.update_trade_labels(
-                        trade_ids,
-                        is_wash_trade=True,
-                        wash_trade_score=0.9,
-                        detection_method="ml",
-                    )
-                    wash_trades_detected += len(ml_wash_trades)
+                    # detect_wash_trades persists per-trade probabilities itself.
+                    flagged_trade_ids.update(t.id for t in ml_wash_trades)
                     detection_methods.append("ml")
 
+        wash_trades_detected = len(flagged_trade_ids)
+
+        # Re-fetch so volume metrics reflect the labels persisted by this run,
+        # not the pre-detection snapshot.
+        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
         total_volume = sum(t.volume_usd or 0 for t in trades)
-        wash_volume = sum(t.volume_usd or 0 for t in trades if t.is_wash_trade)
+        flagged_trades = [t for t in trades if t.is_wash_trade]
+        wash_volume = sum(t.volume_usd or 0 for t in flagged_trades)
+        wash_volume_by_method: dict[str, float] = defaultdict(float)
+        for t in flagged_trades:
+            wash_volume_by_method[t.detection_method or "unknown"] += t.volume_usd or 0
+        wash_volume_ratio = wash_volume / max(total_volume, 1)
 
         risk_metrics = {
-            "overall_risk_score": wash_trades_detected / max(len(trades), 1),
-            "wash_trade_volume_ratio": wash_volume / max(total_volume, 1),
+            "overall_risk_score": len(flagged_trades) / max(len(trades), 1),
+            "wash_trade_volume_ratio": wash_volume_ratio,
+            "severity": classify_severity(wash_volume_ratio),
+            "wash_volume_by_method": dict(wash_volume_by_method),
             "total_trades_analyzed": len(trades),
             "total_volume_usd": total_volume,
             "wash_trade_volume_usd": wash_volume,
-            "first_trade_timestamp": trades[0].block_timestamp if trades else None,
+            "first_trade_timestamp": trades[-1].block_timestamp if trades else None,
         }
 
         duration = time.time() - start_time
@@ -231,6 +258,12 @@ class AuditRunner:
         print(f"Wash Trade Ratio: {risk_metrics['overall_risk_score']:.2%}")
         print(f"Total Volume (USD): ${risk_metrics['total_volume_usd']:,.2f}")
         print(f"Wash Volume (USD): ${risk_metrics['wash_trade_volume_usd']:,.2f}")
+        if "severity" in risk_metrics:
+            print(f"Severity: {risk_metrics['severity']}")
+        for method, volume in sorted(
+            risk_metrics.get("wash_volume_by_method", {}).items(), key=lambda kv: -kv[1]
+        ):
+            print(f"  - {method}: ${volume:,.2f}")
         print(f"Detection Methods: {', '.join(detection_methods)}")
         print(f"Duration: {duration:.2f} seconds")
         print("=" * 60)
