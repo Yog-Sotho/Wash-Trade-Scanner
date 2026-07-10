@@ -16,6 +16,10 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from core.reporting import classify_severity, compute_risk_metrics
+
+__all__ = ["AuditRunner", "classify_severity", "main"]
+
 from pydantic import ValidationError as PydanticValidationError
 
 from config.settings import settings
@@ -33,19 +37,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-def classify_severity(wash_volume_ratio: float) -> str:
-    """Map the wash-trade volume ratio to a human-readable severity level."""
-    if wash_volume_ratio >= 0.5:
-        return "CRITICAL"
-    if wash_volume_ratio >= 0.25:
-        return "HIGH"
-    if wash_volume_ratio >= 0.10:
-        return "MEDIUM"
-    if wash_volume_ratio >= 0.01:
-        return "LOW"
-    return "MINIMAL"
 
 
 class AuditRunner:
@@ -170,24 +161,7 @@ class AuditRunner:
         # Re-fetch so volume metrics reflect the labels persisted by this run,
         # not the pre-detection snapshot.
         trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
-        total_volume = sum(t.volume_usd or 0 for t in trades)
-        flagged_trades = [t for t in trades if t.is_wash_trade]
-        wash_volume = sum(t.volume_usd or 0 for t in flagged_trades)
-        wash_volume_by_method: dict[str, float] = defaultdict(float)
-        for t in flagged_trades:
-            wash_volume_by_method[t.detection_method or "unknown"] += t.volume_usd or 0
-        wash_volume_ratio = wash_volume / max(total_volume, 1)
-
-        risk_metrics = {
-            "overall_risk_score": len(flagged_trades) / max(len(trades), 1),
-            "wash_trade_volume_ratio": wash_volume_ratio,
-            "severity": classify_severity(wash_volume_ratio),
-            "wash_volume_by_method": dict(wash_volume_by_method),
-            "total_trades_analyzed": len(trades),
-            "total_volume_usd": total_volume,
-            "wash_trade_volume_usd": wash_volume,
-            "first_trade_timestamp": trades[-1].block_timestamp if trades else None,
-        }
+        risk_metrics = compute_risk_metrics(trades)
 
         duration = time.time() - start_time
 

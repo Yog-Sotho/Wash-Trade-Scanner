@@ -20,3 +20,4 @@ pip-audit>=2.7.0
 safety>=3.0.0
 bandit>=1.7.7
 cyclonedx-bom>=4.0.0
+httpx>=0.27.0
