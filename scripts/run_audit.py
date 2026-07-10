@@ -4,27 +4,28 @@ Main entry point for auditing a blockchain pool for wash trading.
 With input validation and graceful shutdown.
 """
 
-import asyncio
 import argparse
+import asyncio
 import csv
 import json
 import logging
-import os
 import signal
 import sys
 import time
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from core.ingestor import MultiChainIngestor
-from core.storage import Storage
+from pydantic import ValidationError as PydanticValidationError
+
+from config.settings import settings
+from core.entity_clustering import EntityClusterer
+from core.exceptions import WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
+from core.ingestor import MultiChainIngestor
 from core.ml_detector import MLDetector
-from core.entity_clustering import EntityClusterer
-from core.validators import AuditParameters, validate_address
-from core.exceptions import ValidationError, WashTradeError
-from config.settings import settings
+from core.storage import Storage
+from core.validators import AuditParameters
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -36,9 +37,9 @@ logger = logging.getLogger(__name__)
 class AuditRunner:
     """Manages audit lifecycle with graceful shutdown."""
 
-    def __init__(self):
-        self.storage: Optional[Storage] = None
-        self.ingestor: Optional[MultiChainIngestor] = None
+    def __init__(self) -> None:
+        self.storage: Storage | None = None
+        self.ingestor: MultiChainIngestor | None = None
         self._shutdown_event = asyncio.Event()
 
     async def initialize(self) -> None:
@@ -50,22 +51,28 @@ class AuditRunner:
             await self.storage.close()
             self.storage = None
 
-    def _signal_handler(self, signum: int, frame: Optional[object]) -> None:
+    def _signal_handler(self, signum: int, frame: object | None) -> None:
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self._shutdown_event.set()
+
+    def initialize_signal_handlers(self) -> None:
+        """Register SIGINT/SIGTERM handlers to trigger graceful shutdown."""
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
 
     async def run_audit(
         self,
         params: AuditParameters,
-        export_format: Optional[str] = None,
-        export_path: Optional[str] = None,
-    ) -> dict:
+        export_format: str | None = None,
+        export_path: str | None = None,
+    ) -> dict[str, Any]:
         """Execute full audit pipeline."""
         start_time = time.time()
 
         if self._shutdown_event.is_set():
             raise WashTradeError("Audit cancelled by shutdown signal")
 
+        assert self.storage is not None, "call initialize() first"
         feature_engineer = FeatureEngineer(self.storage)
         heuristic_detector = HeuristicDetector()
         ml_detector = MLDetector(self.storage, feature_engineer)
@@ -85,7 +92,9 @@ class AuditRunner:
         if self._shutdown_event.is_set():
             raise WashTradeError("Audit cancelled by shutdown signal")
 
-        logger.info(f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}")
+        logger.info(
+            f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}"
+        )
         trades_synced = await ingestor.audit_pool(
             chain_id=params.chain_id,
             pool_address=params.pool_address,
@@ -98,10 +107,18 @@ class AuditRunner:
         logger.info(f"Analyzing {len(trades)} trades")
 
         wash_trades_detected = 0
-        detection_methods = []
+        detection_methods: list[str] = []
 
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
+                logger.info("Clustering addresses by funding links...")
+                try:
+                    await entity_clusterer.cluster_addresses(
+                        params.chain_id, params.pool_address, session
+                    )
+                except Exception as exc:
+                    logger.warning(f"Entity clustering skipped: {exc}")
+
                 logger.info("Running heuristic detection...")
                 heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
                     params.chain_id, params.pool_address, session
@@ -175,9 +192,14 @@ class AuditRunner:
 
         if export_format:
             await self._export_results(
-                params, len(trades), wash_trades_detected,
-                risk_metrics, detection_methods, duration,
-                export_format, export_path,
+                params,
+                len(trades),
+                wash_trades_detected,
+                risk_metrics,
+                detection_methods,
+                duration,
+                export_format,
+                export_path,
             )
 
         return {
@@ -196,8 +218,8 @@ class AuditRunner:
         chain_id: int,
         trades_analyzed: int,
         wash_trades: int,
-        risk_metrics: dict,
-        detection_methods: list,
+        risk_metrics: dict[str, Any],
+        detection_methods: list[str],
         duration: float,
     ) -> None:
         print("\n" + "=" * 60)
@@ -218,11 +240,11 @@ class AuditRunner:
         params: AuditParameters,
         trades_processed: int,
         wash_trades_detected: int,
-        risk_metrics: dict,
-        detection_methods: list,
+        risk_metrics: dict[str, Any],
+        detection_methods: list[str],
         duration: float,
         export_format: str,
-        export_path: Optional[str],
+        export_path: str | None,
     ) -> None:
         results = {
             "chain_id": params.chain_id,
@@ -232,7 +254,7 @@ class AuditRunner:
             "risk_metrics": risk_metrics,
             "detection_methods": detection_methods,
             "duration": duration,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         if export_format == "json":
@@ -252,9 +274,6 @@ class AuditRunner:
 
 
 async def main() -> int:
-    signal.signal(signal.SIGINT, lambda s, f: None)
-    signal.signal(signal.SIGTERM, lambda s, f: None)
-
     parser = argparse.ArgumentParser(description="Wash Trade Detection Audit")
     parser.add_argument("--chain-id", type=int, required=True, help="Blockchain chain ID")
     parser.add_argument("--pool", type=str, required=True, help="Pool address to audit")
@@ -275,7 +294,7 @@ async def main() -> int:
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
         )
-    except ValidationError as exc:
+    except PydanticValidationError as exc:
         logger.error(f"Invalid parameters: {exc}")
         return 1
 
@@ -300,5 +319,10 @@ async def main() -> int:
         await runner.cleanup()
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Synchronous entry point for the `wash-audit` console script."""
     sys.exit(asyncio.run(main()))
+
+
+if __name__ == "__main__":
+    cli()

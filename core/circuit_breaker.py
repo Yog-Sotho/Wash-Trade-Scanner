@@ -5,10 +5,11 @@ Circuit breaker pattern for RPC resilience.
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from enum import Enum, auto
-from typing import Any, Callable, Optional
+from typing import Any
 
-from core.exceptions import CircuitBreakerOpen
+from core.exceptions import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,13 @@ class CircuitBreakerConfig:
 class CircuitBreaker:
     """Circuit breaker for protecting RPC calls."""
 
-    def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
+    def __init__(self, name: str, config: CircuitBreakerConfig | None = None):
         self.name = name
         self.config = config or CircuitBreakerConfig()
         self.state = CircuitState.CLOSED
         self.failures = 0
         self.successes = 0
-        self.last_failure_time: Optional[float] = None
+        self.last_failure_time: float | None = None
         self._lock = asyncio.Lock()
 
     async def call(self, coro: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -56,16 +57,19 @@ class CircuitBreaker:
                     self.successes = 0
                     logger.info(f"Circuit {self.name} entering HALF_OPEN")
                 else:
-                    raise CircuitBreakerOpen(f"Circuit {self.name} is OPEN")
+                    raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
 
-            if self.state == CircuitState.HALF_OPEN and self.successes >= self.config.half_open_max_calls:
-                raise CircuitBreakerOpen(f"Circuit {self.name} half-open limit reached")
+            if (
+                self.state == CircuitState.HALF_OPEN
+                and self.successes >= self.config.half_open_max_calls
+            ):
+                raise CircuitBreakerOpenError(f"Circuit {self.name} half-open limit reached")
 
         try:
             result = await coro(*args, **kwargs)
             await self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             await self._on_failure()
             raise
 

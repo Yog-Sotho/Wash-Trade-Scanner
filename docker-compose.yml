@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -22,10 +20,16 @@ services:
     build: .
     container_name: wash_detector_app
     environment:
-      DATABASE_URL: postgresql+asyncpg://wash_user:wash_pass@postgres:5432/wash_detector
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: wash_detector
+      DATABASE_USER: wash_user
+      DATABASE_PASSWORD: wash_pass
+      DATABASE_SSL_MODE: disable
       LOG_LEVEL: INFO
       ML_MODEL_PATH: /app/models/ml_model.pkl
-      COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+      ETH_RPC_URL: ${ETH_RPC_URL:?ETH_RPC_URL must be set to a real RPC endpoint}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
       BOT_ALLOWLIST: ${BOT_ALLOWLIST:-}
     volumes:
       - ./models:/app/models

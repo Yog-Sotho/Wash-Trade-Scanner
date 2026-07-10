@@ -3,17 +3,14 @@ Feature engineering for wash trade detection.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import timedelta
 
-import numpy as np
 import pandas as pd
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.schemas import SwapTrade
 from core.storage import Storage
+from models.schemas import SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +20,18 @@ class FeatureEngineer:
         self.storage = storage
 
     async def compute_trade_features(
-        self,
-        trade: SwapTrade,
-        session: AsyncSession
-    ) -> Dict[str, float]:
-        features = {}
+        self, trade: SwapTrade, session: AsyncSession
+    ) -> dict[str, float]:
+        features: dict[str, float] = {}
+        features["trade_id"] = trade.id
         features["volume_usd"] = trade.volume_usd or 0.0
         features["amount_in_usd"] = trade.amount_in_usd or 0.0
         features["amount_out_usd"] = trade.amount_out_usd or 0.0
         if features["amount_in_usd"] > 0 and features["amount_out_usd"] > 0:
-            features["slippage_ratio"] = abs(
-                features["amount_out_usd"] - features["amount_in_usd"]
-            ) / features["amount_in_usd"]
+            features["slippage_ratio"] = (
+                abs(features["amount_out_usd"] - features["amount_in_usd"])
+                / features["amount_in_usd"]
+            )
         else:
             features["slippage_ratio"] = 0.0
         one_hour_ago = trade.block_timestamp - timedelta(hours=1)
@@ -96,28 +93,34 @@ class FeatureEngineer:
         return features
 
     async def compute_pool_features(
-        self,
-        chain_id: int,
-        pool_address: str,
-        session: AsyncSession
-    ) -> Dict[str, float]:
-        features = {}
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
+        self, chain_id: int, pool_address: str, session: AsyncSession
+    ) -> dict[str, float]:
+        features: dict[str, float] = {}
+        stmt = (
+            select(SwapTrade)
+            .where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
             )
-        ).order_by(SwapTrade.block_timestamp)
+            .order_by(SwapTrade.block_timestamp)
+        )
         result = await session.execute(stmt)
         trades = result.scalars().all()
         if not trades:
             return features
-        df = pd.DataFrame([{
-            "timestamp": t.block_timestamp,
-            "volume_usd": t.volume_usd or 0.0,
-            "sender": t.sender,
-            "recipient": t.recipient,
-        } for t in trades])
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": t.block_timestamp,
+                    "volume_usd": t.volume_usd or 0.0,
+                    "sender": t.sender,
+                    "recipient": t.recipient,
+                }
+                for t in trades
+            ]
+        )
         time_diffs = df["timestamp"].diff().dt.total_seconds().fillna(0)
         features["avg_time_between_trades"] = time_diffs.mean()
         features["std_time_between_trades"] = time_diffs.std()
@@ -131,12 +134,12 @@ class FeatureEngineer:
         features["unique_recipients"] = unique_recipients
         features["trader_diversity"] = (unique_senders + unique_recipients) / (2 * len(trades) + 1)
         circular_count = 0
-        for i, row in df.iterrows():
+        for _i, row in df.iterrows():
             matching = df[
-                (df["sender"] == row["recipient"]) &
-                (df["recipient"] == row["sender"]) &
-                (df["timestamp"] > row["timestamp"]) &
-                (df["timestamp"] <= row["timestamp"] + timedelta(hours=1))
+                (df["sender"] == row["recipient"])
+                & (df["recipient"] == row["sender"])
+                & (df["timestamp"] > row["timestamp"])
+                & (df["timestamp"] <= row["timestamp"] + timedelta(hours=1))
             ]
             circular_count += len(matching)
         features["circular_trade_ratio"] = circular_count / (len(trades) + 1)
@@ -149,17 +152,18 @@ class FeatureEngineer:
         return features
 
     async def build_ml_features(
-        self,
-        chain_id: int,
-        pool_address: str,
-        session: AsyncSession
+        self, chain_id: int, pool_address: str, session: AsyncSession
     ) -> pd.DataFrame:
-        stmt = select(SwapTrade).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
+        stmt = (
+            select(SwapTrade)
+            .where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
             )
-        ).order_by(SwapTrade.block_timestamp)
+            .order_by(SwapTrade.block_timestamp)
+        )
         result = await session.execute(stmt)
         trades = result.scalars().all()
         if not trades:

@@ -3,21 +3,21 @@ Entity clustering based on funding links (ETH transfers).
 Uses node RPC tracing or fallback block scanning to identify addresses controlled by the same entity.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import List, Dict, Set, Optional, Tuple
-from collections import defaultdict
 
 import networkx as nx
-from web3 import AsyncWeb3, Web3
-from web3.types import TxData, TraceFilterParams
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
+from web3 import AsyncWeb3, Web3
+from web3.types import RPCEndpoint, TraceFilterParams
 
-from models.schemas import AddressCluster, SwapTrade
-from core.storage import Storage
 from config.chains import get_chain_config
+from core.storage import Storage
+from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,13 @@ class EntityClusterer:
         try:
             # Test with a small range that is unlikely to return huge data
             test_params = TraceFilterParams(
-                fromBlock=hex(1),
-                toBlock=hex(1),
-                fromAddress=["0x0000000000000000000000000000000000000000"],
+                fromBlock=1,
+                toBlock=1,
+                fromAddress=[
+                    Web3.to_checksum_address("0x0000000000000000000000000000000000000000")
+                ],
             )
-            await web3.provider.make_request("trace_filter", [test_params])
+            await web3.provider.make_request(RPCEndpoint("trace_filter"), [test_params])
             return True
         except Exception:
             return False
@@ -50,30 +52,30 @@ class EntityClusterer:
     async def _fetch_funding_edges_trace_filter(
         self,
         web3: AsyncWeb3,
-        addresses: Set[str],
+        addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> List[Tuple[str, str, int]]:
+    ) -> list[tuple[str, str | None, int]]:
         """
         Use trace_filter to find all ETH transfers (value > 0) involving any of the given addresses.
         Returns list of (from, to, value_in_wei) tuples.
         """
-        edges = []
+        edges: list[tuple[str, str | None, int]] = []
         # Convert addresses to checksum format
         checksum_addresses = [Web3.to_checksum_address(addr) for addr in addresses]
 
         # trace_filter can be heavy; we split addresses into batches if many
         batch_size = 20
         for i in range(0, len(checksum_addresses), batch_size):
-            batch = checksum_addresses[i:i + batch_size]
+            batch = checksum_addresses[i : i + batch_size]
             params = TraceFilterParams(
-                fromBlock=hex(from_block),
-                toBlock=hex(to_block),
+                fromBlock=from_block,
+                toBlock=to_block,
                 fromAddress=batch,
                 toAddress=batch,
             )
             try:
-                traces = await web3.provider.make_request("trace_filter", [params])
+                traces = await web3.provider.make_request(RPCEndpoint("trace_filter"), [params])
                 for trace in traces.get("result", []):
                     action = trace.get("action", {})
                     from_addr = action.get("from")
@@ -90,30 +92,31 @@ class EntityClusterer:
     async def _fetch_funding_edges_block_scan(
         self,
         web3: AsyncWeb3,
-        addresses: Set[str],
+        addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> List[Tuple[str, str, int]]:
+    ) -> list[tuple[str, str | None, int]]:
         """
         Fallback method: scan each block in the range and inspect transaction `value`.
         Much slower but works when tracing is unavailable.
         """
-        edges = []
+        edges: list[tuple[str, str | None, int]] = []
         addresses_lower = {addr.lower() for addr in addresses}
 
         # Scan block by block
         for block_num in range(from_block, to_block + 1):
             try:
                 block = await web3.eth.get_block(block_num, full_transactions=True)
-                for tx in block.transactions:
+                for tx in block["transactions"]:
                     if not isinstance(tx, dict):
                         continue  # In full_transactions mode, it's a dict
                     tx_from = tx.get("from", "").lower()
                     tx_to = tx.get("to", "").lower() if tx.get("to") else None
                     value = tx.get("value", 0)
-                    if value > 0:
-                        if tx_from in addresses_lower or (tx_to and tx_to in addresses_lower):
-                            edges.append((tx_from, tx_to, value))
+                    if value > 0 and (
+                        tx_from in addresses_lower or (tx_to and tx_to in addresses_lower)
+                    ):
+                        edges.append((tx_from, tx_to, value))
             except Exception as e:
                 logger.error(f"Failed to fetch block {block_num}: {e}")
                 continue
@@ -125,24 +128,26 @@ class EntityClusterer:
     async def build_funding_graph(
         self,
         chain_id: int,
-        addresses: List[str],
+        addresses: list[str],
         session: AsyncSession,
-        from_block_override: Optional[int] = None,
-        to_block_override: Optional[int] = None,
-    ) -> nx.DiGraph:
+        from_block_override: int | None = None,
+        to_block_override: int | None = None,
+    ) -> nx.DiGraph[str]:
         """
         Build a directed graph where an edge A -> B exists if A sent ETH to B.
         Uses the most efficient RPC method available.
         """
-        G = nx.DiGraph()
-        addresses_set = set(addr.lower() for addr in addresses)
+        G: nx.DiGraph[str] = nx.DiGraph()
+        addresses_set = {addr.lower() for addr in addresses}
         if not addresses_set:
             return G
 
         chain_config = get_chain_config(chain_id)
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(chain_config.rpc_url))
+        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(chain_config["rpc_url"]))
 
         # Determine block range
+        from_block: int
+        to_block: int
         if from_block_override is None:
             # Use a reasonable starting block (e.g., 1 year ago or chain start)
             # For production, this would be configurable
@@ -183,13 +188,15 @@ class EntityClusterer:
             if from_addr and to_addr:
                 G.add_edge(from_addr, to_addr, value=value)
 
-        logger.info(f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        logger.info(
+            f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges"
+        )
         return G
 
     async def find_connected_components(
         self,
-        graph: nx.DiGraph,
-    ) -> List[Set[str]]:
+        graph: nx.DiGraph[str],
+    ) -> list[set[str]]:
         """
         Find weakly connected components in the funding graph.
         These represent potential entity clusters.
@@ -202,28 +209,36 @@ class EntityClusterer:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
-    ) -> List[AddressCluster]:
+    ) -> list[AddressCluster]:
         """
         Cluster all addresses involved in a pool's trades based on funding relationships.
         """
         # Get all unique addresses from trades in this pool
-        stmt = select(SwapTrade.sender).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
+        senders_stmt = (
+            select(SwapTrade.sender)
+            .where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
             )
-        ).distinct()
-        result = await session.execute(stmt)
-        senders = [r[0] for r in result.fetchall()]
+            .distinct()
+        )
+        senders_result = await session.execute(senders_stmt)
+        senders = [r[0] for r in senders_result.fetchall()]
 
-        stmt = select(SwapTrade.recipient).where(
-            and_(
-                SwapTrade.chain_id == chain_id,
-                SwapTrade.pool_address == pool_address,
+        recipients_stmt = (
+            select(SwapTrade.recipient)
+            .where(
+                and_(
+                    SwapTrade.chain_id == chain_id,
+                    SwapTrade.pool_address == pool_address,
+                )
             )
-        ).distinct()
-        result = await session.execute(stmt)
-        recipients = [r[0] for r in result.fetchall()]
+            .distinct()
+        )
+        recipients_result = await session.execute(recipients_stmt)
+        recipients = [r[0] for r in recipients_result.fetchall()]
 
         all_addresses = list(set(senders + recipients))
 
@@ -237,14 +252,14 @@ class EntityClusterer:
         # Find clusters
         components = await self.find_connected_components(graph)
 
-        clusters = []
+        clusters: list[AddressCluster] = []
         for i, component in enumerate(components):
             cluster_id = f"{chain_id}:{pool_address}:{i}"
 
             # Check if cluster already exists
-            stmt = select(AddressCluster).where(AddressCluster.cluster_id == cluster_id)
-            result = await session.execute(stmt)
-            existing = result.scalar_one_or_none()
+            cluster_stmt = select(AddressCluster).where(AddressCluster.cluster_id == cluster_id)
+            cluster_result = await session.execute(cluster_stmt)
+            existing = cluster_result.scalar_one_or_none()
 
             if existing:
                 existing.addresses = list(component)

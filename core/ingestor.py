@@ -5,19 +5,18 @@ Multi-chain swap event ingestor with circuit breaker protection.
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
 
-from web3 import AsyncWeb3, Web3
-from web3.middleware import async_geth_poa_middleware
-from web3.providers.rpc import AsyncHTTPProvider
-from web3.types import LogReceipt
+from web3 import AsyncHTTPProvider, AsyncWeb3, Web3
+from web3.middleware import async_geth_poa_middleware  # type: ignore[attr-defined]
+from web3.types import EventData, LogReceipt
 
 from config.chains import CHAINS, get_chain_config
 from config.settings import settings
-from core.storage import Storage
 from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
-from core.exceptions import RPCError, CircuitBreakerOpen
+from core.exceptions import CircuitBreakerOpenError, RPCError
+from core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ class RateLimiter:
 
     def __init__(self, max_calls_per_second: int):
         self.max_calls = max_calls_per_second
-        self.calls: List[float] = []
+        self.calls: list[float] = []
         self.lock = asyncio.Lock()
 
     async def acquire(self) -> None:
@@ -45,10 +44,10 @@ class RateLimiter:
 class ChainIngestor:
     """Per-chain blockchain data ingestor."""
 
-    def __init__(self, chain_config: Dict[str, Any], storage: Storage):
+    def __init__(self, chain_config: dict[str, Any], storage: Storage):
         self.chain_config = chain_config
         self.storage = storage
-        self.web3: Optional[AsyncWeb3] = None
+        self.web3: AsyncWeb3 | None = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
         self.circuit_breaker = CircuitBreaker(
             name=f"rpc_{chain_config['chain_id']}",
@@ -59,8 +58,8 @@ class ChainIngestor:
         )
         self.is_running = False
         self.latest_block = 0
-        self.contracts: Dict[str, Any] = {}
-        self._pool_tokens: Dict[str, Tuple[str, str]] = {}
+        self.contracts: dict[str, Any] = {}
+        self._pool_tokens: dict[str, tuple[str, str]] = {}
         self._pool_tokens_lock = asyncio.Lock()
 
     async def connect(self) -> None:
@@ -83,11 +82,12 @@ class ChainIngestor:
             if not connected:
                 raise ConnectionError(f"Failed to connect to {self.chain_config['name']}")
             logger.info(f"Connected to {self.chain_config['name']} via HTTP")
-        except CircuitBreakerOpen as exc:
+        except CircuitBreakerOpenError as exc:
             raise ConnectionError(f"Circuit breaker open for {self.chain_config['name']}") from exc
 
-    async def _get_pool_tokens(self, pool_address: str) -> Tuple[str, str]:
+    async def _get_pool_tokens(self, pool_address: str) -> tuple[str, str]:
         """Fetch token0 and token1 from pool contract with caching."""
+        assert self.web3 is not None
         addr = Web3.to_checksum_address(pool_address)
         async with self._pool_tokens_lock:
             if addr in self._pool_tokens:
@@ -114,7 +114,7 @@ class ChainIngestor:
         try:
             token0 = await self.circuit_breaker.call(contract.functions.token0().call)
             token1 = await self.circuit_breaker.call(contract.functions.token1().call)
-        except (RPCError, CircuitBreakerOpen) as exc:
+        except (RPCError, CircuitBreakerOpenError) as exc:
             logger.error(f"Failed to fetch tokens for {addr}: {exc}")
             token0 = addr
             token1 = addr
@@ -130,14 +130,15 @@ class ChainIngestor:
     async def _get_logs_batch(
         self,
         address: str,
-        topics: List[str],
+        topics: list[str],
         from_block: int,
         to_block: int,
         max_retries: int = 3,
-    ) -> List[LogReceipt]:
+    ) -> list[LogReceipt]:
         """Fetch logs with retry and circuit breaker protection."""
+        assert self.web3 is not None
         batch_size = 1000
-        all_logs = []
+        all_logs: list[LogReceipt] = []
 
         for batch_start in range(from_block, to_block + 1, batch_size):
             batch_end = min(batch_start + batch_size - 1, to_block)
@@ -157,26 +158,28 @@ class ChainIngestor:
                     all_logs.extend(logs)
                     logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
                     break
-                except CircuitBreakerOpen:
-                    logger.error(f"Circuit breaker open, aborting log fetch")
+                except CircuitBreakerOpenError:
+                    logger.error("Circuit breaker open, aborting log fetch")
                     raise
                 except Exception as exc:
                     logger.error(
                         f"Error fetching logs {batch_start}-{batch_end}: {exc}. "
                         f"Attempt {attempt + 1}/{max_retries}"
                     )
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
             else:
-                logger.error(f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts")
+                logger.error(
+                    f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts"
+                )
 
         return all_logs
 
     async def _process_swap_event(
         self,
-        dex: Dict[str, Any],
-        log: LogReceipt,
+        dex: dict[str, Any],
+        log: EventData,
         block_timestamp: datetime,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Process a single swap event log."""
         try:
             event_type = dex["type"]
@@ -186,8 +189,8 @@ class ChainIngestor:
             recipient = args.get("to", args.get("recipient", args.get("buyer", "")))
             amount_in = 0.0
             amount_out = 0.0
-            token_in = log.get("address", "")
-            token_out = log.get("address", "")
+            token_in: str = log.get("address", "")
+            token_out: str = log.get("address", "")
 
             if event_type == "v2":
                 amount0In = float(args.get("amount0In", 0))
@@ -279,10 +282,10 @@ class ChainIngestor:
 
     async def sync_historical_swaps(
         self,
-        dex: Dict[str, Any],
+        dex: dict[str, Any],
         from_block: int,
         to_block: int,
-        pool_address: Optional[str] = None,
+        pool_address: str | None = None,
     ) -> int:
         """Sync historical swap events."""
         logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
@@ -292,10 +295,26 @@ class ChainIngestor:
         address = pool_address if pool_address else dex["router"]
 
         try:
-            logs = await self._get_logs_batch(address, topics, from_block, to_block)
-        except CircuitBreakerOpen:
+            raw_logs = await self._get_logs_batch(address, topics, from_block, to_block)
+        except CircuitBreakerOpenError:
             logger.error("Circuit breaker open, aborting sync")
             return 0
+
+        if not raw_logs:
+            return 0
+
+        # eth_getLogs returns raw, undecoded logs (no `args`). Decode each one against
+        # the DEX's event ABI so downstream code can read sender/recipient/amounts.
+        assert self.web3 is not None
+        event_name = dex["abi"][0]["name"]
+        decode_contract = self.web3.eth.contract(abi=dex["abi"])
+        event = getattr(decode_contract.events, event_name)()
+        logs: list[EventData] = []
+        for raw_log in raw_logs:
+            try:
+                logs.append(event.process_log(raw_log))
+            except Exception as exc:
+                logger.error(f"Failed to decode log at block {raw_log.get('blockNumber')}: {exc}")
 
         if not logs:
             return 0
@@ -311,15 +330,17 @@ class ChainIngestor:
             try:
                 await self.rate_limiter.acquire()
                 block = await self.circuit_breaker.call(self.web3.eth.get_block, bn)
-                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"])
+                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"], tz=UTC).replace(
+                    tzinfo=None
+                )
             except Exception as exc:
                 logger.error(f"Failed to fetch block {bn}: {exc}")
-                block_timestamps[bn] = datetime.utcnow()
+                block_timestamps[bn] = datetime.now(UTC).replace(tzinfo=None)
 
         trades_data = []
         for log in logs:
             bn = log.get("blockNumber")
-            ts = block_timestamps.get(bn, datetime.utcnow())
+            ts = block_timestamps.get(bn, datetime.now(UTC).replace(tzinfo=None))
             trade_data = await self._process_swap_event(dex, log, ts)
             if trade_data:
                 trades_data.append(trade_data)
@@ -339,7 +360,7 @@ class MultiChainIngestor:
 
     def __init__(self, storage: Storage):
         self.storage = storage
-        self.ingestors: Dict[int, ChainIngestor] = {}
+        self.ingestors: dict[int, ChainIngestor] = {}
 
     async def initialize(self) -> None:
         for chain in CHAINS:
@@ -351,13 +372,14 @@ class MultiChainIngestor:
         self,
         chain_id: int,
         pool_address: str,
-        start_block: Optional[int] = None,
-        end_block: Optional[int] = None,
+        start_block: int | None = None,
+        end_block: int | None = None,
     ) -> int:
         """Sync trades for a specific pool."""
         ingestor = self.ingestors.get(chain_id)
         if not ingestor:
             raise ValueError(f"Chain {chain_id} not configured")
+        assert ingestor.web3 is not None, "ingestor.connect() must be called first"
 
         total_swaps = 0
         chain_config = get_chain_config(chain_id)
@@ -368,9 +390,13 @@ class MultiChainIngestor:
         if end_block is None:
             try:
                 await ingestor.rate_limiter.acquire()
-                end_block = await ingestor.circuit_breaker.call(ingestor.web3.eth.block_number)
-            except CircuitBreakerOpen as exc:
-                raise ValueError(f"Cannot get latest block: circuit breaker open") from exc
+                # web3.eth.block_number is an async property, not a callable: accessing
+                # it already returns a coroutine, so it must be wrapped in a zero-arg
+                # callable for CircuitBreaker.call() (which invokes `coro(*args)` itself).
+                web3 = ingestor.web3
+                end_block = await ingestor.circuit_breaker.call(lambda: web3.eth.block_number)
+            except CircuitBreakerOpenError as exc:
+                raise ValueError("Cannot get latest block: circuit breaker open") from exc
 
         for dex in chain_config["dexes"]:
             swaps = await ingestor.sync_historical_swaps(
