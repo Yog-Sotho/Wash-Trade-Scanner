@@ -25,11 +25,11 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <span>Wash Trade Scanner</span>
     </div>
-    <nav class="tabs" id="tabs">
-      <button data-view="overview" class="tab active">Overview</button>
-      <button data-view="pool" class="tab">Pool inspector</button>
-      <button data-view="monitor" class="tab">Live monitor</button>
-      <button data-view="audit" class="tab">Audits</button>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Scanner views">
+      <button id="tab-overview" data-view="overview" class="tab active" role="tab" aria-selected="true" aria-controls="view-overview">Overview</button>
+      <button id="tab-pool" data-view="pool" class="tab" role="tab" aria-selected="false" aria-controls="view-pool">Pool inspector</button>
+      <button id="tab-monitor" data-view="monitor" class="tab" role="tab" aria-selected="false" aria-controls="view-monitor">Live monitor</button>
+      <button id="tab-audit" data-view="audit" class="tab" role="tab" aria-selected="false" aria-controls="view-audit">Audits</button>
     </nav>
     <div class="session">
       <span id="conn-status" class="pill">connecting…</span>
@@ -39,7 +39,7 @@
 
   <main>
     <!-- ============================================== overview -->
-    <section id="view-overview" class="view">
+    <section id="view-overview" class="view" role="tabpanel" aria-labelledby="tab-overview">
       <div class="tiles" id="overview-tiles"></div>
       <div class="grid-2">
         <div class="card">
@@ -79,7 +79,7 @@
     </section>
 
     <!-- ============================================== pool inspector -->
-    <section id="view-pool" class="view hidden">
+    <section id="view-pool" class="view hidden" role="tabpanel" aria-labelledby="tab-pool">
       <form id="pool-form" class="card form-row">
         <label>Chain ID <input id="pool-chain" type="number" value="1" min="1" required></label>
         <label class="grow">Pool address <input id="pool-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
@@ -102,9 +102,9 @@
               </table>
             </div>
             <div class="pager">
-              <button id="pool-prev" class="ghost">‹ Prev</button>
+              <button id="pool-prev" class="ghost" aria-label="Previous page">‹ Prev</button>
               <span id="pool-page" class="muted">page 1</span>
-              <button id="pool-next" class="ghost">Next ›</button>
+              <button id="pool-next" class="ghost" aria-label="Next page">Next ›</button>
             </div>
           </div>
         </div>
@@ -112,7 +112,7 @@
     </section>
 
     <!-- ============================================== live monitor -->
-    <section id="view-monitor" class="view hidden">
+    <section id="view-monitor" class="view hidden" role="tabpanel" aria-labelledby="tab-monitor">
       <form id="monitor-form" class="card form-row">
         <label>Chain ID <input id="monitor-chain" type="number" value="1" min="1" required></label>
         <label class="grow">Pool address <input id="monitor-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
@@ -126,7 +126,7 @@
     </section>
 
     <!-- ============================================== audits -->
-    <section id="view-audit" class="view hidden">
+    <section id="view-audit" class="view hidden" role="tabpanel" aria-labelledby="tab-audit">
       <form id="audit-form" class="card form-row wrap">
         <label>Chain ID <input id="audit-chain" type="number" value="1" min="1" required></label>
         <label class="grow">Pool address <input id="audit-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>

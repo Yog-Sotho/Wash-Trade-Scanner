@@ -102,7 +102,9 @@ $("#tabs").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-view]");
   if (!button) return;
   for (const tab of document.querySelectorAll(".tab")) {
-    tab.classList.toggle("active", tab === button);
+    const isActive = tab === button;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
   }
   for (const view of document.querySelectorAll(".view")) {
     view.classList.toggle("hidden", view.id !== `view-${button.dataset.view}`);
