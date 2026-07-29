@@ -84,7 +84,7 @@
         <label>Chain ID <input id="pool-chain" type="number" value="1" min="1" required></label>
         <label class="grow">Pool address <input id="pool-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
         <label class="check"><input id="pool-wash-only" type="checkbox"> wash only</label>
-        <button type="submit" class="primary">Inspect</button>
+        <button type="submit" class="primary" id="pool-submit-btn">Inspect</button>
       </form>
       <div id="pool-results" class="hidden">
         <div class="tiles" id="pool-tiles"></div>
@@ -134,7 +134,7 @@
         <label>End block <input id="audit-end" type="number" min="0" placeholder="latest"></label>
         <label class="check"><input id="audit-ml" type="checkbox" checked> ML</label>
         <label class="check"><input id="audit-heuristics" type="checkbox" checked> heuristics</label>
-        <button type="submit" class="primary">Run audit</button>
+        <button type="submit" class="primary" id="audit-submit-btn">Run audit</button>
       </form>
       <div class="card">
         <h2>Task log</h2>
