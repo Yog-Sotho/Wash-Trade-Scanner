@@ -76,6 +76,10 @@ async function checkSession() {
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   $("#login-error").classList.add("hidden");
+  const submitBtn = $("#login-form button[type='submit']");
+  const originalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Signing in…";
   try {
     await api("/panel/login", {
       method: "POST",
@@ -86,6 +90,9 @@ $("#login-form").addEventListener("submit", async (event) => {
     if (await checkSession()) loadOverview();
   } catch {
     $("#login-error").classList.remove("hidden");
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = originalText;
   }
 });
 
@@ -259,13 +266,22 @@ async function loadOverview() {
 const PAGE_SIZE = 25;
 const poolState = { chain: 1, address: "", washOnly: false, page: 0 };
 
-$("#pool-form").addEventListener("submit", (event) => {
+$("#pool-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   poolState.chain = Number($("#pool-chain").value);
   poolState.address = $("#pool-address").value.trim();
   poolState.washOnly = $("#pool-wash-only").checked;
   poolState.page = 0;
-  loadPool();
+  const submitBtn = $("#pool-submit-btn");
+  const originalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Inspecting…";
+  try {
+    await loadPool();
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = originalText;
+  }
 });
 $("#pool-prev").addEventListener("click", () => {
   if (poolState.page > 0) { poolState.page -= 1; loadPoolTrades(); }
@@ -439,6 +455,10 @@ $("#audit-form").addEventListener("submit", async (event) => {
     use_ml: $("#audit-ml").checked,
     use_heuristics: $("#audit-heuristics").checked,
   };
+  const submitBtn = $("#audit-submit-btn");
+  const originalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Starting…";
   let started;
   try {
     started = await api("/api/v1/audits", {
@@ -449,6 +469,9 @@ $("#audit-form").addEventListener("submit", async (event) => {
   } catch (error) {
     auditLogItem("error", `failed to start: ${error.message}`);
     return;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = originalText;
   }
   auditLogItem("status", `task ${started.task_id} started for ${shortAddr(payload.pool_address)}`);
   pollAudit(started.task_id);
