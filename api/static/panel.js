@@ -105,18 +105,45 @@ $("#logout-btn").addEventListener("click", async () => {
 
 /* --------------------------------------------------------------- tabs */
 
-$("#tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-view]");
-  if (!button) return;
+function selectTab(button) {
   for (const tab of document.querySelectorAll(".tab")) {
     const isActive = tab === button;
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-selected", isActive ? "true" : "false");
+    tab.setAttribute("tabindex", isActive ? "0" : "-1");
   }
   for (const view of document.querySelectorAll(".view")) {
     view.classList.toggle("hidden", view.id !== `view-${button.dataset.view}`);
   }
   if (button.dataset.view === "overview") loadOverview();
+}
+
+$("#tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-view]");
+  if (button) selectTab(button);
+});
+
+$("#tabs").addEventListener("keydown", (event) => {
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  const activeIndex = tabs.indexOf(document.activeElement);
+  if (activeIndex === -1) return;
+
+  let newIndex = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    newIndex = (activeIndex + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    newIndex = (activeIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "Home") {
+    newIndex = 0;
+  } else if (event.key === "End") {
+    newIndex = tabs.length - 1;
+  }
+
+  if (newIndex !== null) {
+    event.preventDefault();
+    tabs[newIndex].focus();
+    selectTab(tabs[newIndex]);
+  }
 });
 
 /* ------------------------------------------------------------ tooltip */
