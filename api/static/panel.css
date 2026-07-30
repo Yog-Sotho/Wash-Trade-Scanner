@@ -75,6 +75,7 @@ h2 { font-size: 13px; margin: 0 0 12px; color: var(--ink-2); font-weight: 600; }
 .tab {
   border: 0; background: none; color: var(--ink-2);
   padding: 7px 12px; border-radius: 7px; cursor: pointer; font: inherit;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 .tab:hover { background: var(--grid); }
 .tab.active { background: var(--grid); color: var(--ink); font-weight: 600; }
