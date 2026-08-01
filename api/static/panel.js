@@ -299,6 +299,8 @@ $("#pool-form").addEventListener("submit", async (event) => {
   poolState.address = $("#pool-address").value.trim();
   poolState.washOnly = $("#pool-wash-only").checked;
   poolState.page = 0;
+  $("#pool-error").classList.add("hidden");
+  $("#pool-error").textContent = "";
   const submitBtn = $("#pool-submit-btn");
   const originalText = submitBtn.textContent;
   submitBtn.disabled = true;
@@ -320,10 +322,15 @@ async function loadPool() {
   try {
     report = await api(`/api/v1/pools/${poolState.chain}/${poolState.address}/report`);
   } catch (error) {
-    alert(`Report failed: ${error.message}`);
+    $("#pool-error").textContent = `Report failed: ${error.message}`;
+    $("#pool-error").classList.remove("hidden");
+    $("#pool-results").classList.add("hidden");
+    $("#pool-empty-state").classList.remove("hidden");
     return;
   }
   $("#pool-results").classList.remove("hidden");
+  $("#pool-empty-state").classList.add("hidden");
+  $("#pool-error").classList.add("hidden");
 
   const tiles = $("#pool-tiles");
   tiles.textContent = "";
@@ -353,7 +360,11 @@ async function loadPoolTrades() {
   let data;
   try {
     data = await api(`/api/v1/pools/${poolState.chain}/${poolState.address}/trades?${query}`);
-  } catch { return; }
+  } catch (error) {
+    $("#pool-error").textContent = `Failed to load trades: ${error.message}`;
+    $("#pool-error").classList.remove("hidden");
+    return;
+  }
 
   const body = $("#pool-trades-table tbody");
   body.textContent = "";

@@ -243,3 +243,36 @@ button:focus-visible, .tab:focus-visible {
 }
 .tooltip .t-label { color: var(--muted); }
 .tooltip .t-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------- palette ux */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  gap: 12px;
+}
+.empty-state h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.empty-state p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 420px;
+}
+.empty-state svg {
+  color: var(--muted);
+}
+.error-banner {
+  color: var(--status-critical);
+  font-size: 13px;
+  border: 1px solid var(--status-critical);
+  background: rgba(208, 59, 59, 0.05);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
