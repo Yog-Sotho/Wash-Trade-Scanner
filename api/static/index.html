@@ -86,6 +86,15 @@
         <label class="check"><input id="pool-wash-only" type="checkbox"> wash only</label>
         <button type="submit" class="primary" id="pool-submit-btn">Inspect</button>
       </form>
+      <div id="pool-error" class="error-banner hidden" role="alert"></div>
+      <div id="pool-empty-state" class="card empty-state">
+        <svg aria-hidden="true" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <h3>No pool inspected yet</h3>
+        <p class="muted">Enter a Chain ID and Pool Address above to analyze its trade history and potential wash trading activity.</p>
+      </div>
       <div id="pool-results" class="hidden">
         <div class="tiles" id="pool-tiles"></div>
         <div class="grid-2">
