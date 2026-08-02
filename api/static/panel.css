@@ -199,7 +199,7 @@ button.ghost {
 button.ghost:hover { background: var(--grid); }
 button:disabled { opacity: 0.5; cursor: default; }
 
-button:focus-visible, .tab:focus-visible {
+button:focus-visible, .tab:focus-visible, .bar-row:focus-visible {
   outline: 2px solid var(--series);
   outline-offset: 2px;
 }

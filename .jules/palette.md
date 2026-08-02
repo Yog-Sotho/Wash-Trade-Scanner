@@ -5,3 +5,7 @@
 ## 2025-02-18 - Roving Tabindex and Arrow Key Navigation in Custom Tabs
 **Learning:** In a WAI-ARIA custom tab group (`role="tablist"`), screen reader and keyboard-only users expect a roving tabindex pattern. Instead of having all tabs in the standard tab sequence, only the active tab should have `tabindex="0"`, and inactive tabs must have `tabindex="-1"`. Navigation between tabs is handled seamlessly via arrow keys (`ArrowRight`/`ArrowLeft`/`ArrowUp`/`ArrowDown`) and keyboard shortcuts (`Home`/`End`), which focus and select the targeted tab, updating their active classes, aria attributes, and roving tab indexes.
 **Action:** Always implement a roving tabindex pattern for custom tab components alongside arrow key and home/end shortcut navigation to meet standard accessibility patterns and keyboard-only user expectations.
+
+## 2025-02-23 - Keyboard Focusable Custom Data Visualizations and Tooltips
+**Learning:** In highly customized visual charts (like CSS-based bar graphs) where interactive details are usually revealed only on mouse over, keyboard-only and screen reader users are entirely excluded from accessing critical data. By rendering chart bar rows with `tabindex="0"` and binding focus/blur listeners to position and show tooltips adjacent to the focused element, we bring functional parity to all interaction modalities.
+**Action:** Always make visual data-viz bars keyboard-interactive via `tabindex="0"`, use `:focus-visible` outline treatments to avoid mouse-click clutter, and wire up focus/blur handlers to coordinate custom tooltips.
