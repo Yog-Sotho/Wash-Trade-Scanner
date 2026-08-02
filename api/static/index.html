@@ -32,7 +32,7 @@
       <button id="tab-audit" data-view="audit" class="tab" role="tab" aria-selected="false" aria-controls="view-audit" tabindex="-1">Audits</button>
     </nav>
     <div class="session">
-      <span id="conn-status" class="pill">connecting…</span>
+      <span id="conn-status" class="pill" aria-live="polite">connecting…</span>
       <button id="logout-btn" class="ghost hidden">Sign out</button>
     </div>
   </header>
@@ -81,9 +81,9 @@
     <!-- ============================================== pool inspector -->
     <section id="view-pool" class="view hidden" role="tabpanel" aria-labelledby="tab-pool">
       <form id="pool-form" class="card form-row">
-        <label>Chain ID <input id="pool-chain" type="number" value="1" min="1" required></label>
-        <label class="grow">Pool address <input id="pool-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
-        <label class="check"><input id="pool-wash-only" type="checkbox"> wash only</label>
+        <label for="pool-chain">Chain ID <input id="pool-chain" type="number" value="1" min="1" required></label>
+        <label class="grow" for="pool-address">Pool address <input id="pool-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <label class="check" for="pool-wash-only"><input id="pool-wash-only" type="checkbox"> wash only</label>
         <button type="submit" class="primary" id="pool-submit-btn">Inspect</button>
       </form>
       <div id="pool-error" class="error-banner hidden" role="alert"></div>
@@ -112,7 +112,7 @@
             </div>
             <div class="pager">
               <button id="pool-prev" class="ghost" aria-label="Previous page">‹ Prev</button>
-              <span id="pool-page" class="muted">page 1</span>
+              <span id="pool-page" class="muted" aria-live="polite">page 1</span>
               <button id="pool-next" class="ghost" aria-label="Next page">Next ›</button>
             </div>
           </div>
@@ -123,31 +123,31 @@
     <!-- ============================================== live monitor -->
     <section id="view-monitor" class="view hidden" role="tabpanel" aria-labelledby="tab-monitor">
       <form id="monitor-form" class="card form-row">
-        <label>Chain ID <input id="monitor-chain" type="number" value="1" min="1" required></label>
-        <label class="grow">Pool address <input id="monitor-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <label for="monitor-chain">Chain ID <input id="monitor-chain" type="number" value="1" min="1" required></label>
+        <label class="grow" for="monitor-address">Pool address <input id="monitor-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
         <button type="submit" class="primary" id="monitor-toggle">Start monitoring</button>
       </form>
       <div class="tiles" id="monitor-tiles"></div>
       <div class="card">
         <h2>Event feed</h2>
-        <ul id="monitor-feed" class="feed"></ul>
+        <ul id="monitor-feed" class="feed" role="log" aria-live="polite"></ul>
       </div>
     </section>
 
     <!-- ============================================== audits -->
     <section id="view-audit" class="view hidden" role="tabpanel" aria-labelledby="tab-audit">
       <form id="audit-form" class="card form-row wrap">
-        <label>Chain ID <input id="audit-chain" type="number" value="1" min="1" required></label>
-        <label class="grow">Pool address <input id="audit-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
-        <label>Start block <input id="audit-start" type="number" min="0" placeholder="auto"></label>
-        <label>End block <input id="audit-end" type="number" min="0" placeholder="latest"></label>
-        <label class="check"><input id="audit-ml" type="checkbox" checked> ML</label>
-        <label class="check"><input id="audit-heuristics" type="checkbox" checked> heuristics</label>
+        <label for="audit-chain">Chain ID <input id="audit-chain" type="number" value="1" min="1" required></label>
+        <label class="grow" for="audit-address">Pool address <input id="audit-address" type="text" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}" required></label>
+        <label for="audit-start">Start block <input id="audit-start" type="number" min="0" placeholder="auto"></label>
+        <label for="audit-end">End block <input id="audit-end" type="number" min="0" placeholder="latest"></label>
+        <label class="check" for="audit-ml"><input id="audit-ml" type="checkbox" checked> ML</label>
+        <label class="check" for="audit-heuristics"><input id="audit-heuristics" type="checkbox" checked> heuristics</label>
         <button type="submit" class="primary" id="audit-submit-btn">Run audit</button>
       </form>
       <div class="card">
         <h2>Task log</h2>
-        <ul id="audit-log" class="feed"></ul>
+        <ul id="audit-log" class="feed" role="log" aria-live="polite"></ul>
       </div>
     </section>
   </main>
