@@ -139,7 +139,23 @@ main { max-width: 1180px; margin: 0 auto; padding: 20px; }
 /* -------------------------------------------------------------- chart */
 .chart { display: flex; flex-direction: column; gap: 8px; }
 .chart .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
-.bar-row { display: grid; grid-template-columns: 170px 1fr; gap: 10px; align-items: center; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 10px;
+  align-items: center;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: background-color 0.2s ease;
+  cursor: pointer;
+}
+.bar-row:hover, .bar-row:focus-visible {
+  background: var(--grid);
+}
+.bar-row:focus-visible {
+  outline: 2px solid var(--series);
+  outline-offset: 1px;
+}
 .bar-row .bar-label {
   font-size: 12px; color: var(--ink-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
