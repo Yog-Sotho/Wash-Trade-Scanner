@@ -151,16 +151,28 @@ $("#tabs").addEventListener("keydown", (event) => {
 const tooltip = $("#tooltip");
 
 function bindTooltip(node, html) {
-  node.addEventListener("mousemove", (event) => {
+  const show = (event) => {
     tooltip.innerHTML = html;
     tooltip.classList.remove("hidden");
     const pad = 12;
-    const x = Math.min(event.clientX + pad, window.innerWidth - tooltip.offsetWidth - pad);
-    const y = Math.min(event.clientY + pad, window.innerHeight - tooltip.offsetHeight - pad);
+    let x, y;
+    if (event.type === "focus" || event.type === "focusin") {
+      const rect = node.getBoundingClientRect();
+      x = Math.min(rect.left, window.innerWidth - tooltip.offsetWidth - pad);
+      y = Math.min(rect.bottom + pad, window.innerHeight - tooltip.offsetHeight - pad);
+    } else {
+      x = Math.min(event.clientX + pad, window.innerWidth - tooltip.offsetWidth - pad);
+      y = Math.min(event.clientY + pad, window.innerHeight - tooltip.offsetHeight - pad);
+    }
     tooltip.style.left = `${x}px`;
     tooltip.style.top = `${y}px`;
-  });
-  node.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
+  };
+  const hide = () => tooltip.classList.add("hidden");
+
+  node.addEventListener("mousemove", show);
+  node.addEventListener("mouseleave", hide);
+  node.addEventListener("focus", show);
+  node.addEventListener("blur", hide);
 }
 
 /* -------------------------------------------------------------- tiles */
@@ -202,7 +214,8 @@ function renderBarChart(container, rows, formatValue) {
   for (const row of rows.sort((a, b) => b.value - a.value)) {
     // Cap at 80% of the track so the direct value label always fits.
     const width = max > 0 ? (row.value / max) * 80 : 0;
-    const barRow = el("div", { class: "bar-row" });
+    const ariaText = `${row.label}: ${formatValue(row.value)}${row.sub ? `, ${row.sub}` : ""}`;
+    const barRow = el("div", { class: "bar-row", tabindex: "0", "aria-label": ariaText });
     barRow.appendChild(el("div", { class: "bar-label", text: row.label, title: row.label }));
     const track = el("div", { class: "bar-track" });
     const bar = el("div", { class: "bar" });
