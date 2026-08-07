@@ -32,7 +32,7 @@
       <button id="tab-audit" data-view="audit" class="tab" role="tab" aria-selected="false" aria-controls="view-audit" tabindex="-1">Audits</button>
     </nav>
     <div class="session">
-      <span id="conn-status" class="pill">connecting…</span>
+      <span id="conn-status" class="pill" aria-live="polite">connecting…</span>
       <button id="logout-btn" class="ghost hidden">Sign out</button>
     </div>
   </header>
@@ -112,7 +112,7 @@
             </div>
             <div class="pager">
               <button id="pool-prev" class="ghost" aria-label="Previous page">‹ Prev</button>
-              <span id="pool-page" class="muted">page 1</span>
+              <span id="pool-page" class="muted" aria-live="polite">page 1</span>
               <button id="pool-next" class="ghost" aria-label="Next page">Next ›</button>
             </div>
           </div>
@@ -130,7 +130,7 @@
       <div class="tiles" id="monitor-tiles"></div>
       <div class="card">
         <h2>Event feed</h2>
-        <ul id="monitor-feed" class="feed"></ul>
+        <ul id="monitor-feed" class="feed" role="log" aria-live="polite"></ul>
       </div>
     </section>
 
@@ -147,7 +147,7 @@
       </form>
       <div class="card">
         <h2>Task log</h2>
-        <ul id="audit-log" class="feed"></ul>
+        <ul id="audit-log" class="feed" role="log" aria-live="polite"></ul>
       </div>
     </section>
   </main>
