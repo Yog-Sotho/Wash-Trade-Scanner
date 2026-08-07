@@ -151,16 +151,27 @@ $("#tabs").addEventListener("keydown", (event) => {
 const tooltip = $("#tooltip");
 
 function bindTooltip(node, html) {
-  node.addEventListener("mousemove", (event) => {
+  const showTooltip = (clientX, clientY) => {
     tooltip.innerHTML = html;
     tooltip.classList.remove("hidden");
     const pad = 12;
-    const x = Math.min(event.clientX + pad, window.innerWidth - tooltip.offsetWidth - pad);
-    const y = Math.min(event.clientY + pad, window.innerHeight - tooltip.offsetHeight - pad);
+    const x = Math.min(clientX + pad, window.innerWidth - tooltip.offsetWidth - pad);
+    const y = Math.min(clientY + pad, window.innerHeight - tooltip.offsetHeight - pad);
     tooltip.style.left = `${x}px`;
     tooltip.style.top = `${y}px`;
+  };
+
+  node.addEventListener("mousemove", (event) => {
+    showTooltip(event.clientX, event.clientY);
   });
   node.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
+
+  node.addEventListener("focus", () => {
+    const rect = node.getBoundingClientRect();
+    // Position tooltip near the element when focused via keyboard
+    showTooltip(rect.left + rect.width / 2, rect.bottom);
+  });
+  node.addEventListener("blur", () => tooltip.classList.add("hidden"));
 }
 
 /* -------------------------------------------------------------- tiles */
@@ -202,7 +213,11 @@ function renderBarChart(container, rows, formatValue) {
   for (const row of rows.sort((a, b) => b.value - a.value)) {
     // Cap at 80% of the track so the direct value label always fits.
     const width = max > 0 ? (row.value / max) * 80 : 0;
-    const barRow = el("div", { class: "bar-row" });
+    const barRow = el("div", {
+      class: "bar-row",
+      tabindex: "0",
+      "aria-label": `${row.label}: ${formatValue(row.value)}${row.sub ? `, ${row.sub}` : ""}`
+    });
     barRow.appendChild(el("div", { class: "bar-label", text: row.label, title: row.label }));
     const track = el("div", { class: "bar-track" });
     const bar = el("div", { class: "bar" });
