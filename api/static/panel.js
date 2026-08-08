@@ -161,6 +161,24 @@ function bindTooltip(node, html) {
     tooltip.style.top = `${y}px`;
   });
   node.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
+  node.addEventListener("focus", () => {
+    tooltip.innerHTML = html;
+    tooltip.classList.remove("hidden");
+    const rect = node.getBoundingClientRect();
+    const pad = 8;
+    // Position the tooltip centered below the bar-row
+    const x = Math.min(
+      Math.max(rect.left + rect.width / 2 - tooltip.offsetWidth / 2, pad),
+      window.innerWidth - tooltip.offsetWidth - pad
+    );
+    const y = Math.min(
+      rect.bottom + pad,
+      window.innerHeight - tooltip.offsetHeight - pad
+    );
+    tooltip.style.left = `${x}px`;
+    tooltip.style.top = `${y}px`;
+  });
+  node.addEventListener("blur", () => tooltip.classList.add("hidden"));
 }
 
 /* -------------------------------------------------------------- tiles */
@@ -202,7 +220,7 @@ function renderBarChart(container, rows, formatValue) {
   for (const row of rows.sort((a, b) => b.value - a.value)) {
     // Cap at 80% of the track so the direct value label always fits.
     const width = max > 0 ? (row.value / max) * 80 : 0;
-    const barRow = el("div", { class: "bar-row" });
+    const barRow = el("div", { class: "bar-row", tabindex: "0" });
     barRow.appendChild(el("div", { class: "bar-label", text: row.label, title: row.label }));
     const track = el("div", { class: "bar-track" });
     const bar = el("div", { class: "bar" });
