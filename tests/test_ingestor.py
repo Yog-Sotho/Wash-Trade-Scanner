@@ -55,14 +55,104 @@ async def test_chain_ingestor_connection(mock_chain_config):
         mock_web3.is_connected.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_multichain_ingestor_initialize():
-    storage = AsyncMock(spec=Storage)
-    ingestor = MultiChainIngestor(storage)
+def _connected_web3_mock():
+    web3 = AsyncMock()
+    web3.is_connected = AsyncMock(return_value=True)
+    web3.middleware_onion = MagicMock()  # .inject() is synchronous
+    return web3
 
-    with patch("core.ingestor.CHAINS", []):  # Empty chain list for test
+
+@pytest.mark.asyncio
+async def test_multichain_initialize_connects_nothing_by_default():
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with patch("core.ingestor.ChainIngestor") as mock_chain_ingestor:
         await ingestor.initialize()
-        assert len(ingestor.ingestors) == 0
+
+    mock_chain_ingestor.assert_not_called()
+    assert ingestor.ingestors == {}
+
+
+@pytest.mark.asyncio
+async def test_multichain_initialize_connects_only_requested_chains():
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with patch("core.ingestor.ChainIngestor") as mock_chain_ingestor:
+        mock_chain_ingestor.return_value.connect = AsyncMock()
+        await ingestor.initialize([56])
+
+    mock_chain_ingestor.assert_called_once()
+    assert mock_chain_ingestor.call_args[0][0]["chain_id"] == 56
+    assert list(ingestor.ingestors) == [56]
+
+
+@pytest.mark.asyncio
+async def test_get_ingestor_reuses_connection():
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with patch("core.ingestor.ChainIngestor") as mock_chain_ingestor:
+        mock_chain_ingestor.return_value.connect = AsyncMock()
+        first = await ingestor.get_ingestor(56)
+        second = await ingestor.get_ingestor(56)
+
+    assert first is second
+    mock_chain_ingestor.return_value.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_ingestor_does_not_cache_failed_connection():
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with patch("core.ingestor.ChainIngestor") as mock_chain_ingestor:
+        mock_chain_ingestor.return_value.connect = AsyncMock(
+            side_effect=[ConnectionError("down"), None]
+        )
+        with pytest.raises(ConnectionError):
+            await ingestor.get_ingestor(56)
+        assert ingestor.ingestors == {}
+
+        await ingestor.get_ingestor(56)  # retried, now succeeds
+
+    assert list(ingestor.ingestors) == [56]
+
+
+@pytest.mark.asyncio
+async def test_audit_connects_with_rpc_url_from_environment(monkeypatch):
+    """Regression: ETH_RPC_URL used to be ignored in favour of a hardcoded
+    YOUR_KEY placeholder, so no audit could run on any chain."""
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ETH_RPC_URL", "https://eth.example.org/real-key")
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with (
+        patch("core.ingestor.AsyncHTTPProvider") as mock_provider,
+        patch("core.ingestor.AsyncWeb3", return_value=_connected_web3_mock()),
+    ):
+        await ingestor.initialize([1])
+
+    mock_provider.assert_called_once_with("https://eth.example.org/real-key")
+
+
+@pytest.mark.asyncio
+async def test_misconfigured_chain_does_not_break_other_chains(monkeypatch):
+    """Regression: initialize() used to connect all 23 chains, so one bad
+    endpoint aborted audits on every chain."""
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ETH_RPC_URL", "https://eth.example.org/real-key")
+    monkeypatch.setattr(settings, "BSC_RPC_URL", "https://bsc.example.org/YOUR_KEY")
+    ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
+
+    with (
+        patch("core.ingestor.AsyncHTTPProvider"),
+        patch("core.ingestor.AsyncWeb3", return_value=_connected_web3_mock()),
+    ):
+        with pytest.raises(ValueError, match="BSC_RPC_URL"):
+            await ingestor.get_ingestor(56)
+        await ingestor.get_ingestor(1)
+
+    assert list(ingestor.ingestors) == [1]
 
 
 @pytest.mark.asyncio
@@ -132,6 +222,9 @@ async def test_process_swap_event_v2(mock_chain_config):
         assert result["recipient"] == "0xrecipient"
         assert result["token_in"] == "0xtoken0"
         assert result["token_out"] == "0xtoken1"
+        # Regression: the raw HexBytes was stored, which asyncpg rejects for
+        # VARCHAR, so no swap could ever be saved to PostgreSQL.
+        assert result["transaction_hash"] == "0x" + "01" * 32
 
 
 @pytest.mark.asyncio
@@ -161,8 +254,52 @@ async def test_connect_rejects_placeholder_rpc(mock_chain_config):
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage)
 
-    with pytest.raises(ValueError, match="placeholder"):
+    # The message must name the variable that actually fixes it.
+    with pytest.raises(ValueError, match="placeholder.*ETH_RPC_URL"):
         await ingestor.connect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("amount0", "amount1", "expected"),
+    [
+        # Pool received 100 token0 and paid out 95 token1: trader sold token0.
+        (100, -95, ("0xtoken0", 100.0, "0xtoken1", 95.0)),
+        # Pool received 95 token1 and paid out 100 token0: trader sold token1.
+        (-100, 95, ("0xtoken1", 95.0, "0xtoken0", 100.0)),
+    ],
+)
+async def test_process_swap_event_v3_uses_pool_perspective(
+    mock_chain_config, amount0, amount1, expected
+):
+    """Regression: V3 legs were inverted (the token the pool paid out was
+    recorded as the trader's input)."""
+    ingestor = ChainIngestor(mock_chain_config, AsyncMock(spec=Storage))
+    dex = {**mock_chain_config["dexes"][0], "type": "v3"}
+    log = {
+        "address": "0xPool",
+        "args": {
+            "sender": "0xRouter",
+            "recipient": "0xTrader",
+            "amount0": amount0,
+            "amount1": amount1,
+        },
+        "transactionHash": b"\x01" * 32,
+        "blockNumber": 1,
+        "logIndex": 0,
+    }
+
+    with patch.object(
+        ingestor, "_get_pool_tokens", AsyncMock(return_value=("0xtoken0", "0xtoken1"))
+    ):
+        result = await ingestor._process_swap_event(dex, log, datetime(2024, 1, 1))
+
+    assert result is not None
+    token_in, amount_in, token_out, amount_out = expected
+    assert result["token_in"] == token_in
+    assert result["amount_in"] == amount_in
+    assert result["token_out"] == token_out
+    assert result["amount_out"] == amount_out
 
 
 @pytest.mark.asyncio
@@ -285,6 +422,86 @@ async def test_sync_historical_swaps_decodes_and_saves(mock_chain_config):
     saved = storage.save_trades_batch.call_args[0][0]
     assert saved[0]["amount_in"] == 100.0
     assert saved[0]["sender"] == "0xsender"
+
+
+@pytest.mark.asyncio
+async def test_sync_historical_swaps_prices_trades_before_saving(mock_chain_config):
+    """Regression: volume_usd was never populated, so every USD figure was 0."""
+    from core.pricing import PriceOracle
+
+    usdc = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"  # Ethereum USDC, 6 decimals
+    storage = AsyncMock(spec=Storage)
+    ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
+    ingestor.web3 = MagicMock()
+    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
+
+    event = MagicMock()
+    event.process_log.return_value = {
+        "address": "0xpool",
+        "args": {
+            "sender": "0xSender",
+            "to": "0xRecipient",
+            "amount0In": 250 * 10**6,
+            "amount1In": 0,
+            "amount0Out": 0,
+            "amount1Out": 7,
+        },
+        "transactionHash": b"\x01" * 32,
+        "blockNumber": 100,
+        "logIndex": 0,
+    }
+    ingestor.web3.eth.contract.return_value.events.Swap.return_value = event
+
+    with (
+        patch.object(ingestor, "_get_logs_batch", AsyncMock(return_value=[{"blockNumber": 100}])),
+        patch.object(ingestor, "_get_pool_tokens", AsyncMock(return_value=(usdc, "0xother"))),
+    ):
+        await ingestor.sync_historical_swaps(mock_chain_config["dexes"][0], 1, 100)
+
+    saved = storage.save_trades_batch.call_args[0][0]
+    assert saved[0]["amount_in_usd"] == pytest.approx(250.0)
+    assert saved[0]["volume_usd"] == pytest.approx(250.0)
+    assert saved[0]["amount_out_usd"] is None
+
+
+@pytest.mark.asyncio
+async def test_pool_address_is_checksummed_for_rpc_and_lowercased_for_storage(
+    mock_chain_config,
+):
+    """Regression: web3 rejects lowercase addresses in eth_getLogs, so the
+    real-time monitor (which passes lowercase) never ingested a swap; and pools
+    were stored checksummed while the API queried lowercase, so the panel's
+    pool views were always empty."""
+    from core.pricing import PriceOracle
+
+    checksummed = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    storage = AsyncMock(spec=Storage)
+    ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
+    ingestor.web3 = MagicMock()
+    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
+    event = MagicMock()
+    event.process_log.return_value = {
+        "address": checksummed,  # web3 returns log addresses checksummed
+        "args": {"sender": "0xS", "to": "0xR", "amount0In": 1, "amount1In": 0, "amount0Out": 0},
+        "transactionHash": b"\x01" * 32,
+        "blockNumber": 100,
+        "logIndex": 0,
+    }
+    ingestor.web3.eth.contract.return_value.events.Swap.return_value = event
+    get_logs = AsyncMock(return_value=[{"blockNumber": 100}])
+
+    with (
+        patch.object(ingestor, "_get_logs_batch", get_logs),
+        patch.object(ingestor, "_get_pool_tokens", AsyncMock(return_value=("0xa", "0xb"))),
+    ):
+        await ingestor.sync_historical_swaps(
+            mock_chain_config["dexes"][0], 1, 100, pool_address=checksummed.lower()
+        )
+
+    assert get_logs.call_args[0][0] == checksummed
+    assert storage.save_trades_batch.call_args[0][0][0]["pool_address"] == checksummed.lower()
 
 
 @pytest.mark.asyncio

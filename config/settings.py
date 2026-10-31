@@ -3,12 +3,42 @@ Global settings for the wash trade detection system.
 Uses Pydantic for validation. No hardcoded credentials.
 """
 
+from typing import ClassVar
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Validated application settings with secure defaults."""
+
+    # Environment variable holding each chain's RPC URL. Single source of truth
+    # for both `rpc_urls` and the error messages that tell operators what to set.
+    RPC_URL_ENV_VARS: ClassVar[dict[int, str]] = {
+        1: "ETH_RPC_URL",
+        56: "BSC_RPC_URL",
+        137: "POLYGON_RPC_URL",
+        42161: "ARBITRUM_RPC_URL",
+        10: "OPTIMISM_RPC_URL",
+        8453: "BASE_RPC_URL",
+        43114: "AVALANCHE_RPC_URL",
+        250: "FANTOM_RPC_URL",
+        42220: "CELO_RPC_URL",
+        100: "GNOSIS_RPC_URL",
+        1284: "MOONBEAM_RPC_URL",
+        1313161554: "AURORA_RPC_URL",
+        1666600000: "HARMONY_RPC_URL",
+        25: "CRONOS_RPC_URL",
+        1088: "METIS_RPC_URL",
+        288: "BOBA_RPC_URL",
+        324: "ZKSYNC_RPC_URL",
+        1101: "POLYGON_ZKEVM_RPC_URL",
+        59144: "LINEA_RPC_URL",
+        534352: "SCROLL_RPC_URL",
+        5000: "MANTLE_RPC_URL",
+        2222: "KAVA_RPC_URL",
+        8217: "KLAYTN_RPC_URL",
+    }
 
     # Database — separate parameters, SSL enforced
     DATABASE_HOST: str = Field(..., description="PostgreSQL host")
@@ -33,12 +63,12 @@ class Settings(BaseSettings):
     # Per-chain RPC URLs
     ETH_RPC_URL: str = Field("", description="Ethereum RPC URL")
     BSC_RPC_URL: str = Field("https://bsc-dataseed1.binance.org")
-    POLYGON_RPC_URL: str = Field("https://polygon-rpc.com")
+    POLYGON_RPC_URL: str = Field("https://polygon.drpc.org")
     ARBITRUM_RPC_URL: str = Field("https://arb1.arbitrum.io/rpc")
     OPTIMISM_RPC_URL: str = Field("https://mainnet.optimism.io")
     BASE_RPC_URL: str = Field("https://mainnet.base.org")
     AVALANCHE_RPC_URL: str = Field("https://api.avax.network/ext/bc/C/rpc")
-    FANTOM_RPC_URL: str = Field("https://rpc.ftm.tools")
+    FANTOM_RPC_URL: str = Field("https://rpcapi.fantom.network")
     CELO_RPC_URL: str = Field("https://forno.celo.org")
     GNOSIS_RPC_URL: str = Field("https://rpc.gnosischain.com")
     MOONBEAM_RPC_URL: str = Field("https://rpc.api.moonbeam.network")
@@ -53,7 +83,7 @@ class Settings(BaseSettings):
     SCROLL_RPC_URL: str = Field("https://rpc.scroll.io")
     MANTLE_RPC_URL: str = Field("https://rpc.mantle.xyz")
     KAVA_RPC_URL: str = Field("https://evm.kava.io")
-    KLAYTN_RPC_URL: str = Field("https://public-node-api.klaytnapi.com/v1/cypress")
+    KLAYTN_RPC_URL: str = Field("https://public-en.node.kaia.io")
 
     # Detection Parameters
     WASH_TRADE_TIME_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
@@ -84,6 +114,12 @@ class Settings(BaseSettings):
     CLOSED_CLUSTER_MIN_MEMBERS: int = Field(2, ge=2, le=100)
     CLOSED_CLUSTER_MAX_MEMBERS: int = Field(50, ge=2, le=1000)
     CLOSED_CLUSTER_BALANCE_TOLERANCE: float = Field(0.2, ge=0.0, le=1.0)
+
+    # Entity Clustering — when the node lacks trace_filter, funding links can only
+    # be found by fetching blocks one at a time. 0 disables that fallback (an
+    # unbounded scan of the default window is ~2M RPC calls); a positive value
+    # scans at most that many of the most recent blocks.
+    ENTITY_SCAN_MAX_BLOCKS: int = Field(0, ge=0, le=2_000_000)
 
     # Repeated-Amount Fingerprinting
     REPEATED_AMOUNT_MIN_COUNT: int = Field(5, ge=2, le=1000)
@@ -135,6 +171,18 @@ class Settings(BaseSettings):
     # External APIs
     COINGECKO_API_KEY: str = Field("")
     COINGECKO_API_URL: str = "https://api.coingecko.com/api/v3"
+    COINGECKO_TIMEOUT_SECONDS: float = Field(20.0, ge=1.0, le=120.0)
+
+    # USD Pricing (see config/tokens.py for the reference-asset registry)
+    # Source for market-priced reference assets such as WETH; "none" disables
+    # external price lookups, leaving those legs unpriced (stablecoin legs are
+    # still valued, as they need no lookup).
+    NATIVE_PRICE_SOURCE: str = Field("coingecko", pattern="^(coingecko|none)$")
+    # A historical price is used only if a data point lies within this many
+    # minutes of the swap; otherwise the leg stays unpriced rather than taking a
+    # distant price. Capped at 12h so fetch windows stay within CoinGecko's
+    # hourly-granularity range.
+    PRICE_MAX_STALENESS_MINUTES: int = Field(120, ge=5, le=720)
 
     # Bot Allowlist
     BOT_ALLOWLIST: str = Field("")
@@ -185,32 +233,8 @@ class Settings(BaseSettings):
 
     @property
     def rpc_urls(self) -> dict[int, str]:
-        """Map chain IDs to RPC URLs."""
-        return {
-            1: self.ETH_RPC_URL,
-            56: self.BSC_RPC_URL,
-            137: self.POLYGON_RPC_URL,
-            42161: self.ARBITRUM_RPC_URL,
-            10: self.OPTIMISM_RPC_URL,
-            8453: self.BASE_RPC_URL,
-            43114: self.AVALANCHE_RPC_URL,
-            250: self.FANTOM_RPC_URL,
-            42220: self.CELO_RPC_URL,
-            100: self.GNOSIS_RPC_URL,
-            1284: self.MOONBEAM_RPC_URL,
-            1313161554: self.AURORA_RPC_URL,
-            1666600000: self.HARMONY_RPC_URL,
-            25: self.CRONOS_RPC_URL,
-            1088: self.METIS_RPC_URL,
-            288: self.BOBA_RPC_URL,
-            324: self.ZKSYNC_RPC_URL,
-            1101: self.POLYGON_ZKEVM_RPC_URL,
-            59144: self.LINEA_RPC_URL,
-            534352: self.SCROLL_RPC_URL,
-            5000: self.MANTLE_RPC_URL,
-            2222: self.KAVA_RPC_URL,
-            8217: self.KLAYTN_RPC_URL,
-        }
+        """Map chain IDs to their configured RPC URLs."""
+        return {chain_id: getattr(self, var) for chain_id, var in self.RPC_URL_ENV_VARS.items()}
 
     model_config = SettingsConfigDict(
         env_file=".env",

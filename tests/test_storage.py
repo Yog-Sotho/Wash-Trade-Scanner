@@ -316,3 +316,46 @@ async def test_get_recent_audit_logs(storage):
     logs = await storage.get_recent_audit_logs(limit=5)
 
     assert logs == [fake_log]
+
+
+@pytest.mark.asyncio
+async def test_get_unpriced_trades_returns_rows(storage):
+    session = _mock_session(storage)
+    result = MagicMock()
+    rows = [MagicMock(id=4), MagicMock(id=8)]
+    result.scalars.return_value.all.return_value = rows
+    session.execute = AsyncMock(return_value=result)
+
+    assert await storage.get_unpriced_trades(1, after_id=3, limit=2, pool_address="0xpool") == rows
+    compiled = str(session.execute.call_args.args[0])
+    assert "volume_usd IS NULL" in compiled
+    assert "swap_trades.id >" in compiled
+    assert "swap_trades.pool_address =" in compiled
+
+
+@pytest.mark.asyncio
+async def test_update_trade_prices_executes_bulk_update_and_commits(storage):
+    session = _mock_session(storage)
+    prices = [{"id": 1, "amount_in_usd": 1.0, "amount_out_usd": None, "volume_usd": 1.0}]
+
+    assert await storage.update_trade_prices(prices) == 1
+    assert session.execute.call_args.args[1] == prices
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_trade_prices_noop_on_empty(storage):
+    session = _mock_session(storage)
+    assert await storage.update_trade_prices([]) == 0
+    session.execute.assert_not_called()
+
+
+def test_json_serializer_encodes_datetimes_and_rejects_unknown_types():
+    from datetime import date, datetime
+
+    from core.storage import _json_serializer
+
+    assert _json_serializer({"t": datetime(2026, 1, 15, 12, 0)}) == '{"t": "2026-01-15T12:00:00"}'
+    assert _json_serializer({"d": date(2026, 1, 15)}) == '{"d": "2026-01-15"}'
+    with pytest.raises(TypeError):
+        _json_serializer({"x": object()})

@@ -67,7 +67,9 @@ Then initialise the tables:
         --end-block 19000000 \
         --export json
 
-Addresses are checksum‑validated. Block ranges are limited to 10M spans maximum.
+Set `ETH_RPC_URL` first — Ethereum has no public default endpoint. Mixed‑case
+addresses must carry a valid EIP‑55 checksum (all‑lowercase is accepted). Block
+ranges are limited to 10M spans maximum.
 
 For more options:
 
@@ -113,6 +115,10 @@ The detection stack layers fast pairwise heuristics, research‑grade graph anal
 
 9. **ML Isolation Forest**: anomaly detection on 21 trade‑ and pool‑level features, including statistical fingerprints used by forensic platforms: **Benford's‑law first‑digit deviation** of pool amounts, **amount roundness** (significant‑digit count), and **hour‑of‑day entropy** (humans trade diurnally; wash bots trade uniformly around the clock). Per‑pool contamination control; feature explainability via `ML_EXPLAINABILITY=true`.
 
+### USD valuation
+
+Every swap is valued in USD at ingestion from verified **reference assets** (`config/tokens.py`): stablecoin legs at $1.00, WETH/WBNB/WPOL/WAVAX legs at CoinGecko's historical price nearest the swap. Tokens are matched by address only, and legs that cannot be valued are stored as `NULL` rather than guessed. See [docs/configuration.md](docs/configuration.md#usd-pricing); `wash-reprice` values previously stored trades.
+
 ### Reporting
 
 Audit reports quantify wash activity, not just count it: wash volume in USD, wash‑volume ratio, a per‑method volume breakdown, and a severity grade (`MINIMAL` → `CRITICAL`) derived from the wash‑volume ratio.
@@ -137,6 +143,11 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 ## Testing
 
     pytest tests/ -v --cov=core --cov-report=html --cov-fail-under=80
+
+Integration tests run a full audit end to end against a real PostgreSQL (with the
+chain and price API simulated over local HTTP). They are skipped unless requested:
+
+    pytest tests/integration --integration   # uses the DATABASE_* settings
 
 ## Security
 

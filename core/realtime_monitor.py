@@ -62,7 +62,7 @@ class RealtimeMonitor:
     ) -> None:
         self.storage = storage
         self.chain_id = chain_id
-        self.pool_address = pool_address
+        self.pool_address = pool_address.lower()  # stored form; the ingestor checksums for RPC
         self.poll_interval = poll_interval or settings.MONITOR_POLL_INTERVAL_SECONDS
         self.window_minutes = window_minutes or settings.MONITOR_WINDOW_MINUTES
         self.detector = HeuristicDetector()

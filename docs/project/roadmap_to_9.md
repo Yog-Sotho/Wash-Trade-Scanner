@@ -60,12 +60,48 @@ cover stablecoin-leg, WETH-leg, reserve-derived and unpriceable paths.
 **Acceptance:** an integration test fails if either Phase-1 defect is reintroduced. This is
 the specific gap that let both CRITICAL bugs ship under 90% coverage.
 
+### Phase 1 — status: done (2026-10-31)
+
+Acceptance met: `wash-audit` completes against live Ethereum mainnet, a real
+PostgreSQL and real CoinGecko (175 swaps on the Uniswap V3 USDC/WETH pool,
+all priced, ~14s). Making the pipeline actually run exposed **five more
+defects beyond the two planned**, each of which also blocked every audit or a
+whole product surface; all seven are now guarded by integration tests verified
+to fail when the defect is reintroduced:
+
+| Defect | Effect |
+|---|---|
+| `ETH_RPC_URL` ignored; all 23 chains connected eagerly | no audit could start on any chain |
+| USD fields never written | every USD figure $0; closed-cluster could never fire |
+| Duplicate index in `address_clusters` | `create_all` failed: no entry point could start on a real DB |
+| Tx hash stored as `HexBytes` | asyncpg rejected every insert: no swap could be saved |
+| `datetime` in the audit log's JSON column | every audit crashed at its final step |
+| Pool address stored checksummed, queried lowercase; lowercase rejected by `eth_getLogs` | API/panel pool views always empty; live monitor never ingested a swap |
+| Unbounded 2M-block entity-clustering scan without `trace_filter` | audits never finished on public nodes |
+
+Also fixed: Uniswap V3 legs were inverted (every V3 swap recorded in the wrong
+direction); 3 of 23 default RPC endpoints were dead. Plan corrections: the
+"pool-reserve fallback" and "dust filter" above were dropped — the swap itself
+already gives the exchange rate, and a dust filter only applies to deriving
+prices from swaps, which this design does not do.
+
 ---
 
 ## Phase 2 — Prove detection quality (the SOTA core)
 
 Today there is no precision, recall, F1, AUC, split or cross-validation anywhere. A
 detection system without measured accuracy is an assertion, not a product.
+
+**First measured target (found by the Phase 1 live run).** On the most liquid
+USDC/WETH pool on Ethereum, the audit flagged 156 of 175 swaps (98.5% of volume)
+as wash, all via `self_trading`. Every one of the 35 distinct addresses it
+flagged is a contract (routers, aggregators, bots) — 0 are EOAs. The detector
+compares the Swap event's `sender` and `recipient`, which for router-mediated
+swaps are the router on both sides: that is ordinary AMM usage, not wash
+trading, yet it scores 1.0. The economic actor is the transaction's `from`.
+This is the first false-positive class the evaluation harness must measure and
+the detector stack must fix — deliberately not changed in Phase 1, because a
+methodology change without measurement is exactly what this phase exists to stop.
 
 ### 2.1 Labeled evaluation harness (`eval/`)
 Ground truth for wash trading is genuinely scarce, so use a two-track approach — the

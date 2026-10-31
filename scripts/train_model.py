@@ -47,7 +47,7 @@ async def main() -> None:
     args = parser.parse_args()
     await train_model(
         chain_id=args.chain_id,
-        pool_addresses=args.pools,
+        pool_addresses=[pool.lower() for pool in args.pools],  # stored form
         use_heuristic_labels=not args.no_labels,
         save_model=not args.no_save,
     )

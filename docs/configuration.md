@@ -15,14 +15,14 @@ Each chain can have its RPC endpoint configured. If a variable is not set, a pub
 
 | Chain             | Variable               | Default Public Endpoint                                     |
 |-------------------|------------------------|-------------------------------------------------------------|
-| Ethereum          | `ETH_RPC_URL`          | `https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY`             |
+| Ethereum          | `ETH_RPC_URL`          | *(none - required; set your own endpoint)*                  |
 | BSC               | `BSC_RPC_URL`          | `https://bsc-dataseed1.binance.org`                         |
-| Polygon           | `POLYGON_RPC_URL`      | `https://polygon-rpc.com`                                   |
+| Polygon           | `POLYGON_RPC_URL`      | `https://polygon.drpc.org`                                  |
 | Arbitrum          | `ARBITRUM_RPC_URL`     | `https://arb1.arbitrum.io/rpc`                              |
 | Optimism          | `OPTIMISM_RPC_URL`     | `https://mainnet.optimism.io`                               |
 | Base              | `BASE_RPC_URL`         | `https://mainnet.base.org`                                  |
 | Avalanche         | `AVALANCHE_RPC_URL`    | `https://api.avax.network/ext/bc/C/rpc`                     |
-| Fantom            | `FANTOM_RPC_URL`       | `https://rpc.ftm.tools`                                     |
+| Fantom            | `FANTOM_RPC_URL`       | `https://rpcapi.fantom.network`                             |
 | Celo              | `CELO_RPC_URL`         | `https://forno.celo.org`                                    |
 | Gnosis            | `GNOSIS_RPC_URL`       | `https://rpc.gnosischain.com`                               |
 | Moonbeam          | `MOONBEAM_RPC_URL`     | `https://rpc.api.moonbeam.network`                          |
@@ -37,9 +37,18 @@ Each chain can have its RPC endpoint configured. If a variable is not set, a pub
 | Scroll            | `SCROLL_RPC_URL`       | `https://rpc.scroll.io`                                     |
 | Mantle            | `MANTLE_RPC_URL`       | `https://rpc.mantle.xyz`                                    |
 | Kava              | `KAVA_RPC_URL`         | `https://evm.kava.io`                                       |
-| Klaytn            | `KLAYTN_RPC_URL`       | `https://public-node-api.klaytnapi.com/v1/cypress`          |
+| Klaytn (Kaia)     | `KLAYTN_RPC_URL`       | `https://public-en.node.kaia.io`                            |
 
-If an RPC URL contains the placeholder `YOUR_KEY`, the system will raise an error to prevent silent failures.
+Each chain's endpoint is read from its variable at startup; the defaults above
+are public endpoints, verified on 2026-10-31 to answer with the correct chain
+ID. Ethereum has no public default — set `ETH_RPC_URL`. If an endpoint contains
+the placeholder `YOUR_KEY`, connecting to that chain fails with an error naming
+the variable to set. Only the chain being audited is connected, so a
+misconfigured chain never affects audits of the others.
+
+The default Moonbeam endpoint could not be reached from the environment used
+for that verification, but is still documented as Moonbeam's official one, so
+it was left unchanged; set `MOONBEAM_RPC_URL` if it fails for you.
 
 ## Detection Parameters
 
@@ -70,6 +79,33 @@ Research‑grade detectors in `core/advanced_heuristics.py`:
 | `CLOSED_CLUSTER_BALANCE_TOLERANCE`  | Max per‑member internal in/out volume imbalance                                   | `0.2`        |
 | `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount by a sender before flagging                   | `5`          |
 | `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3`          |
+| `ENTITY_SCAN_MAX_BLOCKS`            | On nodes without `trace_filter`, max recent blocks to scan for funding links (one RPC call per block); `0` skips that clustering | `0` |
+
+## USD Pricing
+
+Swaps are valued in USD at ingestion from **reference assets** listed in
+`config/tokens.py`: USD stablecoins (valued at $1.00) and wrapped/bridged market
+assets such as WETH, WBNB, WPOL and WAVAX (valued at CoinGecko's historical price
+nearest the swap). A swap's `volume_usd` comes from its stablecoin leg when it has
+one, otherwise from its market-priced leg. Tokens are matched by address, never by
+symbol. Legs that cannot be valued are stored as `NULL`, never guessed — this
+includes pairs with no reference asset, Curve swaps (whose events identify coins by
+index), and chains without a registry entry (currently covered: Ethereum, BNB Smart
+Chain, Polygon PoS, Arbitrum One, OP Mainnet, Base, Avalanche C-Chain).
+
+| Variable                      | Description                                                                         | Default     |
+|-------------------------------|-------------------------------------------------------------------------------------|-------------|
+| `NATIVE_PRICE_SOURCE`         | `coingecko`, or `none` to skip external lookups (stablecoin legs are still valued)  | `coingecko` |
+| `COINGECKO_API_KEY`           | Demo or Pro key; the keyless public API is heavily rate-limited                     | (empty)     |
+| `COINGECKO_API_URL`           | Use `https://pro-api.coingecko.com/api/v3` with a Pro key                           | public API  |
+| `COINGECKO_TIMEOUT_SECONDS`   | Per-request timeout                                                                 | `20`        |
+| `PRICE_MAX_STALENESS_MINUTES` | A price is used only if a data point lies within this many minutes of the swap (max 720) | `120`  |
+
+CoinGecko's Demo and keyless plans serve only the past 365 days of history; older
+swaps keep a `NULL` USD value on those plans. To value rows ingested before pricing
+existed, or whose price was unavailable at ingestion (e.g. throttling), run:
+
+    wash-reprice --chain-id 1 [--pool 0x...]
 
 ## API Server
 
