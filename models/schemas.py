@@ -59,8 +59,9 @@ class AddressCluster(Base):
     last_updated: Mapped[datetime | None] = mapped_column(DateTime, onupdate=func.now())
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
     evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-
-    __table_args__ = (Index("ix_address_clusters_cluster_id", "cluster_id"),)
+    # cluster_id's index comes from index=True above. A same-named explicit
+    # Index here made create_all() fail on a real database ("relation already
+    # exists"), which broke every entry point at startup.
 
 
 class TokenRiskProfile(Base):

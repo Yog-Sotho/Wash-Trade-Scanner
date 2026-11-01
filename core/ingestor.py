@@ -5,6 +5,7 @@ Multi-chain swap event ingestor with circuit breaker protection.
 import asyncio
 import logging
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,13 +13,26 @@ from web3 import AsyncHTTPProvider, AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware  # type: ignore[attr-defined]
 from web3.types import EventData, LogReceipt
 
-from config.chains import CHAINS, get_chain_config
+from config.chains import get_chain_config
 from config.settings import settings
 from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from core.exceptions import CircuitBreakerOpenError, RPCError
+from core.pricing import PriceOracle
 from core.storage import Storage
 
 logger = logging.getLogger(__name__)
+
+
+def _hex_str(value: Any) -> str:
+    """Normalize a hash to the stored form: a lowercase 0x-prefixed str.
+
+    web3 returns hashes as HexBytes, which asyncpg rejects for VARCHAR columns.
+    Web3.to_hex is used rather than HexBytes.hex(), whose 0x prefix was dropped
+    in hexbytes 1.0.
+    """
+    if isinstance(value, bytes | bytearray):
+        return Web3.to_hex(bytes(value))
+    return str(value).lower()
 
 
 class RateLimiter:
@@ -44,9 +58,15 @@ class RateLimiter:
 class ChainIngestor:
     """Per-chain blockchain data ingestor."""
 
-    def __init__(self, chain_config: dict[str, Any], storage: Storage):
+    def __init__(
+        self,
+        chain_config: dict[str, Any],
+        storage: Storage,
+        price_oracle: PriceOracle | None = None,
+    ):
         self.chain_config = chain_config
         self.storage = storage
+        self.price_oracle = price_oracle or PriceOracle.from_settings()
         self.web3: AsyncWeb3 | None = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
         self.circuit_breaker = CircuitBreaker(
@@ -66,9 +86,12 @@ class ChainIngestor:
         """Connect to RPC with validation."""
         rpc = self.chain_config["rpc_url"]
         if "YOUR_KEY" in rpc or "placeholder" in rpc.lower():
+            env_var = settings.RPC_URL_ENV_VARS.get(
+                self.chain_config["chain_id"], "this chain's RPC URL setting"
+            )
             raise ValueError(
-                f"RPC URL for {self.chain_config['name']} contains placeholder. "
-                "Set a real endpoint in environment."
+                f"RPC URL for {self.chain_config['name']} contains a placeholder. "
+                f"Set {env_var} in the environment to a real endpoint."
             )
 
         provider = AsyncHTTPProvider(rpc)
@@ -205,14 +228,18 @@ class ChainIngestor:
                     amount_out = amount0Out
 
             elif event_type == "v3":
+                # amount0/amount1 are deltas of the *pool's* balances: the positive
+                # one is what the pool received (the trader's input), the negative
+                # one what it paid out (UniswapV3Pool.swap: for zeroForOne, amount0
+                # > 0 is pulled in and token1 is sent for -amount1).
                 amount0 = float(args.get("amount0", 0))
                 amount1 = float(args.get("amount1", 0))
-                if amount0 < 0:
-                    amount_in = abs(amount0)
-                    amount_out = amount1
+                if amount0 > 0:
+                    amount_in = amount0
+                    amount_out = abs(amount1)
                 else:
-                    amount_in = abs(amount1)
-                    amount_out = amount0
+                    amount_in = amount1
+                    amount_out = abs(amount0)
 
             elif event_type == "curve":
                 amount_in = float(args.get("tokens_sold", 0))
@@ -251,7 +278,7 @@ class ChainIngestor:
                         token_in = token1
                         token_out = token0
                 elif event_type == "v3":
-                    if float(args.get("amount0", 0)) < 0:
+                    if float(args.get("amount0", 0)) > 0:
                         token_in = token0
                         token_out = token1
                     else:
@@ -261,14 +288,14 @@ class ChainIngestor:
             return {
                 "chain_id": self.chain_config["chain_id"],
                 "dex_name": dex["name"],
-                "pool_address": log.get("address", ""),
+                "pool_address": log.get("address", "").lower(),
                 "token_in": token_in.lower(),
                 "token_out": token_out.lower(),
                 "amount_in": amount_in,
                 "amount_out": amount_out,
                 "sender": sender.lower(),
                 "recipient": recipient.lower(),
-                "transaction_hash": log.get("transactionHash", ""),
+                "transaction_hash": _hex_str(log.get("transactionHash", "")),
                 "block_number": log.get("blockNumber", 0),
                 "block_timestamp": block_timestamp,
                 "log_index": log.get("logIndex", 0),
@@ -292,7 +319,9 @@ class ChainIngestor:
 
         event_signature_hash = Web3.keccak(text=dex["event_sig"]).hex()
         topics = [event_signature_hash]
-        address = pool_address if pool_address else dex["router"]
+        # web3 rejects non-checksummed addresses in eth_getLogs filters, while
+        # storage and callers use lowercase.
+        address = Web3.to_checksum_address(pool_address) if pool_address else dex["router"]
 
         try:
             raw_logs = await self._get_logs_batch(address, topics, from_block, to_block)
@@ -346,6 +375,7 @@ class ChainIngestor:
                 trades_data.append(trade_data)
 
         if trades_data:
+            await self.price_oracle.price_trades(self.chain_config["chain_id"], trades_data)
             await self.storage.save_trades_batch(trades_data)
 
         logger.info(f"Synced {len(trades_data)} historical swaps for {dex['name']}")
@@ -356,17 +386,43 @@ class ChainIngestor:
 
 
 class MultiChainIngestor:
-    """Manages multiple chain ingestors."""
+    """Manages per-chain ingestors, connecting each chain only when it is needed.
+
+    Chains are connected lazily on first use rather than all at once: an audit
+    of one chain must not depend on the reachability or configuration of the
+    other 22.
+    """
 
     def __init__(self, storage: Storage):
         self.storage = storage
         self.ingestors: dict[int, ChainIngestor] = {}
+        self._connect_lock = asyncio.Lock()
 
-    async def initialize(self) -> None:
-        for chain in CHAINS:
-            ingestor = ChainIngestor(chain, self.storage)
+    async def initialize(self, chain_ids: Iterable[int] = ()) -> None:
+        """Eagerly connect the given chains, failing fast on a bad endpoint.
+
+        With no arguments nothing is connected; chains connect on first use.
+        """
+        for chain_id in chain_ids:
+            await self.get_ingestor(chain_id)
+
+    async def get_ingestor(self, chain_id: int) -> ChainIngestor:
+        """Return a connected ingestor for `chain_id`, connecting it if needed.
+
+        A failed connection is not cached, so a later call retries.
+        """
+        async with self._connect_lock:
+            existing = self.ingestors.get(chain_id)
+            if existing is not None:
+                return existing
+            try:
+                chain_config = get_chain_config(chain_id)
+            except ValueError as exc:
+                raise ValueError(f"Chain {chain_id} not configured") from exc
+            ingestor = ChainIngestor(chain_config, self.storage)
             await ingestor.connect()
-            self.ingestors[chain["chain_id"]] = ingestor
+            self.ingestors[chain_id] = ingestor
+            return ingestor
 
     async def audit_pool(
         self,
@@ -376,13 +432,11 @@ class MultiChainIngestor:
         end_block: int | None = None,
     ) -> int:
         """Sync trades for a specific pool."""
-        ingestor = self.ingestors.get(chain_id)
-        if not ingestor:
-            raise ValueError(f"Chain {chain_id} not configured")
+        ingestor = await self.get_ingestor(chain_id)
         assert ingestor.web3 is not None, "ingestor.connect() must be called first"
 
         total_swaps = 0
-        chain_config = get_chain_config(chain_id)
+        chain_config = ingestor.chain_config
 
         if start_block is None:
             start_block = chain_config.get("start_block", 0)

@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.entity_clustering import EntityClusterer
+from core.exceptions import RPCError
 from core.storage import Storage
 from models.schemas import AddressCluster
 
@@ -208,7 +209,10 @@ async def test_build_funding_graph_uses_trace_filter(clusterer):
 
 
 @pytest.mark.asyncio
-async def test_build_funding_graph_falls_back_to_block_scan(clusterer):
+async def test_build_funding_graph_falls_back_to_block_scan(clusterer, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ENTITY_SCAN_MAX_BLOCKS", 10)  # fallback is opt-in
     with patch("core.entity_clustering.AsyncWeb3") as MockWeb3:
         web3 = AsyncMock()
         MockWeb3.return_value = web3
@@ -236,3 +240,79 @@ async def test_build_funding_graph_falls_back_to_block_scan(clusterer):
             )
 
     assert graph.has_edge("0xalice", "0xbob")
+
+
+@pytest.mark.asyncio
+async def test_node_supports_trace_filter_false_on_error_response(clusterer):
+    """make_request returns JSON-RPC errors instead of raising them; an error
+    response used to be read as "trace_filter supported"."""
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(
+        return_value={"error": {"code": -32601, "message": "Method not found"}}
+    )
+    assert await clusterer._node_supports_trace_filter(web3) is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_funding_edges_trace_filter_raises_on_error_response(clusterer):
+    """An error response must not be read as "no funding links"."""
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(return_value={"error": {"message": "range too large"}})
+
+    with pytest.raises(RPCError):
+        await clusterer._fetch_funding_edges_trace_filter(web3, {ALICE}, 1, 100)
+
+
+async def _graph_without_trace_support(clusterer, from_block, to_block):
+    scan = AsyncMock(return_value=[])
+    with (
+        patch("core.entity_clustering.AsyncWeb3") as MockWeb3,
+        patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=False)),
+        patch.object(clusterer, "_fetch_funding_edges_block_scan", scan),
+    ):
+        MockWeb3.return_value = AsyncMock()
+        graph = await clusterer.build_funding_graph(
+            1,
+            ["0xalice", "0xbob"],
+            session=AsyncMock(),
+            from_block_override=from_block,
+            to_block_override=to_block,
+        )
+    return graph, scan
+
+
+@pytest.mark.asyncio
+async def test_block_scan_fallback_is_off_by_default(clusterer, caplog):
+    """Regression: without trace_filter the audit fell back to scanning ~2M
+    blocks one RPC call at a time, so it never finished on public nodes."""
+    graph, scan = await _graph_without_trace_support(clusterer, 0, 2_000_000)
+
+    scan.assert_not_awaited()
+    assert graph.number_of_edges() == 0
+    assert graph.number_of_nodes() == 2
+    assert "ENTITY_SCAN_MAX_BLOCKS" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_block_scan_fallback_covers_only_latest_blocks_up_to_cap(
+    clusterer, monkeypatch, caplog
+):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ENTITY_SCAN_MAX_BLOCKS", 100)
+    _, scan = await _graph_without_trace_support(clusterer, 0, 1_000)
+
+    _, _, from_block, to_block = scan.call_args.args
+    assert (from_block, to_block) == (901, 1_000)
+    assert "coverage is partial" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_block_scan_fallback_scans_whole_window_within_cap(clusterer, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ENTITY_SCAN_MAX_BLOCKS", 100)
+    _, scan = await _graph_without_trace_support(clusterer, 950, 1_000)
+
+    _, _, from_block, to_block = scan.call_args.args
+    assert (from_block, to_block) == (950, 1_000)

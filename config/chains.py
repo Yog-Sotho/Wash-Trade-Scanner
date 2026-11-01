@@ -6,6 +6,8 @@ Supports 20+ blockchains and major DEXes. No placeholders.
 from dataclasses import dataclass
 from typing import Any
 
+from config.settings import settings
+
 # ============================================================================
 # Complete ABI definitions – verified from Etherscan / official sources
 # ============================================================================
@@ -274,7 +276,7 @@ CHAINS: list[dict[str, Any]] = [
     {
         "chain_id": 137,
         "name": "Polygon",
-        "rpc_url": "https://polygon-rpc.com",
+        "rpc_url": "https://polygon.drpc.org",
         "ws_url": "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY",
         "native_token": "MATIC",
         "block_time": 2.0,
@@ -502,7 +504,7 @@ CHAINS: list[dict[str, Any]] = [
     {
         "chain_id": 250,
         "name": "Fantom",
-        "rpc_url": "https://rpc.ftm.tools",
+        "rpc_url": "https://rpcapi.fantom.network",
         "ws_url": "wss://wsapi.fantom.network",
         "native_token": "FTM",
         "block_time": 1.0,
@@ -1042,7 +1044,7 @@ CHAINS: list[dict[str, Any]] = [
     {
         "chain_id": 8217,
         "name": "Klaytn",
-        "rpc_url": "https://public-node-api.klaytnapi.com/v1/cypress",
+        "rpc_url": "https://public-en.node.kaia.io",
         "ws_url": "wss://public-node-api.klaytnapi.com/v1/ws/cypress",
         "native_token": "KLAY",
         "block_time": 1.0,
@@ -1079,10 +1081,19 @@ CHAINS: list[dict[str, Any]] = [
 
 
 def get_chain_config(chain_id: int) -> dict[str, Any]:
-    """Retrieve chain configuration by chain ID."""
+    """Retrieve chain configuration by chain ID.
+
+    The returned dict is a copy whose `rpc_url` comes from settings (and thus
+    the environment, e.g. ETH_RPC_URL). The static URL in CHAINS is only a
+    fallback for when the setting is empty. CHAINS itself is never mutated.
+    """
     for chain in CHAINS:
         if chain["chain_id"] == chain_id:
-            return chain
+            resolved = dict(chain)
+            configured_url = settings.rpc_urls.get(chain_id, "")
+            if configured_url:
+                resolved["rpc_url"] = configured_url
+            return resolved
     raise ValueError(f"Chain ID {chain_id} not found in configuration.")
 
 

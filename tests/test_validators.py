@@ -18,6 +18,31 @@ def test_validate_address_rejects_bad_format():
         validate_address("not-an-address")
 
 
+VALID_CHECKSUMMED = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"  # Uniswap V3 USDC/WETH
+
+
+def test_validate_address_accepts_valid_checksum_and_uncased_forms():
+    assert validate_address(VALID_CHECKSUMMED) == VALID_CHECKSUMMED
+    assert validate_address(VALID_CHECKSUMMED.lower()) == VALID_CHECKSUMMED
+    assert validate_address("0x" + VALID_CHECKSUMMED[2:].upper()) == VALID_CHECKSUMMED
+
+
+def test_validate_address_rejects_mixed_case_with_bad_checksum():
+    """A mistyped mixed-case address must not silently name another contract."""
+    from web3 import Web3
+
+    bad = VALID_CHECKSUMMED.replace("A0c2", "a0c2", 1)  # flip one character's case
+    assert bad != VALID_CHECKSUMMED and not Web3.is_checksum_address(bad)
+    with pytest.raises(ValueError, match="checksum"):
+        validate_address(bad)
+
+
+def test_audit_parameters_normalize_pool_to_lowercase():
+    """Lowercase is the stored form of every address column."""
+    params = AuditParameters(chain_id=1, pool_address=VALID_CHECKSUMMED)
+    assert params.pool_address == VALID_CHECKSUMMED.lower()
+
+
 def test_audit_parameters_valid():
     params = AuditParameters(chain_id=1, pool_address="0x" + "b" * 40)
     assert params.chain_id == 1

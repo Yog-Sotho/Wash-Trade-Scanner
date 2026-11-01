@@ -23,12 +23,9 @@ class AuditParameters(BaseModel):
     @field_validator("pool_address")
     @classmethod
     def validate_pool_address(cls, v: str) -> str:
-        if not VALID_ADDRESS_RE.match(v):
-            raise ValueError(f"Invalid Ethereum address format: {v}")
-        try:
-            return Web3.to_checksum_address(v)
-        except ValueError as exc:
-            raise ValueError(f"Invalid checksum address: {v}") from exc
+        # Lowercase is the stored form of every address column; the ingestor
+        # converts to EIP-55 itself where web3 requires it.
+        return validate_address(v).lower()
 
     @field_validator("end_block")
     @classmethod
@@ -62,7 +59,15 @@ class TrainingParameters(BaseModel):
 
 
 def validate_address(addr: str) -> str:
-    """Validate and checksum an Ethereum address."""
+    """Validate an address and return its EIP-55 checksummed form.
+
+    Mixed-case input must carry a valid EIP-55 checksum, so a mistyped address
+    is rejected instead of silently naming a different contract. All-lowercase
+    or all-uppercase input carries no checksum and is accepted.
+    """
     if not VALID_ADDRESS_RE.match(addr):
         raise ValueError(f"Invalid Ethereum address: {addr}")
+    body = addr[2:]
+    if body not in (body.lower(), body.upper()) and not Web3.is_checksum_address(addr):
+        raise ValueError(f"Invalid EIP-55 checksum: {addr}")
     return Web3.to_checksum_address(addr)

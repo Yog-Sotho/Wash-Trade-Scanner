@@ -158,6 +158,13 @@ async def test_stream_survives_poll_errors():
     assert error_events and error_events[0].payload["recoverable"] is True
 
 
+def test_monitor_normalizes_pool_to_stored_form():
+    monitor = RealtimeMonitor(
+        AsyncMock(), chain_id=1, pool_address="0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    )
+    assert monitor.pool_address == "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
+
+
 @pytest.mark.asyncio
 async def test_initialize_connects_single_chain():
     storage = AsyncMock()

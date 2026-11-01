@@ -92,7 +92,9 @@ class AuditRunner:
                 use_ml = False
 
         ingestor = MultiChainIngestor(self.storage)
-        await ingestor.initialize()
+        # Connect only the audited chain, failing fast on a bad endpoint before
+        # any work is done.
+        await ingestor.initialize([params.chain_id])
 
         if self._shutdown_event.is_set():
             raise WashTradeError("Audit cancelled by shutdown signal")

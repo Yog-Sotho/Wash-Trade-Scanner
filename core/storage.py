@@ -3,8 +3,9 @@ Database storage layer using SQLAlchemy async.
 Secure connection handling with SSL enforcement.
 """
 
+import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, and_, delete, func, select, update
@@ -28,6 +29,18 @@ from models.schemas import (
 logger = logging.getLogger(__name__)
 
 
+def _json_default(value: Any) -> str:
+    """Encode the non-JSON types that reach JSON columns (e.g. trade timestamps
+    in audit results). Anything else still fails loudly."""
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_serializer(value: Any) -> str:
+    return json.dumps(value, default=_json_default)
+
+
 class Storage:
     """Async database storage with connection pooling."""
 
@@ -46,6 +59,7 @@ class Storage:
             pool_recycle=3600,
             pool_pre_ping=True,
             connect_args={"timeout": settings.RPC_TIMEOUT},
+            json_serializer=_json_serializer,
         )
         self.session_factory = async_sessionmaker(
             self.engine,
@@ -144,6 +158,42 @@ class Storage:
             result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
             return result.rowcount
+
+    async def get_unpriced_trades(
+        self,
+        chain_id: int,
+        after_id: int,
+        limit: int,
+        pool_address: str | None = None,
+    ) -> list[SwapTrade]:
+        """Trades with no USD volume, in id order, starting after `after_id`.
+
+        Keyset pagination: a caller advancing `after_id` terminates even when
+        some trades remain unpriceable.
+        """
+        conditions = [
+            SwapTrade.chain_id == chain_id,
+            SwapTrade.volume_usd.is_(None),
+            SwapTrade.id > after_id,
+        ]
+        if pool_address is not None:
+            conditions.append(SwapTrade.pool_address == pool_address)
+        async with await self.get_session() as session:
+            stmt = select(SwapTrade).where(and_(*conditions)).order_by(SwapTrade.id).limit(limit)
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def update_trade_prices(self, prices: list[dict[str, Any]]) -> int:
+        """Bulk-set USD values by primary key.
+
+        Each dict holds `id`, `amount_in_usd`, `amount_out_usd`, `volume_usd`.
+        """
+        if not prices:
+            return 0
+        async with await self.get_session() as session:
+            await session.execute(update(SwapTrade), prices)
+            await session.commit()
+        return len(prices)
 
     async def get_pool_trades(
         self,

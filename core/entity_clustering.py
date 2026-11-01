@@ -16,6 +16,8 @@ from web3 import AsyncWeb3, Web3
 from web3.types import RPCEndpoint, TraceFilterParams
 
 from config.chains import get_chain_config
+from config.settings import settings
+from core.exceptions import RPCError
 from core.storage import Storage
 from models.schemas import AddressCluster, SwapTrade
 
@@ -44,10 +46,12 @@ class EntityClusterer:
                     Web3.to_checksum_address("0x0000000000000000000000000000000000000000")
                 ],
             )
-            await web3.provider.make_request(RPCEndpoint("trace_filter"), [test_params])
-            return True
+            response = await web3.provider.make_request(RPCEndpoint("trace_filter"), [test_params])
         except Exception:
             return False
+        # make_request returns JSON-RPC error responses (e.g. "method not found")
+        # instead of raising them.
+        return "error" not in response
 
     async def _fetch_funding_edges_trace_filter(
         self,
@@ -76,6 +80,10 @@ class EntityClusterer:
             )
             try:
                 traces = await web3.provider.make_request(RPCEndpoint("trace_filter"), [params])
+                if "error" in traces:
+                    # Reading an error response as "no traces" would silently
+                    # report zero funding links.
+                    raise RPCError(f"trace_filter returned an error: {traces['error']}")
                 for trace in traces.get("result", []):
                     action = trace.get("action", {})
                     from_addr = action.get("from")
@@ -125,6 +133,38 @@ class EntityClusterer:
             await asyncio.sleep(0.01)
         return edges
 
+    async def _block_scan_fallback(
+        self,
+        web3: AsyncWeb3,
+        addresses: set[str],
+        from_block: int,
+        to_block: int,
+        chain_id: int,
+    ) -> list[tuple[str, str | None, int]]:
+        """Scan blocks one RPC call each, bounded by ENTITY_SCAN_MAX_BLOCKS.
+
+        Unbounded, the default ~2M-block window means ~2M sequential
+        eth_getBlock calls: an audit that effectively never finishes. So the
+        fallback is off by default and, when enabled, covers only the most
+        recent ENTITY_SCAN_MAX_BLOCKS blocks of the window.
+        """
+        cap = settings.ENTITY_SCAN_MAX_BLOCKS
+        if cap == 0:
+            logger.warning(
+                f"Chain {chain_id}: skipping funding-link clustering because the node "
+                "does not support trace_filter. Use a trace-enabled node, or set "
+                "ENTITY_SCAN_MAX_BLOCKS to scan recent blocks instead (one RPC call per block)."
+            )
+            return []
+        window = to_block - from_block + 1
+        if window > cap:
+            logger.warning(
+                f"Chain {chain_id}: scanning only the latest {cap} of {window} blocks for "
+                "funding links (ENTITY_SCAN_MAX_BLOCKS); clustering coverage is partial."
+            )
+            from_block = to_block - cap + 1
+        return await self._fetch_funding_edges_block_scan(web3, addresses, from_block, to_block)
+
     async def build_funding_graph(
         self,
         chain_id: int,
@@ -171,14 +211,14 @@ class EntityClusterer:
                     web3, addresses_set, from_block, to_block
                 )
             except Exception:
-                logger.warning("trace_filter failed, falling back to block scan")
-                edges = await self._fetch_funding_edges_block_scan(
-                    web3, addresses_set, from_block, to_block
+                logger.warning(f"trace_filter failed on chain {chain_id}")
+                edges = await self._block_scan_fallback(
+                    web3, addresses_set, from_block, to_block, chain_id
                 )
         else:
-            logger.info(f"trace_filter not supported, using block scan for chain {chain_id}")
-            edges = await self._fetch_funding_edges_block_scan(
-                web3, addresses_set, from_block, to_block
+            logger.info(f"trace_filter not supported on chain {chain_id}")
+            edges = await self._block_scan_fallback(
+                web3, addresses_set, from_block, to_block, chain_id
             )
 
         # Add nodes and edges

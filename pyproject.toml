@@ -68,6 +68,7 @@ wash-audit = "scripts.run_audit:cli"
 wash-train = "scripts.train_model:cli"
 wash-api = "api.server:cli"
 wash-genkey = "scripts.generate_api_key:cli"
+wash-reprice = "scripts.backfill_prices:cli"
 
 [tool.setuptools.packages.find]
 include = ["api*", "config*", "core*", "models*", "scripts*"]
@@ -114,7 +115,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-v --tb=short"
+markers = ["integration: needs a PostgreSQL database; run with --integration"]
 
 [tool.bandit]
 exclude_dirs = ["tests"]
