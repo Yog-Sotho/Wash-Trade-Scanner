@@ -105,8 +105,8 @@ Event frames:
 
 ```json
 {"type": "status", "data": {"state": "monitoring", "from_block": 19000000, ...}}
-{"type": "alert",  "data": {"id": 42, "detection_method": "position_neutral_scc", "wash_trade_score": 0.95, ...}}
-{"type": "stats",  "data": {"block": 19000012, "detections_by_method": {"self_trading": 1}, "new_alerts": 1}}
+{"type": "alert",  "data": {"id": 42, "detection_method": "round_trip", "wash_trade_score": 0.80, ...}}
+{"type": "stats",  "data": {"block": 19000012, "detections_by_method": {"round_trip": 2}, "new_alerts": 2}}
 {"type": "error",  "data": {"reason": "rpc_circuit_breaker_open", "recoverable": true}}
 ```
 

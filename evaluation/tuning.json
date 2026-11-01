@@ -1,0 +1,53 @@
+{
+  "detectors": {
+    "position_neutral": {
+      "best": {
+        "clean_fp": 8,
+        "clean_trades": 27385,
+        "decisive": true,
+        "params": {
+          "POSITION_NEUTRAL_MARGIN": 0.001,
+          "POSITION_NEUTRAL_MIN_TRADES": 4,
+          "POSITION_NEUTRAL_WINDOWS_HOURS": [
+            1,
+            24,
+            168
+          ]
+        },
+        "posterior": 0.8503,
+        "tpr": 0.2964
+      },
+      "decisive": true
+    },
+    "repeated_amounts": {
+      "best": {
+        "clean_fp": 538,
+        "clean_trades": 27385,
+        "decisive": false,
+        "params": {
+          "REPEATED_AMOUNT_MIN_COUNT": 5,
+          "REPEATED_AMOUNT_SIG_FIGS": 3
+        },
+        "posterior": 0.0951,
+        "tpr": 0.2193
+      },
+      "decisive": false
+    },
+    "round_trip": {
+      "best": {
+        "clean_fp": 20,
+        "clean_trades": 27385,
+        "decisive": true,
+        "params": {
+          "ROUND_TRIP_MAX_BLOCKS": 50,
+          "ROUND_TRIP_MIN_COUNT": 2,
+          "ROUND_TRIP_VALUE_TOLERANCE": 0.01
+        },
+        "posterior": 0.8025,
+        "tpr": 0.4269
+      },
+      "decisive": true
+    }
+  },
+  "seeds": 10
+}

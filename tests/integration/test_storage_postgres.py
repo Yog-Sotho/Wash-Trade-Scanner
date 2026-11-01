@@ -7,6 +7,7 @@ none of this SQL had ever been executed before these tests existed.
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 
 from core.storage import Storage
 
@@ -48,7 +49,7 @@ async def test_initialize_is_idempotent(pg_storage: Storage):
 async def test_save_trades_batch_is_idempotent(pg_storage: Storage):
     batch = [_trade(0), _trade(1)]
     assert await pg_storage.save_trades_batch(batch) == 2
-    # Re-syncing an overlapping range: ON CONFLICT (transaction_hash, log_index) DO NOTHING.
+    # Re-syncing an overlapping range leaves stored trades alone.
     assert await pg_storage.save_trades_batch(batch) == 0
     assert len(await pg_storage.get_pool_trades(1, POOL)) == 2
 
@@ -186,3 +187,64 @@ async def test_backfill_prices_unpriced_rows(pg_storage: Storage):
     assert by_index[1].volume_usd is None
     # Re-running is safe: the unpriceable row is examined again, nothing changes.
     assert await backfill_prices(pg_storage, PriceOracle(None), chain_id=1) == (1, 0)
+
+
+async def test_resync_completes_a_trade_stored_without_its_sender(pg_storage: Storage):
+    """A row synced before tx_from existed (or whose tx fetch failed) gains it on
+    re-sync, but a stored sender is never overwritten and labels are untouched."""
+    sender = "0x" + "e" * 40
+    await pg_storage.save_trades_batch([_trade(0, tx_from=None, tx_to=None)])
+    await pg_storage.save_trades_batch([_trade(1, tx_from=sender, tx_to=None)])
+    stored = {t.log_index: t for t in await pg_storage.get_pool_trades(1, POOL)}
+    await pg_storage.update_trade_labels(
+        [stored[0].id], is_wash_trade=True, wash_trade_score=0.9, detection_method="x"
+    )
+
+    healed = await pg_storage.save_trades_batch(
+        [
+            _trade(0, tx_from=sender, tx_to="0x" + "f" * 40, gas_price=3.5),
+            _trade(1, tx_from="0x" + "9" * 40, tx_to=None),
+        ]
+    )
+
+    assert healed == 1  # only the row that lacked a sender
+    stored = {t.log_index: t for t in await pg_storage.get_pool_trades(1, POOL)}
+    assert stored[0].tx_from == sender
+    assert stored[0].tx_to == "0x" + "f" * 40
+    assert stored[0].gas_price == 3.5
+    assert stored[0].is_wash_trade is True
+    assert stored[1].tx_from == sender
+
+
+async def test_initialize_adds_columns_missing_from_an_existing_table(pg_storage: Storage):
+    """create_all() skips existing tables; a database created before tx_from
+    existed must gain the column (and its index) instead of failing every query."""
+    assert pg_storage.engine is not None
+    await pg_storage.save_trades_batch([_trade(0)])
+    async with pg_storage.engine.begin() as conn:
+        await conn.execute(text("DROP INDEX ix_swap_trades_tx_from"))
+        await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_from"))
+        await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_to"))
+
+    await pg_storage.initialize()
+
+    async with pg_storage.engine.connect() as conn:
+        columns = {
+            row[0]
+            for row in await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'swap_trades'"
+                )
+            )
+        }
+        indexes = {
+            row[0]
+            for row in await conn.execute(
+                text("SELECT indexname FROM pg_indexes WHERE tablename = 'swap_trades'")
+            )
+        }
+    assert {"tx_from", "tx_to"} <= columns
+    assert "ix_swap_trades_tx_from" in indexes
+    trades = await pg_storage.get_pool_trades(1, POOL)
+    assert len(trades) == 1 and trades[0].tx_from is None

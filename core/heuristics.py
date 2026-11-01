@@ -15,7 +15,8 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
-from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade
+from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade, trader_of
+from core.calibration import wash_probability
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
@@ -105,20 +106,6 @@ class HeuristicDetector:
         self.bot_allowlist = _load_allowlist()
         self.advanced = AdvancedHeuristicDetector()
 
-    async def detect_self_trading(
-        self,
-        trades: list[SwapTrade],
-        session: AsyncSession,
-    ) -> list[SwapTrade]:
-        """Detect trades where sender equals recipient."""
-        wash_trades = []
-        for trade in trades:
-            if trade.sender.lower() == trade.recipient.lower():
-                flag_trade(trade, 1.0, "self_trading")
-                wash_trades.append(trade)
-        logger.info(f"Detected {len(wash_trades)} self-trades")
-        return wash_trades
-
     async def detect_circular_trading(
         self,
         trades: list[SwapTrade],
@@ -170,13 +157,13 @@ class HeuristicDetector:
     ) -> list[SwapTrade]:
         """Detect high-frequency bot patterns with configurable thresholds."""
         wash_trades = []
-        sender_groups = defaultdict(list)
+        trader_groups: dict[str, list[SwapTrade]] = defaultdict(list)
 
         for trade in trades:
-            sender_groups[trade.sender].append(trade)
+            trader_groups[trader_of(trade)].append(trade)
 
-        for sender, sender_trades in sender_groups.items():
-            if sender.lower() in self.bot_allowlist:
+        for trader, sender_trades in trader_groups.items():
+            if trader in self.bot_allowlist:
                 continue
 
             count_threshold = settings.BOT_TRADE_COUNT_THRESHOLD
@@ -271,7 +258,9 @@ class HeuristicDetector:
         address_clusters: list[AddressCluster],
         session: AsyncSession,
     ) -> list[SwapTrade]:
-        """Detect trades within same address cluster."""
+        """Detect swaps whose output a trader sends to another address of its
+        own funding cluster: value moved between one entity's wallets through
+        the pool."""
         wash_trades = []
         addr_to_cluster = {}
 
@@ -280,10 +269,14 @@ class HeuristicDetector:
                 addr_to_cluster[addr.lower()] = cluster.cluster_id
 
         for trade in trades:
-            sender_cluster = addr_to_cluster.get(trade.sender.lower())
-            recipient_cluster = addr_to_cluster.get(trade.recipient.lower())
+            trader = trader_of(trade)
+            recipient = trade.recipient.lower()
+            if trader == recipient:
+                continue  # a trader receiving its own output is ordinary
+            trader_cluster = addr_to_cluster.get(trader)
+            recipient_cluster = addr_to_cluster.get(recipient)
 
-            if sender_cluster and recipient_cluster and sender_cluster == recipient_cluster:
+            if trader_cluster and recipient_cluster and trader_cluster == recipient_cluster:
                 flag_trade(trade, 0.95, "wash_cluster")
                 wash_trades.append(trade)
 
@@ -296,21 +289,28 @@ class HeuristicDetector:
         session: AsyncSession,
         clusters: list[AddressCluster] | None = None,
     ) -> tuple[list[SwapTrade], dict[str, int]]:
-        """Run every detector over an in-memory trade list.
+        """Run every detector over an in-memory trade list and score the hits.
 
-        Used both for full-pool audits and for the rolling window of the
-        real-time monitor.
+        Each trade's wash_trade_score is the calibrated probability that it is
+        wash given the detectors that fired on it (core/calibration.py), and
+        detection_method names the most probative of them. Only trades whose
+        probability reaches SUSPICIOUS_ACTIVITY_THRESHOLD are labelled wash;
+        a detector whose measured false-positive rate is too high for its
+        recall therefore cannot label a trade on its own.
+
+        Labels the trades carried in are discarded: the result reflects this
+        run only. Used both for full-pool audits and for the rolling window of
+        the real-time monitor. Returns (wash trades, hits per detector).
         """
         if not trades:
             return [], {}
 
-        all_wash_trades: list[SwapTrade] = []
         stats: dict[str, int] = {}
+        hits: dict[int, list[str]] = defaultdict(list)
 
         detectors = [
-            ("self_trading", self.detect_self_trading),
+            ("round_trip", self.advanced.detect_round_trips),
             ("circular_trading", self.detect_circular_trading),
-            ("position_neutral_scc", self.advanced.detect_position_neutral_scc),
             ("closed_cluster", self.advanced.detect_closed_cluster),
             ("repeated_amounts", self.advanced.detect_repeated_amounts),
             ("high_frequency_bot", self.detect_high_frequency_bot),
@@ -319,16 +319,37 @@ class HeuristicDetector:
 
         for name, detector in detectors:
             detected = await detector(trades, session)
-            all_wash_trades.extend(detected)
-            stats[name] = len(detected)
+            for trade in {t.id: t for t in detected}.values():
+                hits[trade.id].append(name)
+            stats[name] = len({t.id for t in detected})
+
+        neutral = await self.advanced.detect_position_neutral(trades, session, clusters)
+        for trade in {t.id: t for t in neutral}.values():
+            hits[trade.id].append("position_neutral")
+        stats["position_neutral"] = len({t.id for t in neutral})
 
         if clusters:
             detected = await self.detect_wash_clusters(trades, clusters, session)
-            all_wash_trades.extend(detected)
-            stats["wash_cluster"] = len(detected)
+            for trade in {t.id: t for t in detected}.values():
+                hits[trade.id].append("wash_cluster")
+            stats["wash_cluster"] = len({t.id for t in detected})
 
-        unique_wash_trades = list({t.id: t for t in all_wash_trades}.values())
-        return unique_wash_trades, stats
+        prior = settings.WASH_PRIOR
+        wash_trades: list[SwapTrade] = []
+        for trade in trades:
+            trade.is_wash_trade = False
+            trade.wash_trade_score = 0.0
+            trade.detection_method = None
+            methods = hits.get(trade.id)
+            if not methods:
+                continue
+            score, method = max((wash_probability(m, prior), m) for m in methods)
+            trade.wash_trade_score = score
+            trade.detection_method = method
+            if score >= self.confidence_threshold:
+                trade.is_wash_trade = True
+                wash_trades.append(trade)
+        return wash_trades, stats
 
     async def run_all_heuristics(
         self,

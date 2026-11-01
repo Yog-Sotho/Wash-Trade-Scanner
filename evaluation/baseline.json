@@ -1,0 +1,122 @@
+{
+  "detectors": {
+    "circular_trading": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0006
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      }
+    },
+    "closed_cluster": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0
+        }
+      },
+      "overall": {
+        "f1": null,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0
+      }
+    },
+    "composite": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.001
+        }
+      },
+      "overall": {
+        "f1": 0.4529,
+        "pr_auc": 0.253,
+        "precision": 0.4232,
+        "recall": 0.4872
+      }
+    },
+    "high_frequency_bot": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0023
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      }
+    },
+    "position_neutral": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0003
+        }
+      },
+      "overall": {
+        "f1": 0.3767,
+        "pr_auc": 0.1636,
+        "precision": 0.5927,
+        "recall": 0.2761
+      }
+    },
+    "repeated_amounts": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0196
+        }
+      },
+      "overall": {
+        "f1": 0.0306,
+        "pr_auc": 0.0035,
+        "precision": 0.0165,
+        "recall": 0.2135
+      }
+    },
+    "round_trip": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0007
+        }
+      },
+      "overall": {
+        "f1": 0.4319,
+        "pr_auc": 0.1873,
+        "precision": 0.4612,
+        "recall": 0.4061
+      }
+    },
+    "volume_anomaly": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0437
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      }
+    },
+    "wash_cluster": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0
+        }
+      },
+      "overall": {
+        "f1": null,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0
+      }
+    }
+  },
+  "seeds": 10
+}

@@ -1,0 +1,1134 @@
+{
+  "background_trades": 1369250,
+  "commit": "b513973",
+  "detectors": {
+    "circular_trading": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": 0.0,
+          "fn": 300,
+          "fp": 170,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 273680,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": 0.0,
+          "fn": 310,
+          "fp": 170,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 273680,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": 0.0,
+          "fn": 480,
+          "fp": 170,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 273680,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": 0.0,
+          "fn": 574,
+          "fp": 170,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 273680,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": 0.0,
+          "fn": 444,
+          "fp": 170,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 273680,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 17,
+          "fp_volume_share": 0.0004,
+          "fpr": 0.0006,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 27368,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 2259,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 5,
+          "fp_volume_share": 0.0002,
+          "fpr": 0.0004,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 13221,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 12,
+          "fp_volume_share": 0.0008,
+          "fpr": 0.001,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 11888,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 0,
+          "flagged_share": 0.0,
+          "flagged_volume_share": 0.0,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "fn": 2108,
+        "fp": 850,
+        "fp_volume_share": 0.0004,
+        "fpr": 0.0006,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "tn": 1368400,
+        "tp": 0
+      }
+    },
+    "closed_cluster": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": null,
+          "fn": 300,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": null,
+          "fn": 310,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": null,
+          "fn": 480,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": null,
+          "fn": 574,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": null,
+          "fn": 444,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 27385,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 2259,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 13226,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 11900,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 0,
+          "flagged_share": 0.0,
+          "flagged_volume_share": 0.0,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": null,
+        "fn": 2108,
+        "fp": 0,
+        "fp_volume_share": 0.0,
+        "fpr": 0.0,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0,
+        "tn": 1369250,
+        "tp": 0
+      }
+    },
+    "high_frequency_bot": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": null,
+          "fn": 300,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": null,
+          "fn": 310,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": null,
+          "fn": 480,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": null,
+          "fn": 574,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": null,
+          "fn": 444,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 27385,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 2259,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 13226,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 11900,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 0,
+          "flagged_share": 0.0,
+          "flagged_volume_share": 0.0,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": null,
+        "fn": 2108,
+        "fp": 0,
+        "fp_volume_share": 0.0,
+        "fpr": 0.0,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0,
+        "tn": 1369250,
+        "tp": 0
+      }
+    },
+    "phase1_audit": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": 0.0,
+          "fn": 300,
+          "fp": 216159,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7893,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 57691,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": 0.0,
+          "fn": 310,
+          "fp": 216158,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7893,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 57692,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": 0.0,
+          "fn": 480,
+          "fp": 216158,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7893,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 57692,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": 0.0053,
+          "fn": 0,
+          "fp": 216186,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7894,
+          "precision": 0.0026,
+          "recall": 1.0,
+          "tn": 57664,
+          "tp": 574
+        },
+        "unlinked_ring": {
+          "f1": 0.0,
+          "fn": 441,
+          "fp": 216164,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7894,
+          "precision": 0.0,
+          "recall": 0.0068,
+          "tn": 57686,
+          "tp": 3
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 21616,
+          "fp_volume_share": 0.8208,
+          "fpr": 0.7893,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 5769,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 1723,
+          "fp_volume_share": 0.8939,
+          "fpr": 0.7627,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 536,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 10604,
+          "fp_volume_share": 0.8086,
+          "fpr": 0.8018,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2622,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 9289,
+          "fp_volume_share": 0.8336,
+          "fpr": 0.7806,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2611,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 717,
+          "flagged_share": 0.328,
+          "flagged_volume_share": 0.2994,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": 0.0011,
+        "fn": 1531,
+        "fp": 1080825,
+        "fp_volume_share": 0.8208,
+        "fpr": 0.7894,
+        "pr_auc": 0.0001,
+        "precision": 0.0005,
+        "recall": 0.2737,
+        "tn": 288425,
+        "tp": 577
+      }
+    },
+    "position_neutral_scc": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": null,
+          "fn": 300,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": null,
+          "fn": 310,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": null,
+          "fn": 480,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": null,
+          "fn": 574,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": null,
+          "fn": 444,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 27385,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 2259,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 13226,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 11900,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 0,
+          "flagged_share": 0.0,
+          "flagged_volume_share": 0.0,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": null,
+        "fn": 2108,
+        "fp": 0,
+        "fp_volume_share": 0.0,
+        "fpr": 0.0,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0,
+        "tn": 1369250,
+        "tp": 0
+      }
+    },
+    "repeated_amounts": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": 0.0,
+          "fn": 300,
+          "fp": 12660,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0462,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261190,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": 0.0,
+          "fn": 310,
+          "fp": 12660,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0462,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261190,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": 0.0,
+          "fn": 480,
+          "fp": 12660,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0462,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261190,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": 0.0658,
+          "fn": 124,
+          "fp": 12660,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0462,
+          "precision": 0.0343,
+          "recall": 0.784,
+          "tn": 261190,
+          "tp": 450
+        },
+        "unlinked_ring": {
+          "f1": 0.0005,
+          "fn": 441,
+          "fp": 12668,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0463,
+          "precision": 0.0002,
+          "recall": 0.0068,
+          "tn": 261182,
+          "tp": 3
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 1266,
+          "fp_volume_share": 0.0242,
+          "fpr": 0.0462,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 26119,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 210,
+          "fp_volume_share": 0.0222,
+          "fpr": 0.093,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2049,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 400,
+          "fp_volume_share": 0.0131,
+          "fpr": 0.0302,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 12826,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 656,
+          "fp_volume_share": 0.0445,
+          "fpr": 0.0551,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 11244,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 386,
+          "flagged_share": 0.1766,
+          "flagged_volume_share": 0.2137,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": 0.0138,
+        "fn": 1655,
+        "fp": 63308,
+        "fp_volume_share": 0.0242,
+        "fpr": 0.0462,
+        "pr_auc": 0.0015,
+        "precision": 0.0071,
+        "recall": 0.2149,
+        "tn": 1305942,
+        "tp": 453
+      }
+    },
+    "self_trading": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": 0.0,
+          "fn": 300,
+          "fp": 210370,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 63480,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": 0.0,
+          "fn": 310,
+          "fp": 210370,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 63480,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": 0.0,
+          "fn": 480,
+          "fp": 210370,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 63480,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": 0.0054,
+          "fn": 0,
+          "fp": 210370,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0027,
+          "recall": 1.0,
+          "tn": 63480,
+          "tp": 574
+        },
+        "unlinked_ring": {
+          "f1": 0.0,
+          "fn": 444,
+          "fp": 210370,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 63480,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 21037,
+          "fp_volume_share": 0.814,
+          "fpr": 0.7682,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 6348,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 1597,
+          "fp_volume_share": 0.8917,
+          "fpr": 0.7069,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 662,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 10485,
+          "fp_volume_share": 0.8073,
+          "fpr": 0.7928,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2741,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 8955,
+          "fp_volume_share": 0.8162,
+          "fpr": 0.7525,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2945,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 638,
+          "flagged_share": 0.2919,
+          "flagged_volume_share": 0.2741,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": 0.0011,
+        "fn": 1534,
+        "fp": 1051850,
+        "fp_volume_share": 0.814,
+        "fpr": 0.7682,
+        "pr_auc": 0.0001,
+        "precision": 0.0005,
+        "recall": 0.2723,
+        "tn": 317400,
+        "tp": 574
+      }
+    },
+    "volume_anomaly": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": 0.0,
+          "fn": 300,
+          "fp": 11989,
+          "fp_volume_share": 0.0345,
+          "fpr": 0.0438,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261861,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": 0.0,
+          "fn": 310,
+          "fp": 11978,
+          "fp_volume_share": 0.0345,
+          "fpr": 0.0437,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261872,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": 0.0,
+          "fn": 480,
+          "fp": 11980,
+          "fp_volume_share": 0.035,
+          "fpr": 0.0437,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261870,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": 0.0,
+          "fn": 574,
+          "fp": 12090,
+          "fp_volume_share": 0.0349,
+          "fpr": 0.0441,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261760,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": 0.0,
+          "fn": 444,
+          "fp": 12004,
+          "fp_volume_share": 0.0345,
+          "fpr": 0.0438,
+          "precision": 0.0,
+          "recall": 0.0,
+          "tn": 261846,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 1196,
+          "fp_volume_share": 0.0345,
+          "fpr": 0.0437,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 26189,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 15,
+          "fp_volume_share": 0.0003,
+          "fpr": 0.0066,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 2244,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 648,
+          "fp_volume_share": 0.0232,
+          "fpr": 0.049,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 12578,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 533,
+          "fp_volume_share": 0.0595,
+          "fpr": 0.0448,
+          "precision": 0.0,
+          "recall": null,
+          "tn": 11367,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 70,
+          "flagged_share": 0.032,
+          "flagged_volume_share": 0.0048,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "fn": 2108,
+        "fp": 60041,
+        "fp_volume_share": 0.0347,
+        "fpr": 0.0438,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "tn": 1309209,
+        "tp": 0
+      }
+    },
+    "wash_cluster": {
+      "by_pattern": {
+        "aa_round_trip": {
+          "f1": null,
+          "fn": 300,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "aa_round_trip_slow": {
+          "f1": null,
+          "fn": 310,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "funded_ring": {
+          "f1": null,
+          "fn": 480,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "repeated_size_bot": {
+          "f1": null,
+          "fn": 574,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        },
+        "unlinked_ring": {
+          "f1": null,
+          "fn": 444,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": 0.0,
+          "tn": 273850,
+          "tp": 0
+        }
+      },
+      "clean_pools": {
+        "all": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 27385,
+          "tp": 0
+        },
+        "univ2_usdc_weth": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 2259,
+          "tp": 0
+        },
+        "univ3_usdc_weth_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 13226,
+          "tp": 0
+        },
+        "univ3_weth_usdt_005": {
+          "f1": null,
+          "fn": 0,
+          "fp": 0,
+          "fp_volume_share": 0.0,
+          "fpr": 0.0,
+          "precision": null,
+          "recall": null,
+          "tn": 11900,
+          "tp": 0
+        }
+      },
+      "documented_wash": {
+        "nexf_weth": {
+          "flagged": 0,
+          "flagged_share": 0.0,
+          "flagged_volume_share": 0.0,
+          "trades": 2186
+        }
+      },
+      "overall": {
+        "f1": null,
+        "fn": 2108,
+        "fp": 0,
+        "fp_volume_share": 0.0,
+        "fpr": 0.0,
+        "pr_auc": 0.0,
+        "precision": null,
+        "recall": 0.0,
+        "tn": 1369250,
+        "tp": 0
+      }
+    }
+  },
+  "injected_trades": 2108,
+  "scenarios": 150,
+  "seeds": 10
+}

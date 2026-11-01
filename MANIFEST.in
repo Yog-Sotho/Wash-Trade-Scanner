@@ -6,7 +6,8 @@ include requirements.txt
 include requirements-dev.txt
 include Makefile
 include pyproject.toml
-recursive-include config *.py
+recursive-include config *.py *.json
+recursive-include evaluation *.py *.json *.json.gz
 recursive-include core *.py
 recursive-include models *.py
 recursive-include scripts *.py
