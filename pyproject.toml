@@ -69,12 +69,15 @@ wash-train = "scripts.train_model:cli"
 wash-api = "api.server:cli"
 wash-genkey = "scripts.generate_api_key:cli"
 wash-reprice = "scripts.backfill_prices:cli"
+wash-eval = "evaluation.cli:cli"
 
 [tool.setuptools.packages.find]
-include = ["api*", "config*", "core*", "models*", "scripts*"]
+include = ["api*", "config*", "core*", "evaluation*", "models*", "scripts*"]
 
 [tool.setuptools.package-data]
 api = ["static/*"]
+config = ["*.json"]
+evaluation = ["fixtures/*.json.gz", "*.json"]
 
 [tool.ruff]
 line-length = 100
@@ -126,7 +129,7 @@ exclude_dirs = ["tests"]
 skips = ["B101", "B105"]
 
 [tool.coverage.run]
-source = ["core", "config", "models", "scripts"]
+source = ["core", "config", "evaluation", "models", "scripts"]
 omit = ["tests/*", "*/tests/*"]
 
 [tool.coverage.report]

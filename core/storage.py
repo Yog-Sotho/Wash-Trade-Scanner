@@ -8,8 +8,9 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, and_, delete, func, select, update
+from sqlalchemy import CursorResult, and_, delete, func, inspect, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -41,6 +42,43 @@ def _json_serializer(value: Any) -> str:
     return json.dumps(value, default=_json_default)
 
 
+def _add_missing_columns(conn: Connection) -> None:
+    """Add columns (and their indexes) that the models define but an existing
+    table lacks.
+
+    create_all() skips tables that already exist, so a database created by an
+    earlier release would never gain a newly added column. Until schema
+    migrations land, this bridges additive changes. Only nullable columns can be
+    added this way; anything else must fail loudly rather than be guessed at.
+    """
+    inspector = inspect(conn)
+    existing_tables = set(inspector.get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        present = {column["name"] for column in inspector.get_columns(table.name)}
+        missing = [column for column in table.columns if column.name not in present]
+        for column in missing:
+            if not column.nullable:
+                raise RuntimeError(
+                    f"Cannot add NOT NULL column {table.name}.{column.name} to an existing "
+                    "table automatically"
+                )
+            column_type = column.type.compile(dialect=conn.dialect)
+            preparer = conn.dialect.identifier_preparer
+            conn.execute(
+                text(
+                    f"ALTER TABLE {preparer.quote(table.name)} "
+                    f"ADD COLUMN IF NOT EXISTS {preparer.quote(column.name)} {column_type}"
+                )
+            )
+            logger.info(f"Added missing column {table.name}.{column.name}")
+        missing_names = {column.name for column in missing}
+        for index in table.indexes:
+            if missing_names & {column.name for column in index.columns}:
+                index.create(conn, checkfirst=True)
+
+
 class Storage:
     """Async database storage with connection pooling."""
 
@@ -67,6 +105,7 @@ class Storage:
         )
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_add_missing_columns)
         logger.info("Database initialized")
 
     async def close(self) -> None:
@@ -120,17 +159,49 @@ class Storage:
     async def save_trades_batch(self, trades_data: list[dict[str, Any]]) -> int:
         """Bulk upsert trades for performance.
 
-        Uses ON CONFLICT DO NOTHING on (transaction_hash, log_index) so that
-        re-syncing overlapping block ranges is idempotent instead of raising
-        an IntegrityError that aborts the whole batch.
+        Re-syncing overlapping block ranges is idempotent: a trade already
+        stored under (transaction_hash, log_index) is left as it is, instead of
+        an IntegrityError aborting the whole batch. The one exception is a row
+        stored without its transaction sender (synced by an earlier release, or
+        when the transaction fetch failed): it gains tx_from/tx_to/gas_price
+        from the new data, so re-auditing a pool completes old rows. Returns
+        the number of rows inserted or completed.
         """
         if not trades_data:
             return 0
         async with await self.get_session() as session:
-            stmt = pg_insert(SwapTrade).values(trades_data)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["transaction_hash", "log_index"])
+            insert_stmt = pg_insert(SwapTrade).values(trades_data)
+            excluded = insert_stmt.excluded
+            stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["transaction_hash", "log_index"],
+                set_={
+                    "tx_from": excluded.tx_from,
+                    "tx_to": excluded.tx_to,
+                    "gas_price": func.coalesce(excluded.gas_price, SwapTrade.gas_price),
+                },
+                where=and_(SwapTrade.tx_from.is_(None), excluded.tx_from.is_not(None)),
+            )
             # INSERT/UPDATE/DELETE always execute via CursorResult (which has .rowcount);
             # Session.execute() is typed generically as Result[Any] regardless of statement kind.
+            result = cast("CursorResult[Any]", await session.execute(stmt))
+            await session.commit()
+            return result.rowcount
+
+    async def clear_pool_labels(self, chain_id: int, pool_address: str) -> int:
+        """Reset every wash label in a pool before an audit relabels it, so a
+        trade the current detectors no longer flag does not stay flagged."""
+        async with await self.get_session() as session:
+            stmt = (
+                update(SwapTrade)
+                .where(
+                    and_(
+                        SwapTrade.chain_id == chain_id,
+                        SwapTrade.pool_address == pool_address,
+                        SwapTrade.is_wash_trade.is_(True),
+                    )
+                )
+                .values(is_wash_trade=False, wash_trade_score=0.0, detection_method=None)
+            )
             result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
             return result.rowcount

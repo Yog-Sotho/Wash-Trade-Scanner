@@ -15,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 
 from config.settings import settings
 from core.advanced_heuristics import flag_trade
+from core.calibration import DetectorCalibration
 from core.exceptions import InsufficientDataError, ModelNotTrainedError
 from core.feature_engineer import FeatureEngineer
 from core.storage import Storage
@@ -31,6 +32,10 @@ class MLDetector:
         self.feature_engineer = feature_engineer
         self.model: Pipeline | None = None
         self.is_trained = False
+        # Measured by the evaluation harness when the model was trained
+        # (scripts/train_model.py): detection threshold, recall, false-positive
+        # rate and PR-AUC on labelled scenarios. Empty for an unevaluated model.
+        self.metrics: dict[str, Any] = {}
         self.feature_columns = [
             "volume_usd",
             "slippage_ratio",
@@ -79,8 +84,17 @@ class MLDetector:
         pool_addresses: list[str],
         use_heuristic_labels: bool = True,
         contamination: float | None = None,
-    ) -> None:
-        """Train ML model on pool data."""
+        holdout_fraction: float = 0.0,
+    ) -> list[pd.DataFrame]:
+        """Train ML model on pool data.
+
+        With `holdout_fraction`, the most recent share of each pool's trades
+        is held out of training (a chronological split, so the model never
+        sees the future it is tested on); the held-out feature frames are
+        returned for evaluation.
+        """
+        if not 0.0 <= holdout_fraction < 1.0:
+            raise ValueError("holdout_fraction must be in [0, 1)")
         if contamination is None:
             contamination = settings.ML_CONTAMINATION
 
@@ -90,6 +104,7 @@ class MLDetector:
 
         all_features: list[np.ndarray[Any, Any]] = []
         all_labels: list[int] = []
+        holdout: list[pd.DataFrame] = []
 
         async with await self.storage.get_session() as session:
             for pool in pool_addresses:
@@ -99,6 +114,13 @@ class MLDetector:
 
                 available_cols = [c for c in self.feature_columns if c in df.columns]
                 if not available_cols:
+                    continue
+
+                cut = len(df) - int(len(df) * holdout_fraction)
+                if cut < len(df):
+                    holdout.append(df.iloc[cut:].reset_index(drop=True))
+                df = df.iloc[:cut]
+                if df.empty:
                     continue
 
                 features = df[available_cols].fillna(0).values
@@ -127,20 +149,31 @@ class MLDetector:
             raise InsufficientDataError("No training data available")
 
         X = np.vstack(all_features)
-        self.model = self._build_pipeline(contamination)
-
         if all_labels and use_heuristic_labels:
             y = np.array(all_labels)
             sample_weight = np.ones(len(y))
             sample_weight[y == -1] = 2.0
         else:
             sample_weight = None
+        self.fit_matrix(X, sample_weight, contamination)
+        return holdout
 
+    def fit_matrix(
+        self,
+        features: np.ndarray[Any, Any],
+        sample_weight: np.ndarray[Any, Any] | None = None,
+        contamination: float | None = None,
+    ) -> None:
+        """Fit a fresh pipeline on a feature matrix (columns: feature_columns)."""
+        self.model = self._build_pipeline(
+            settings.ML_CONTAMINATION if contamination is None else contamination
+        )
         # Pipeline.fit() only accepts step-scoped params (stepname__paramname), not a
         # bare sample_weight= kwarg - passing the latter raises ValueError even when None.
-        self.model.fit(X, isolation_forest__sample_weight=sample_weight)
+        self.model.fit(features, isolation_forest__sample_weight=sample_weight)
         self.is_trained = True
-        logger.info(f"ML model trained on {len(X)} samples")
+        self.metrics = {}  # a new fit has not been evaluated
+        logger.info(f"ML model trained on {len(features)} samples")
 
     async def predict(self, features_df: pd.DataFrame) -> np.ndarray[Any, Any]:
         """Predict anomaly probabilities."""
@@ -186,10 +219,21 @@ class MLDetector:
         self,
         chain_id: int,
         pool_address: str,
-        threshold: float = 0.8,
+        threshold: float | None = None,
         contamination: float | None = None,
     ) -> list[SwapTrade]:
-        """Detect wash trades using ML model."""
+        """Label trades the model scores as wash.
+
+        A trade is a hit when its anomaly probability reaches the model's
+        threshold -- the one measured when it was trained (`metrics`), unless
+        `threshold` is given. A hit is then scored like a heuristic hit: the
+        probability it is wash given the model's measured recall and
+        false-positive rate (core.calibration), and labelled only if that
+        reaches SUSPICIOUS_ACTIVITY_THRESHOLD. An unevaluated model has no
+        measured rates, so its hits cannot label a trade.
+        """
+        if threshold is None:
+            threshold = float(self.metrics.get("threshold", 0.8))
         async with await self.storage.get_session() as session:
             df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session)
             if df.empty:
@@ -209,6 +253,7 @@ class MLDetector:
             from scipy.special import expit
 
             probabilities = expit(-scores)
+            wash_probability = self.wash_probability()
 
             from sqlalchemy import and_, select
 
@@ -220,25 +265,39 @@ class MLDetector:
                         SwapTrade.pool_address == pool_address,
                     )
                 )
-                .order_by(SwapTrade.block_timestamp)
+                .order_by(SwapTrade.block_timestamp, SwapTrade.block_number, SwapTrade.log_index)
             )
             result = await session.execute(stmt)
             trades = result.scalars().all()
+            by_id: dict[int, float] = {
+                int(trade_id): float(prob)
+                for trade_id, prob in zip(df["trade_id"], probabilities, strict=True)
+            }
 
             wash_trades = []
-            for trade, prob in zip(trades, probabilities, strict=True):
-                if prob >= threshold:
-                    # flag_trade keeps a higher-confidence heuristic label if one
-                    # was already persisted for this trade.
-                    flag_trade(trade, float(prob), "ml_isolation_forest")
-                    wash_trades.append(trade)
+            for trade in trades:
+                prob = by_id.get(trade.id)
+                if prob is None or prob < threshold:
+                    continue
+                if wash_probability < settings.SUSPICIOUS_ACTIVITY_THRESHOLD:
+                    continue
+                # flag_trade keeps a higher-confidence heuristic label if one
+                # was already persisted for this trade.
+                flag_trade(trade, wash_probability, "ml_isolation_forest")
+                wash_trades.append(trade)
 
             if wash_trades:
-                # Persist the exact per-trade probabilities rather than leaving
-                # it to callers to re-label with a flat score.
                 await session.commit()
 
             return wash_trades
+
+    def wash_probability(self) -> float:
+        """P(wash | the model flags a trade), from its measured rates."""
+        if "tpr" not in self.metrics or "fpr_upper" not in self.metrics:
+            return 0.0
+        return DetectorCalibration(
+            tpr=float(self.metrics["tpr"]), fpr_upper=float(self.metrics["fpr_upper"])
+        ).posterior(settings.WASH_PRIOR)
 
     def save_model(self, path: str | None = None) -> None:
         """Save trained model to disk."""
@@ -253,6 +312,7 @@ class MLDetector:
             {
                 "pipeline": self.model,
                 "feature_columns": self.feature_columns,
+                "metrics": self.metrics,
             },
             save_path,
         )
@@ -269,5 +329,6 @@ class MLDetector:
         data = joblib.load(load_path)
         self.model = data["pipeline"]
         self.feature_columns = data["feature_columns"]
+        self.metrics = data.get("metrics", {})
         self.is_trained = True
         logger.info(f"Model loaded from {load_path}")

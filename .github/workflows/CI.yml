@@ -262,8 +262,39 @@ jobs:
           ETH_RPC_URL: http://localhost:8545
         run: pytest tests/integration --integration -v
 
+  detection-quality:
+    # Phase 2 regression gate: re-measures every detector on the recorded real
+    # pools and labelled scenarios (evaluation/, deterministic, no network), and
+    # fails if F1, recall or the clean-pool false-positive rate regressed against
+    # evaluation/baseline.json, or if config/detector_calibration.json no longer
+    # matches what the detectors measure.
+    needs: [dependency-audit, static-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: install project
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: wash-eval --check
+        env:
+          DATABASE_HOST: localhost
+          DATABASE_NAME: unused
+          DATABASE_USER: unused
+          DATABASE_PASSWORD: unused-not-a-secret
+          DATABASE_SSL_MODE: disable
+        run: wash-eval --check
+
   build:
-    needs: [test, integration]
+    needs: [test, integration, detection-quality]
     runs-on: ubuntu-latest
     permissions:
       contents: read

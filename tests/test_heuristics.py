@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.calibration import DetectorCalibration, override_calibration
 from core.heuristics import HeuristicDetector, RobustAnomalyDetector
 from models.schemas import AddressCluster, SwapTrade
 
@@ -61,13 +62,6 @@ def sample_trades():
             is_wash_trade=False,
         ),
     ]
-
-
-@pytest.mark.asyncio
-async def test_self_trading(detector, sample_trades):
-    wash = await detector.detect_self_trading(sample_trades, AsyncMock())
-    assert len(wash) == 1
-    assert wash[0].id == 2
 
 
 @pytest.mark.asyncio
@@ -153,6 +147,46 @@ async def test_wash_clusters(detector, sample_trades):
     assert 4 in ids
 
 
+@pytest.mark.asyncio
+async def test_wash_clusters_key_on_the_transaction_sender(detector):
+    """A router-mediated swap whose output a trader sends to a sibling wallet
+    moves value inside the entity; one delivered to the trader itself does not."""
+    base = datetime(2024, 1, 1)
+    common = {
+        "chain_id": 1,
+        "pool_address": "0xpool",
+        "sender": "0xrouter",
+        "block_timestamp": base,
+    }
+    to_sibling = SwapTrade(id=1, recipient="0xeve", tx_from="0xdave", **common)
+    to_self = SwapTrade(id=2, recipient="0xdave", tx_from="0xdave", **common)
+    cluster = AddressCluster(cluster_id="c", addresses=["0xdave", "0xeve"])
+
+    wash = await detector.detect_wash_clusters([to_sibling, to_self], [cluster], AsyncMock())
+
+    assert [t.id for t in wash] == [1]
+
+
+@pytest.mark.asyncio
+async def test_high_frequency_bot_keys_on_the_transaction_sender(detector):
+    """Twelve fast swaps through one router by twelve different people are not a bot."""
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+    trades = [
+        SwapTrade(
+            id=i,
+            chain_id=1,
+            pool_address="0xpool",
+            sender="0xrouter",
+            recipient=f"0xuser{i}",
+            tx_from=f"0xuser{i}",
+            volume_usd=100.0,
+            block_timestamp=base_time + timedelta(seconds=i),
+        )
+        for i in range(12)
+    ]
+    assert await detector.detect_high_frequency_bot(trades, AsyncMock()) == []
+
+
 class TestRobustAnomalyDetector:
     def test_mad_fit_and_score(self):
         d = RobustAnomalyDetector(method="mad")
@@ -183,7 +217,30 @@ class TestRobustAnomalyDetector:
             d.fit([1.0, 2.0])
 
 
+@pytest.fixture
+def calibration():
+    """Scoring rates for the composite tests, independent of the benchmark."""
+    table = {
+        name: DetectorCalibration(tpr=0.0, fpr_upper=1.0)
+        for name in (
+            "round_trip",
+            "position_neutral",
+            "closed_cluster",
+            "repeated_amounts",
+            "high_frequency_bot",
+            "volume_anomaly",
+            "wash_cluster",
+        )
+    }
+    # circular_trading: precise enough to label a trade on its own.
+    table["circular_trading"] = DetectorCalibration(tpr=0.9, fpr_upper=0.0001)
+    override_calibration(table)
+    yield table
+    override_calibration(None)
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("calibration")
 async def test_run_all_heuristics_combines_detectors(detector, sample_trades):
     from unittest.mock import MagicMock
 
@@ -196,22 +253,95 @@ async def test_run_all_heuristics_combines_detectors(detector, sample_trades):
 
     wash, stats = await detector.run_all_heuristics(1, "0xpool", session)
 
-    # All seven detectors (incl. the research-grade ones) must report stats.
     assert set(stats) == {
-        "self_trading",
+        "round_trip",
         "circular_trading",
-        "position_neutral_scc",
+        "position_neutral",
         "closed_cluster",
         "repeated_amounts",
         "high_frequency_bot",
         "volume_anomaly",
     }
-    assert stats["self_trading"] == 1  # Carol self-trade
     assert stats["circular_trading"] == 2  # Dave<->Eve round trip
-    ids = {t.id for t in wash}
-    assert {2, 3, 4} <= ids
-    # results are de-duplicated by trade id
-    assert len(ids) == len(wash)
+    assert {t.id for t in wash} == {3, 4}
+    for trade in wash:
+        assert trade.detection_method == "circular_trading"
+        # P(wash | hit) = 0.9 * 0.01 / (0.9 * 0.01 + 0.0001 * 0.99)
+        assert trade.wash_trade_score == pytest.approx(0.009 / (0.009 + 0.000099))
+
+
+@pytest.mark.asyncio
+async def test_composite_scores_hits_by_measured_rates(detector, calibration):
+    """A detector that fires as often on honest trades as on wash ones cannot
+    label a trade, however confident its own score; a precise one can."""
+    base = datetime(2024, 1, 1)
+    trades = [
+        SwapTrade(
+            id=i,
+            chain_id=1,
+            pool_address="0xpool",
+            sender=f"0xs{i}",
+            recipient=f"0xr{i}",
+            volume_usd=100.0,
+            block_timestamp=base + timedelta(minutes=i),
+        )
+        for i in range(3)
+    ]
+    calibration["volume_anomaly"] = DetectorCalibration(tpr=0.5, fpr_upper=0.5)
+    calibration["round_trip"] = DetectorCalibration(tpr=0.95, fpr_upper=0.0001)
+
+    async def noisy(ts, _session):
+        return [ts[0], ts[1]]
+
+    async def precise(ts, _session):
+        return [ts[1]]
+
+    async def none(*_args):
+        return []
+
+    detector.detect_volume_anomaly = noisy
+    detector.advanced.detect_round_trips = precise
+    for name in ("detect_circular_trading", "detect_high_frequency_bot"):
+        setattr(detector, name, none)
+    for name in ("detect_closed_cluster", "detect_repeated_amounts", "detect_position_neutral"):
+        setattr(detector.advanced, name, none)
+
+    wash, stats = await detector.run_detectors_on_trades(trades, AsyncMock())
+
+    assert [t.id for t in wash] == [1]
+    assert trades[1].detection_method == "round_trip"  # the most probative hit
+    assert trades[0].is_wash_trade is False
+    assert trades[0].wash_trade_score == pytest.approx(0.01)  # 0.5*0.01/(0.5*0.01+0.5*0.99)
+    assert trades[0].detection_method == "volume_anomaly"
+    assert stats["volume_anomaly"] == 2 and stats["round_trip"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("calibration")
+async def test_composite_discards_labels_from_earlier_runs(detector):
+    trade = SwapTrade(
+        id=1,
+        chain_id=1,
+        pool_address="0xpool",
+        sender="0xs",
+        recipient="0xr",
+        volume_usd=100.0,
+        block_timestamp=datetime(2024, 1, 1),
+        is_wash_trade=True,
+        wash_trade_score=1.0,
+        detection_method="self_trading",
+    )
+    wash, _ = await detector.run_detectors_on_trades([trade], AsyncMock())
+    assert wash == []
+    assert trade.is_wash_trade is False
+    assert trade.detection_method is None and trade.wash_trade_score == 0.0
+
+
+@pytest.mark.usefixtures("calibration")
+def test_uncalibrated_detector_cannot_label():
+    from core.calibration import wash_probability
+
+    assert wash_probability("not_a_detector", 0.01) == 0.0
 
 
 @pytest.mark.asyncio

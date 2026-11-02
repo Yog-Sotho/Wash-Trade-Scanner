@@ -40,6 +40,7 @@ class FakeChain:
         self.logs: list[dict[str, Any]] = []
         self.call_results: dict[tuple[str, str], str] = {}
         self.usd_prices: dict[str, float] = {}
+        self.transactions: dict[str, dict[str, Any]] = {}
         self.rpc_methods: list[str] = []
         self.rpc_url = ""
         self.coingecko_url = ""
@@ -56,8 +57,13 @@ class FakeChain:
         sender: str,
         to: str,
         amounts: tuple[int, int, int, int],  # amount0In, amount1In, amount0Out, amount1Out
+        tx_from: str | None = None,
     ) -> str:
-        """Append a Uniswap V2 Swap log, ABI-encoded exactly as a node returns it."""
+        """Append a Uniswap V2 Swap log, ABI-encoded exactly as a node returns it.
+
+        The swap's transaction is sent by `tx_from` (default: `to`, the usual
+        router swap whose output goes to the caller) and calls `sender`.
+        """
         self.block_timestamps[block] = timestamp
         self.head = max(self.head, block)
         log_index = sum(1 for log in self.logs if int(log["blockNumber"], 16) == block)
@@ -75,6 +81,24 @@ class FakeChain:
                 "removed": False,
             }
         )
+        self.transactions[tx_hash] = {
+            "blockHash": Web3.keccak(text=f"block-{block}").hex(),
+            "blockNumber": hex(block),
+            "from": Web3.to_checksum_address(tx_from or to),
+            "to": Web3.to_checksum_address(sender),
+            "gas": hex(200_000),
+            "gasPrice": hex(25 * 10**9),
+            "hash": tx_hash,
+            "input": "0x",
+            "nonce": hex(log_index),
+            "transactionIndex": hex(log_index),
+            "value": "0x0",
+            "type": "0x0",
+            "chainId": hex(self.chain_id),
+            "v": "0x25",
+            "r": "0x" + "11" * 32,
+            "s": "0x" + "22" * 32,
+        }
         return tx_hash
 
     # ------------------------------------------------------------- JSON-RPC
@@ -132,6 +156,8 @@ class FakeChain:
             return self._get_logs(params[0])
         if method == "eth_getBlockByNumber":
             return self._block(int(params[0], 16))
+        if method == "eth_getTransactionByHash":
+            return self.transactions.get(params[0])
         if method == "eth_call":
             key = (params[0]["to"].lower(), params[0]["data"][:10])
             if key in self.call_results:

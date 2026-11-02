@@ -7,14 +7,11 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 ## Features
 
 - **Multi‑chain & Multi‑DEX** – instant support for Ethereum, BSC, Polygon, Arbitrum, Optimism, Base, Avalanche, Fantom, Celo, Gnosis, Moonbeam, Aurora, Harmony, Cronos, Metis, Boba, zkSync Era, Polygon zkEVM, Linea, Scroll, Mantle, Kava, Klaytn.
-- **Heuristic Detection** with near‑zero false positives:
-  - Self‑trading (same sender/recipient)
-  - Circular trading (strongly connected components)
-  - **Position‑neutral SCC analysis** (Victor & Weintraud, WWW '21) – multi‑window zero‑net‑position detection
-  - **Closed‑cluster detection** – volume‑balanced collusive trading rings (network‑based, 2025 research)
-  - **Repeated‑amount fingerprinting** – senders recycling identical trade sizes
-  - High‑frequency bot patterns (allow‑listable via `BOT_ALLOWLIST`, thresholds configurable)
-  - Volume anomaly detection (MAD/IQR/z‑score, method and threshold configurable)
+- **Measured detection** – every detector is benchmarked on real Ethereum pools and labelled wash campaigns, and CI fails if one regresses ([docs/benchmarks.md](docs/benchmarks.md)). On 27,385 honest trades from the most liquid USDC/USDT–WETH pools, the audit labels 0.10% as wash; the Phase 1 rules labelled 78.9%.
+  - Trades are attributed to the **transaction sender** (`tx_from`), not to the router or bot contract named in the swap event
+  - **Round trips** (A‑A wash trading, after Chainalysis's heuristic 1): a trader buying and selling back the same value within 50 blocks
+  - **Position neutrality** (Victor & Weintraud, WWW '21; Gan et al., ACM TOIT 2024) – a trader, or a funding‑linked group of traders, ending flat in every token while trading both sides
+  - **Calibrated scoring** – each detector's measured true/false‑positive rates turn a hit into P(wash), so noisy signals (repeated sizes, high frequency, volume outliers, closed clusters) inform the score but cannot label a trade on their own
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
 - **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
 - **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
@@ -95,29 +92,45 @@ Full reference: see `docs/configuration.md`.
 
 ## Detection Methodology
 
-The detection stack layers fast pairwise heuristics, research‑grade graph analysis, statistical fingerprinting, and ML anomaly detection. Every detector assigns a per‑trade confidence score; when several detectors hit the same trade, the highest‑confidence label wins.
+Every detector is measured, not asserted: the harness in `evaluation/` runs it on
+real swap histories recorded from Ethereum mainnet and on labelled wash campaigns
+injected into them, and [docs/benchmarks.md](docs/benchmarks.md) publishes its
+precision, recall, F1, PR‑AUC and false‑positive rate on honest pools.
 
-### Pairwise & statistical heuristics
+### Who traded
 
-1. **Self‑Trading**: `sender == recipient` ⇒ instant wash trade (score 1.0).
-2. **Circular Trading**: Strongly Connected Components in the trade graph with reverse trades within a configurable time window (score 0.9).
-3. **High‑Frequency Bot**: Configurable thresholds (default: >10 trades, average inter‑trade time < 60s, CV < 0.5). Bots in `BOT_ALLOWLIST` are ignored. All thresholds tunable via environment (score 0.8).
-4. **Volume Anomaly**: MAD (default) or IQR on log‑transformed trade volumes within configurable buckets. Z‑score available for backward compatibility. Threshold configurable in settings (score ≥ 0.7).
-5. **Wash Clusters**: Trades between addresses funded by the same source (requires `trace_filter` or block scanning). Optional due to privacy implications (score 0.95).
+On an AMM every swap's counterparty is the pool, and the Swap event's `sender`
+and `to` are usually a router or a bot contract. Detectors therefore attribute
+each swap to the account that sent the transaction (`tx_from`), fetched at
+ingestion. (Phase 1 compared `sender` and `to` and called a match self‑trading;
+that flagged 70–79% of honest trades in liquid pools, because any contract that
+swaps for itself matches.)
 
-### Research‑grade graph detectors (`core/advanced_heuristics.py`)
+### Detectors
 
-6. **Position‑Neutral SCC** (score 0.95): implements the method of Victor & Weintraud, [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001) (WWW '21). Within each strongly connected component of the trade graph, multi‑pass time windows (default 1h / 24h / 7d, `POSITION_NEUTRAL_WINDOWS_HOURS`) are scanned for trade sets in which **every participant's net token position change is ≈ zero** (within `POSITION_NEUTRAL_MARGIN`, default 1%) while gross volume is large — the legal definition of wash trading.
-7. **Closed Clusters** (score 0.85): network‑based detection following 2025 research on collusive trading rings — wash traders form *approximately closed clusters* that seldom transact outside the ring. Volume‑weighted communities (greedy modularity) are flagged when their volume is ≥ `CLOSED_CLUSTER_INTERNAL_RATIO` (default 90%) internal **and** each member's internal in/out flow is balanced (`CLOSED_CLUSTER_BALANCE_TOLERANCE`), which separates recycling rings from organic directional flow.
-8. **Repeated Amounts** (score 0.75): senders recycling the same trade size (rounded to `REPEATED_AMOUNT_SIG_FIGS` significant digits) ≥ `REPEATED_AMOUNT_MIN_COUNT` times — a volume‑bot fingerprint; organic flow almost never repeats exact sizes at scale.
+1. **Round trip** (`round_trip`): a trader buys and sells back in the same pool within `ROUND_TRIP_MAX_BLOCKS` (50) blocks at USD values within `ROUND_TRIP_VALUE_TOLERANCE` (1%), at least `ROUND_TRIP_MIN_COUNT` (2) times — Chainalysis's address‑level wash‑trading heuristic (25 blocks, 1%, 3 times), with parameters chosen on the benchmark. Legs in one block around another trader's swap are a sandwich (MEV), not wash.
+2. **Position neutral** (`position_neutral`): within 1h / 24h / 7d windows, an entity — one trader, or the traders a funding cluster links — trades both sides at least 4 times while its net change in every token stays within `POSITION_NEUTRAL_MARGIN` (0.1%) of what it moved. This is Victor & Weintraud's position‑neutrality condition applied to AMM entities, as in Gan et al.
+3. **Supporting signals**: repeated trade sizes, high‑frequency bot cadence, volume outliers (MAD/IQR), circular and closed‑cluster flow between swap senders and recipients, and swaps whose output goes to another wallet of the trader's funding cluster.
+4. **Machine learning**: an Isolation Forest on 21 trade‑ and pool‑level features (incl. Benford deviation, amount roundness, hour‑of‑day entropy), computed in memory per pool. `wash-train` measures each model on the benchmark, stores its rates in the model file and refuses to save one no better than 2× a random ranking.
 
-### Machine learning
+### Scoring
 
-9. **ML Isolation Forest**: anomaly detection on 21 trade‑ and pool‑level features, including statistical fingerprints used by forensic platforms: **Benford's‑law first‑digit deviation** of pool amounts, **amount roundness** (significant‑digit count), and **hour‑of‑day entropy** (humans trade diurnally; wash bots trade uniformly around the clock). Per‑pool contamination control; feature explainability via `ML_EXPLAINABILITY=true`.
+The benchmark measures each detector's true‑positive rate and its clean‑pool
+false‑positive rate (95% upper bound), shipped in `config/detector_calibration.json`.
+A hit is scored as P(wash | hit) by Bayes' rule with prior `WASH_PRIOR` (1%), and a
+trade is labelled wash only if that reaches `SUSPICIOUS_ACTIVITY_THRESHOLD` (0.8).
+Today `round_trip` and `position_neutral` are precise enough to label on their own;
+the other signals raise a trade's score without labelling it. CI fails if the
+shipped calibration no longer matches what the detectors measure.
 
-### USD valuation
+### Known limits
 
-Every swap is valued in USD at ingestion from verified **reference assets** (`config/tokens.py`): stablecoin legs at $1.00, WETH/WBNB/WPOL/WAVAX legs at CoinGecko's historical price nearest the swap. Tokens are matched by address only, and legs that cannot be valued are stored as `NULL` rather than guessed. See [docs/configuration.md](docs/configuration.md#usd-pricing); `wash-reprice` values previously stored trades.
+Measured, and listed in [docs/benchmarks.md](docs/benchmarks.md): round trips
+spread over more than 50 blocks and multi‑wallet rings without observable funding
+links are mostly missed; on the documented NexFundAI market (the FBI sting
+token), whose wash trading Kaiko attributes to many co‑funded wallets, the audit
+labels nothing; and the Isolation Forest does no better than random ranking on
+these patterns.
 
 ### Reporting
 
@@ -129,6 +142,7 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
     core/           – detection logic (ingestor, heuristics, ML, entity clustering, validators, circuit breaker)
     models/         – database schemas
     scripts/        – entry points (run_audit.py, train_model.py)
+    evaluation/     – detection benchmark: recorded pools, labelled injection, metrics
     tests/          – pytest tests
     docs/           – detailed documentation
 
@@ -148,6 +162,11 @@ Integration tests run a full audit end to end against a real PostgreSQL (with th
 chain and price API simulated over local HTTP). They are skipped unless requested:
 
     pytest tests/integration --integration   # uses the DATABASE_* settings
+
+Detection quality (no network or database needed):
+
+    make eval        # measure every detector, regenerate docs/benchmarks.md
+    make eval-check  # what CI runs: fail on a regression or a stale calibration
 
 ## Security
 

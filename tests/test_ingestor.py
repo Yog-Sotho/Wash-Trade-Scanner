@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.exceptions import RPCError
 from core.ingestor import ChainIngestor, MultiChainIngestor, RateLimiter
 from core.storage import Storage
 
@@ -360,7 +361,6 @@ async def test_get_pool_tokens_caches_result(mock_chain_config):
 
 @pytest.mark.asyncio
 async def test_get_pool_tokens_falls_back_on_rpc_failure(mock_chain_config):
-    from core.exceptions import RPCError
 
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage)
@@ -516,3 +516,172 @@ async def test_sync_historical_swaps_no_logs_returns_zero(mock_chain_config):
 
     assert synced == 0
     storage.save_trades_batch.assert_not_awaited()
+
+
+def _swap_log(tx_hash: bytes, log_index: int = 0) -> dict:
+    return {
+        "address": "0xpool",
+        "args": {
+            "sender": "0xRouter",
+            "to": "0xRouter",
+            "amount0In": 100,
+            "amount1In": 0,
+            "amount0Out": 0,
+            "amount1Out": 95,
+        },
+        "transactionHash": tx_hash,
+        "blockNumber": 100,
+        "logIndex": log_index,
+    }
+
+
+async def _sync_with_transactions(mock_chain_config, logs, get_transaction):
+    from core.pricing import PriceOracle
+
+    storage = AsyncMock(spec=Storage)
+    ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
+    ingestor.web3 = MagicMock()
+    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    ingestor.web3.eth.get_transaction = get_transaction
+    mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
+    event = MagicMock()
+    event.process_log.side_effect = logs
+    ingestor.web3.eth.contract.return_value.events.Swap.return_value = event
+    with (
+        patch.object(
+            ingestor, "_get_logs_batch", AsyncMock(return_value=[{"blockNumber": 100}] * len(logs))
+        ),
+        patch.object(ingestor, "_get_pool_tokens", AsyncMock(return_value=("0xt0", "0xt1"))),
+    ):
+        await ingestor.sync_historical_swaps(mock_chain_config["dexes"][0], 1, 100)
+    return storage.save_trades_batch.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_sync_records_the_transaction_sender(mock_chain_config):
+    """The swap event names the router; the trader is the transaction's sender."""
+    tx = {
+        "from": "0xAbC0000000000000000000000000000000000001",
+        "to": "0x7a250D5630B4cF539739dF2C5dAcb4c659F2488D",
+        "gasPrice": 25_000_000_000,
+    }
+    get_transaction = AsyncMock(return_value=tx)
+    saved = await _sync_with_transactions(
+        mock_chain_config,
+        [_swap_log(b"\x01" * 32, 0), _swap_log(b"\x01" * 32, 1)],
+        get_transaction,
+    )
+
+    assert saved[0]["sender"] == "0xrouter"
+    assert saved[0]["tx_from"] == "0xabc0000000000000000000000000000000000001"
+    assert saved[0]["tx_to"] == "0x7a250d5630b4cf539739df2c5dacb4c659f2488d"
+    assert saved[0]["gas_price"] == pytest.approx(25.0)  # gwei
+    assert saved[1]["tx_from"] == saved[0]["tx_from"]
+    # Two swaps in one transaction cost one lookup.
+    get_transaction.assert_awaited_once_with("0x" + "01" * 32)
+
+
+@pytest.mark.asyncio
+async def test_sync_keeps_swaps_whose_transaction_cannot_be_fetched(mock_chain_config):
+    good = {"from": "0x" + "a" * 40, "to": None, "gasPrice": None}
+
+    async def get_transaction(tx_hash):
+        if tx_hash == "0x" + "02" * 32:
+            raise RPCError("not found")
+        return good
+
+    saved = await _sync_with_transactions(
+        mock_chain_config,
+        [_swap_log(b"\x01" * 32), _swap_log(b"\x02" * 32)],
+        get_transaction,
+    )
+
+    assert len(saved) == 2
+    by_hash = {trade["transaction_hash"]: trade for trade in saved}
+    assert by_hash["0x" + "01" * 32]["tx_from"] == "0x" + "a" * 40
+    assert by_hash["0x" + "01" * 32]["tx_to"] is None  # contract creation
+    assert by_hash["0x" + "02" * 32]["tx_from"] is None
+    # Every row has the same keys: save_trades_batch issues one multi-row INSERT.
+    assert len({frozenset(trade) for trade in saved}) == 1
+
+
+V2_SIG = "Swap(address,uint256,uint256,uint256,uint256,address)"
+V3_SIG = "Swap(address,address,int256,int256,uint160,uint128,int24)"
+SUSHI_FACTORY = "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac"
+
+
+def _multi_dex_config(mock_chain_config):
+    mock_chain_config["dexes"] = [
+        {
+            "name": "UniswapV2",
+            "factory": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+            "event_sig": V2_SIG,
+            "type": "v2",
+            "abi": [],
+            "router": "0x1",
+        },
+        {
+            "name": "UniswapV3",
+            "factory": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+            "event_sig": V3_SIG,
+            "type": "v3",
+            "abi": [],
+            "router": "0x2",
+        },
+        {
+            "name": "Sushiswap",
+            "factory": SUSHI_FACTORY,
+            "event_sig": V2_SIG,
+            "type": "v2",
+            "abi": [],
+            "router": "0x3",
+        },
+    ]
+    return mock_chain_config
+
+
+def _ingestor_with_factory(config, factory_call):
+    ingestor = ChainIngestor(config, AsyncMock(spec=Storage))
+    ingestor.web3 = MagicMock()
+    ingestor.web3.eth.contract.return_value.functions.factory.return_value.call = factory_call
+    return ingestor
+
+
+@pytest.mark.asyncio
+async def test_pool_syncs_only_the_dex_whose_factory_created_it(mock_chain_config):
+    """Regression: every DEX sharing the V2 event signature re-fetched the
+    pool's swaps, so a Sushiswap pool was ingested twice (as UniswapV2 first)."""
+    config = _multi_dex_config(mock_chain_config)
+    ingestor = _ingestor_with_factory(config, AsyncMock(return_value=SUSHI_FACTORY.lower()))
+    synced = AsyncMock(return_value=3)
+    with patch.object(ingestor, "sync_historical_swaps", synced):
+        total = await ingestor.sync_pool("0x" + "a" * 40, 1, 2)
+
+    assert total == 3
+    assert [call.args[0]["name"] for call in synced.await_args_list] == ["Sushiswap"]
+
+
+@pytest.mark.asyncio
+async def test_pool_without_factory_tries_each_event_signature_once(mock_chain_config):
+    config = _multi_dex_config(mock_chain_config)
+    factory_call = AsyncMock(side_effect=RPCError("execution reverted"))
+    ingestor = _ingestor_with_factory(config, factory_call)
+
+    dexes = await ingestor.resolve_pool_dexes("0x" + "a" * 40)
+    await ingestor.resolve_pool_dexes("0x" + "a" * 40)
+
+    assert [d["name"] for d in dexes] == ["UniswapV2", "UniswapV3"]
+    assert factory_call.await_count == 2  # a failed lookup is not cached
+
+
+@pytest.mark.asyncio
+async def test_pool_dex_resolution_is_cached(mock_chain_config):
+    config = _multi_dex_config(mock_chain_config)
+    factory_call = AsyncMock(return_value="0x" + "9" * 40)  # unconfigured factory
+    ingestor = _ingestor_with_factory(config, factory_call)
+
+    first = await ingestor.resolve_pool_dexes("0x" + "B" * 40)
+    second = await ingestor.resolve_pool_dexes("0x" + "b" * 40)
+
+    assert [d["name"] for d in first] == ["UniswapV2", "UniswapV3"] == [d["name"] for d in second]
+    factory_call.assert_awaited_once()

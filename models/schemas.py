@@ -28,10 +28,18 @@ class SwapTrade(Base):
     amount_out: Mapped[float] = mapped_column(Float, nullable=False)
     sender: Mapped[str] = mapped_column(String(42), nullable=False, index=True)
     recipient: Mapped[str] = mapped_column(String(42), nullable=False, index=True)
+    # The externally owned account that sent the transaction (`tx.from`). Swap
+    # events only carry `sender`/`to`, which for router- or bot-mediated swaps
+    # are contracts; the transaction sender is the economic actor. NULL when
+    # the transaction could not be fetched.
+    tx_from: Mapped[str | None] = mapped_column(String(42), nullable=True, index=True)
+    # The contract (or account) the transaction called: a router, an aggregator
+    # or a bot contract.
+    tx_to: Mapped[str | None] = mapped_column(String(42), nullable=True)
     transaction_hash: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
     block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
     block_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    gas_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gas_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # gwei
     gas_used: Mapped[float | None] = mapped_column(Float, nullable=True)
     log_index: Mapped[int] = mapped_column(Integer, nullable=False)
     amount_in_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -124,6 +132,7 @@ class SwapTradeResponse(BaseModel):
     amount_out: float
     sender: str
     recipient: str
+    tx_from: str | None = None
     transaction_hash: str
     block_number: int
     block_timestamp: datetime

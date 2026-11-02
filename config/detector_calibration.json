@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "circular_trading": {
+      "clean_false_positives": 17,
+      "clean_trades": 27385,
+      "fpr": 0.000621,
+      "fpr_upper": 0.000931,
+      "tpr": 0.0
+    },
+    "closed_cluster": {
+      "clean_false_positives": 0,
+      "clean_trades": 27385,
+      "fpr": 0.0,
+      "fpr_upper": 0.000109,
+      "tpr": 0.0
+    },
+    "high_frequency_bot": {
+      "clean_false_positives": 63,
+      "clean_trades": 27385,
+      "fpr": 0.002301,
+      "fpr_upper": 0.002837,
+      "tpr": 0.0
+    },
+    "position_neutral": {
+      "clean_false_positives": 8,
+      "clean_trades": 27385,
+      "fpr": 0.000292,
+      "fpr_upper": 0.000527,
+      "tpr": 0.296369
+    },
+    "repeated_amounts": {
+      "clean_false_positives": 538,
+      "clean_trades": 27385,
+      "fpr": 0.019646,
+      "fpr_upper": 0.021082,
+      "tpr": 0.219333
+    },
+    "round_trip": {
+      "clean_false_positives": 20,
+      "clean_trades": 27385,
+      "fpr": 0.00073,
+      "fpr_upper": 0.001061,
+      "tpr": 0.426889
+    },
+    "volume_anomaly": {
+      "clean_false_positives": 1196,
+      "clean_trades": 27385,
+      "fpr": 0.043674,
+      "fpr_upper": 0.045759,
+      "tpr": 0.003435
+    },
+    "wash_cluster": {
+      "clean_false_positives": 0,
+      "clean_trades": 27385,
+      "fpr": 0.0,
+      "fpr_upper": 0.000109,
+      "tpr": 0.0
+    }
+  },
+  "generated_by": "wash-eval --write-calibration",
+  "seeds": 10
+}

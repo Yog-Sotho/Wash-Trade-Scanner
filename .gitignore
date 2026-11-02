@@ -133,3 +133,4 @@ dmypy.json
 models/*.pkl
 logs/*.log
 logs/*.log.*
+evaluation/results.json

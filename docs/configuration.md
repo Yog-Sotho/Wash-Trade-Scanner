@@ -52,34 +52,58 @@ it was left unchanged; set `MOONBEAM_RPC_URL` if it fails for you.
 
 ## Detection Parameters
 
-| Variable                         | Description                                                                 | Default   |
-|----------------------------------|-----------------------------------------------------------------------------|-----------|
-| `WASH_TRADE_TIME_WINDOW_MINUTES` | Time window (in minutes) for circular trading detection                     | `60`      |
-| `MIN_WASH_TRADE_VOLUME_USD`      | Minimum USD volume to consider a trade as potential wash trade              | `1000`    |
-| `ML_CONTAMINATION`               | Expected fraction of outliers in Isolation Forest                           | `0.05`    |
-| `BOT_ALLOWLIST`                  | Comma‑separated list of addresses to skip in high‑frequency bot detection   | (empty)   |
-| `BOT_TRADE_TIME_THRESHOLD`       | Maximum average inter‑trade time (seconds) to flag as bot activity          | `60`      |
-| `BOT_VOLUME_CV_THRESHOLD`        | Maximum coefficient of variation in volume to flag as bot activity          | `0.5`     |
-| `VOLUME_ANOMALY_METHOD`          | Volume anomaly method: `mad`, `iqr`, or `zscore`                            | `mad`     |
-| `VOLUME_ANOMALY_THRESHOLD`       | Anomaly score threshold for the selected method                             | `3.5`     |
+Defaults marked † were chosen on the detection benchmark (`python -m
+evaluation.tune`, results in [benchmarks.md](benchmarks.md)); after changing a
+detector or its defaults, run `make calibrate` so the shipped calibration and
+regression baseline match.
 
-## Advanced Detection Parameters
+### Scoring
 
-Research‑grade detectors in `core/advanced_heuristics.py`:
+| Variable                        | Description                                                                                          | Default |
+|---------------------------------|------------------------------------------------------------------------------------------------------|---------|
+| `WASH_PRIOR`                    | Prior share of wash trades among audited trades; with each detector's measured rates (`config/detector_calibration.json`) it turns a hit into P(wash \| hit) | `0.01`  |
+| `SUSPICIOUS_ACTIVITY_THRESHOLD` | A trade is labelled wash when P(wash \| hit) of its most probative detector reaches this               | `0.8`   |
+
+### Round trips and position neutrality
+
+| Variable                            | Description                                                                          | Default      |
+|-------------------------------------|--------------------------------------------------------------------------------------|--------------|
+| `ROUND_TRIP_MAX_BLOCKS`             | Max blocks between a trade and the opposite trade that sells it back                  | `50` †       |
+| `ROUND_TRIP_VALUE_TOLERANCE`        | Max relative USD difference between the two legs                                      | `0.01` †     |
+| `ROUND_TRIP_MIN_COUNT`              | Round trips a trader must make in a pool to be flagged                                | `2` †        |
+| `POSITION_NEUTRAL_WINDOWS_HOURS`    | Multi‑pass window sizes (hours) over which each entity's net position is checked       | `[1,24,168]` † |
+| `POSITION_NEUTRAL_MARGIN`           | Max net change in every token, relative to the amount moved, to call an entity flat    | `0.001` †    |
+| `POSITION_NEUTRAL_MIN_TRADES`       | Minimum trades by an entity in a window before it can be flagged                       | `4` †        |
+
+### Supporting signals
 
 | Variable                            | Description                                                                       | Default      |
 |-------------------------------------|-----------------------------------------------------------------------------------|--------------|
-| `POSITION_NEUTRAL_WINDOWS_HOURS`    | Multi‑pass window sizes (hours) for position‑neutral SCC analysis                 | `[1,24,168]` |
-| `POSITION_NEUTRAL_MARGIN`           | Max net‑position change relative to gross volume to call a window position‑neutral | `0.01`       |
-| `POSITION_NEUTRAL_MIN_TRADES`       | Minimum trades in a window before it can be flagged                               | `4`          |
+| `WASH_TRADE_TIME_WINDOW_MINUTES`    | Time window (in minutes) for circular trading detection                           | `60`         |
+| `BOT_ALLOWLIST`                     | Comma‑separated addresses (transaction senders) skipped by bot and repeated‑amount detection | (empty) |
+| `BOT_TRADE_COUNT_THRESHOLD`         | Minimum trades by one trader to consider bot activity                             | `10`         |
+| `BOT_TRADE_TIME_THRESHOLD_SECONDS`  | Maximum average inter‑trade time (seconds) to flag as bot activity                | `60`         |
+| `BOT_VOLUME_CV_THRESHOLD`           | Maximum coefficient of variation in volume to flag as bot activity                | `0.5`        |
+| `VOLUME_ANOMALY_METHOD`             | Volume anomaly method: `mad`, `iqr`, or `zscore`                                  | `mad`        |
+| `VOLUME_ANOMALY_THRESHOLD`          | Anomaly score threshold for the selected method                                   | `3.5`        |
 | `CLOSED_CLUSTER_INTERNAL_RATIO`     | Minimum fraction of a community's volume that must be internal                    | `0.9`        |
 | `CLOSED_CLUSTER_MIN_TRADES`         | Minimum internal trades for a community to be considered                          | `6`          |
 | `CLOSED_CLUSTER_MIN_MEMBERS`        | Minimum community size                                                            | `2`          |
 | `CLOSED_CLUSTER_MAX_MEMBERS`        | Maximum community size                                                            | `50`         |
 | `CLOSED_CLUSTER_BALANCE_TOLERANCE`  | Max per‑member internal in/out volume imbalance                                   | `0.2`        |
-| `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount by a sender before flagging                   | `5`          |
-| `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3`          |
+| `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount of one token by a trader before flagging       | `5` †        |
+| `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3` †        |
 | `ENTITY_SCAN_MAX_BLOCKS`            | On nodes without `trace_filter`, max recent blocks to scan for funding links (one RPC call per block); `0` skips that clustering | `0` |
+
+### Machine learning
+
+| Variable               | Description                                                                                              | Default |
+|------------------------|----------------------------------------------------------------------------------------------------------|---------|
+| `ML_CONTAMINATION`     | Expected fraction of outliers in the Isolation Forest                                                    | `0.05`  |
+| `ML_TARGET_FPR`        | `wash-train` sets the model's threshold so at most this share of the benchmark's honest trades is flagged | `0.01`  |
+| `ML_MIN_PR_AUC_LIFT`   | `wash-train` refuses to save a model whose benchmark PR‑AUC is below this multiple of a random ranking's (`--allow-weak-model` overrides) | `2.0` |
+
+`MIN_WASH_TRADE_VOLUME_USD` is accepted but not used by any detector.
 
 ## USD Pricing
 

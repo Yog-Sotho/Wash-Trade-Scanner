@@ -116,6 +116,10 @@ class AuditRunner:
         flagged_trade_ids: set[int] = set()
         detection_methods: list[str] = []
 
+        # An audit's labels are this run's: clear what earlier runs (possibly
+        # with other detectors or calibration) left behind.
+        await self.storage.clear_pool_labels(params.chain_id, params.pool_address)
+
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
                 logger.info("Clustering addresses by funding links...")
@@ -150,11 +154,14 @@ class AuditRunner:
 
             if use_ml:
                 logger.info("Running ML detection...")
+                # The model's own measured threshold and rates decide (see
+                # MLDetector.detect_wash_trades); a fixed 0.8 was unreachable
+                # for an Isolation Forest's probabilities (at most ~0.73).
                 ml_wash_trades = await ml_detector.detect_wash_trades(
-                    params.chain_id, params.pool_address, threshold=0.8
+                    params.chain_id, params.pool_address
                 )
                 if ml_wash_trades:
-                    # detect_wash_trades persists per-trade probabilities itself.
+                    # detect_wash_trades persists its labels itself.
                     flagged_trade_ids.update(t.id for t in ml_wash_trades)
                     detection_methods.append("ml")
 

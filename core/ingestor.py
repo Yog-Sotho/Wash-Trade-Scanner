@@ -22,6 +22,10 @@ from core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
+# Concurrent per-block / per-transaction RPC calls in a sync; the rate limiter
+# still bounds the request rate.
+_RPC_FETCH_CONCURRENCY = 8
+
 
 def _hex_str(value: Any) -> str:
     """Normalize a hash to the stored form: a lowercase 0x-prefixed str.
@@ -81,6 +85,7 @@ class ChainIngestor:
         self.contracts: dict[str, Any] = {}
         self._pool_tokens: dict[str, tuple[str, str]] = {}
         self._pool_tokens_lock = asyncio.Lock()
+        self._pool_dexes: dict[str, list[dict[str, Any]]] = {}
 
     async def connect(self) -> None:
         """Connect to RPC with validation."""
@@ -299,6 +304,8 @@ class ChainIngestor:
                 "block_number": log.get("blockNumber", 0),
                 "block_timestamp": block_timestamp,
                 "log_index": log.get("logIndex", 0),
+                "tx_from": None,
+                "tx_to": None,
                 "gas_price": None,
                 "gas_used": None,
             }
@@ -306,6 +313,69 @@ class ChainIngestor:
         except Exception as exc:
             logger.error(f"Error processing swap event: {exc}")
             return None
+
+    async def _fetch_block_timestamps(self, block_numbers: set[int]) -> dict[int, datetime]:
+        """Fetch block timestamps concurrently (bounded; the rate limiter still
+        caps the request rate). A block that cannot be fetched is stamped with
+        the current time, as before."""
+        assert self.web3 is not None
+        web3 = self.web3
+        semaphore = asyncio.Semaphore(_RPC_FETCH_CONCURRENCY)
+        timestamps: dict[int, datetime] = {}
+
+        async def fetch(block_number: int) -> None:
+            async with semaphore:
+                try:
+                    await self.rate_limiter.acquire()
+                    block = await self.circuit_breaker.call(web3.eth.get_block, block_number)
+                    timestamps[block_number] = datetime.fromtimestamp(
+                        block["timestamp"], tz=UTC
+                    ).replace(tzinfo=None)
+                except Exception as exc:
+                    logger.error(f"Failed to fetch block {block_number}: {exc}")
+                    timestamps[block_number] = datetime.now(UTC).replace(tzinfo=None)
+
+        await asyncio.gather(*(fetch(bn) for bn in sorted(block_numbers)))
+        return timestamps
+
+    async def _fetch_transactions(
+        self, tx_hashes: set[str]
+    ) -> dict[str, tuple[str, str | None, float | None]]:
+        """Fetch (from, to, gas price in gwei) for each transaction.
+
+        Swap events name the router or bot contract that called the pool, not
+        the account that traded; only the transaction carries that. A
+        transaction that cannot be fetched is left out (its swaps keep a NULL
+        tx_from) rather than failing the whole sync.
+        """
+        assert self.web3 is not None
+        web3 = self.web3
+        semaphore = asyncio.Semaphore(_RPC_FETCH_CONCURRENCY)
+        results: dict[str, tuple[str, str | None, float | None]] = {}
+
+        async def fetch(tx_hash: str) -> None:
+            async with semaphore:
+                try:
+                    await self.rate_limiter.acquire()
+                    tx = await self.circuit_breaker.call(web3.eth.get_transaction, tx_hash)
+                except Exception as exc:
+                    logger.error(f"Failed to fetch transaction {tx_hash}: {exc}")
+                    return
+            to = tx.get("to")
+            gas_price = tx.get("gasPrice")
+            results[tx_hash] = (
+                str(tx["from"]).lower(),
+                str(to).lower() if to else None,
+                gas_price / 1e9 if gas_price is not None else None,
+            )
+
+        await asyncio.gather(*(fetch(tx_hash) for tx_hash in sorted(tx_hashes)))
+        if len(results) < len(tx_hashes):
+            logger.warning(
+                f"{len(tx_hashes) - len(results)} of {len(tx_hashes)} transactions could not "
+                "be fetched; their swaps have no tx_from"
+            )
+        return results
 
     async def sync_historical_swaps(
         self,
@@ -354,17 +424,7 @@ class ChainIngestor:
             if bn:
                 block_numbers.add(bn)
 
-        block_timestamps = {}
-        for bn in block_numbers:
-            try:
-                await self.rate_limiter.acquire()
-                block = await self.circuit_breaker.call(self.web3.eth.get_block, bn)
-                block_timestamps[bn] = datetime.fromtimestamp(block["timestamp"], tz=UTC).replace(
-                    tzinfo=None
-                )
-            except Exception as exc:
-                logger.error(f"Failed to fetch block {bn}: {exc}")
-                block_timestamps[bn] = datetime.now(UTC).replace(tzinfo=None)
+        block_timestamps = await self._fetch_block_timestamps(block_numbers)
 
         trades_data = []
         for log in logs:
@@ -374,12 +434,85 @@ class ChainIngestor:
             if trade_data:
                 trades_data.append(trade_data)
 
+        transactions = await self._fetch_transactions(
+            {trade["transaction_hash"] for trade in trades_data}
+        )
+        for trade in trades_data:
+            tx = transactions.get(trade["transaction_hash"])
+            if tx is not None:
+                trade["tx_from"], trade["tx_to"], trade["gas_price"] = tx
+
         if trades_data:
             await self.price_oracle.price_trades(self.chain_config["chain_id"], trades_data)
             await self.storage.save_trades_batch(trades_data)
 
         logger.info(f"Synced {len(trades_data)} historical swaps for {dex['name']}")
         return len(trades_data)
+
+    async def resolve_pool_dexes(self, pool_address: str) -> list[dict[str, Any]]:
+        """The configured DEX(es) whose events this pool emits.
+
+        DEXes that share an event signature (e.g. Uniswap V2 and Sushiswap)
+        would otherwise each fetch, price and count the pool's swaps once
+        more, under a DEX label that depends on list order. A V2/V3-style pool
+        names its factory, which identifies the DEX exactly. Pools without a
+        recognised factory fall back to one DEX per distinct event signature.
+        """
+        assert self.web3 is not None
+        cached = self._pool_dexes.get(pool_address.lower())
+        if cached is not None:
+            return cached
+        resolved, by_factory = await self._resolve_pool_dexes(pool_address)
+        if by_factory:
+            # Only an answer from the pool itself is final; a fallback caused
+            # by a failed (or unsupported) factory() call is retried next time.
+            self._pool_dexes[pool_address.lower()] = resolved
+        return resolved
+
+    async def _resolve_pool_dexes(self, pool_address: str) -> tuple[list[dict[str, Any]], bool]:
+        assert self.web3 is not None
+        dexes: list[dict[str, Any]] = self.chain_config["dexes"]
+        factory_abi = [
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "factory",
+                "outputs": [{"name": "", "type": "address"}],
+                "type": "function",
+            }
+        ]
+        contract = self.web3.eth.contract(
+            address=Web3.to_checksum_address(pool_address), abi=factory_abi
+        )
+        answered = False
+        try:
+            await self.rate_limiter.acquire()
+            factory = str(await self.circuit_breaker.call(contract.functions.factory().call))
+        except Exception as exc:
+            logger.debug(f"Pool {pool_address} has no factory(): {exc}")
+        else:
+            answered = True
+            matches = [d for d in dexes if str(d.get("factory", "")).lower() == factory.lower()]
+            if matches:
+                return matches[:1], True
+            logger.warning(
+                f"Pool {pool_address} was created by unconfigured factory {factory}; "
+                "trying each configured event signature once"
+            )
+
+        unique: dict[str, dict[str, Any]] = {}
+        for dex in dexes:
+            unique.setdefault(dex["event_sig"], dex)
+        return list(unique.values()), answered
+
+    async def sync_pool(self, pool_address: str, from_block: int, to_block: int) -> int:
+        """Sync one pool's swaps from the DEX that actually created it."""
+        total = 0
+        for dex in await self.resolve_pool_dexes(pool_address):
+            total += await self.sync_historical_swaps(
+                dex, from_block, to_block, pool_address=pool_address
+            )
+        return total
 
     async def stop(self) -> None:
         self.is_running = False
@@ -435,7 +568,6 @@ class MultiChainIngestor:
         ingestor = await self.get_ingestor(chain_id)
         assert ingestor.web3 is not None, "ingestor.connect() must be called first"
 
-        total_swaps = 0
         chain_config = ingestor.chain_config
 
         if start_block is None:
@@ -452,13 +584,5 @@ class MultiChainIngestor:
             except CircuitBreakerOpenError as exc:
                 raise ValueError("Cannot get latest block: circuit breaker open") from exc
 
-        for dex in chain_config["dexes"]:
-            swaps = await ingestor.sync_historical_swaps(
-                dex,
-                start_block,
-                end_block,
-                pool_address=pool_address,
-            )
-            total_swaps += swaps
-
+        total_swaps = await ingestor.sync_pool(pool_address, start_block, end_block)
         return total_swaps

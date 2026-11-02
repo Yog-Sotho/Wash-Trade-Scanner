@@ -107,8 +107,33 @@ async def test_detect_wash_trades_empty_features(detector):
     assert result == []
 
 
+MEASURED = {"threshold": 0.0, "tpr": 0.9, "fpr_upper": 0.0001, "pr_auc": 0.7}
+
+
 @pytest.mark.asyncio
 async def test_detect_wash_trades_flags_high_probability(detector):
+    df = _features_df(10)
+    detector.feature_engineer.build_ml_features.return_value = df
+    detector.storage.get_session.return_value = _session_returning_trades([])
+    await detector.train(chain_id=1, pool_addresses=["0xpool"], use_heuristic_labels=False)
+    detector.metrics = dict(MEASURED)
+
+    trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
+    detector.storage.get_session.return_value = _session_returning_trades(trades)
+
+    # The measured threshold (0.0) makes every trade a hit.
+    result = await detector.detect_wash_trades(chain_id=1, pool_address="0xpool")
+    assert len(result) == 10
+    assert all(t.is_wash_trade for t in result)
+    assert all(t.detection_method == "ml_isolation_forest" for t in result)
+    # Scored like a heuristic hit: P(wash | flagged) from the measured rates.
+    expected = 0.9 * 0.01 / (0.9 * 0.01 + 0.0001 * 0.99)
+    assert all(t.wash_trade_score == pytest.approx(expected) for t in result)
+
+
+@pytest.mark.asyncio
+async def test_unevaluated_model_cannot_label_trades(detector):
+    """Without measured rates there is no basis for calling a hit wash."""
     df = _features_df(10)
     detector.feature_engineer.build_ml_features.return_value = df
     detector.storage.get_session.return_value = _session_returning_trades([])
@@ -117,11 +142,21 @@ async def test_detect_wash_trades_flags_high_probability(detector):
     trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
     detector.storage.get_session.return_value = _session_returning_trades(trades)
 
-    # threshold=0.0 guarantees every trade is flagged regardless of score
-    result = await detector.detect_wash_trades(chain_id=1, pool_address="0xpool", threshold=0.0)
-    assert len(result) == 10
-    assert all(t.is_wash_trade for t in result)
-    assert all(t.detection_method == "ml_isolation_forest" for t in result)
+    assert await detector.detect_wash_trades(1, "0xpool", threshold=0.0) == []
+
+
+@pytest.mark.asyncio
+async def test_imprecise_model_cannot_label_trades(detector):
+    df = _features_df(10)
+    detector.feature_engineer.build_ml_features.return_value = df
+    detector.storage.get_session.return_value = _session_returning_trades([])
+    await detector.train(chain_id=1, pool_addresses=["0xpool"], use_heuristic_labels=False)
+    detector.metrics = {**MEASURED, "fpr_upper": 0.05}  # posterior ~0.15
+
+    trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
+    detector.storage.get_session.return_value = _session_returning_trades(trades)
+
+    assert await detector.detect_wash_trades(1, "0xpool") == []
 
 
 def test_save_model_without_training_raises(detector):
@@ -141,6 +176,7 @@ async def test_save_and_load_model_round_trip(detector, tmp_path):
     detector.storage.get_session.return_value = _session_returning_trades([])
     await detector.train(chain_id=1, pool_addresses=["0xpool"], use_heuristic_labels=False)
 
+    detector.metrics = dict(MEASURED)
     model_path = str(tmp_path / "model.pkl")
     detector.save_model(model_path)
 
@@ -151,3 +187,4 @@ async def test_save_and_load_model_round_trip(detector, tmp_path):
 
     assert fresh_detector.is_trained
     assert fresh_detector.feature_columns == detector.feature_columns
+    assert fresh_detector.metrics == MEASURED  # measured rates travel with the model

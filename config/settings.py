@@ -90,22 +90,26 @@ class Settings(BaseSettings):
     MIN_WASH_TRADE_VOLUME_USD: float = Field(1000.0, ge=0.0)
     SUSPICIOUS_ACTIVITY_THRESHOLD: float = Field(0.8, ge=0.0, le=1.0)
 
-    # Heuristic Weights
-    HEURISTIC_WEIGHTS: dict[str, float] = {
-        "self_trading": 0.20,
-        "circular_trading": 0.15,
-        "position_neutral_scc": 0.20,
-        "closed_cluster": 0.10,
-        "high_frequency_bot": 0.10,
-        "volume_anomaly": 0.10,
-        "wash_cluster": 0.10,
-        "repeated_amounts": 0.05,
-    }
+    # Composite scoring: each detector's measured true- and false-positive rates
+    # (config/detector_calibration.json, written by `wash-eval`) turn a
+    # detection into the probability that the trade is wash, given this prior
+    # share of wash trades among audited trades. A trade is labelled wash when
+    # that probability reaches SUSPICIOUS_ACTIVITY_THRESHOLD.
+    WASH_PRIOR: float = Field(0.01, gt=0.0, lt=1.0)
 
-    # Position-Neutral SCC Detection (Victor & Weintraud, WWW '21)
-    # Multi-pass windows over which per-trader net position change is evaluated.
+    # Round-trip (A-A) detection, after Chainalysis wash-trading heuristic 1
+    # (25 blocks, 1%, 3+ round trips). Defaults chosen on the evaluation
+    # harness (python -m evaluation.tune; docs/benchmarks.md).
+    ROUND_TRIP_MAX_BLOCKS: int = Field(50, ge=0, le=100_000)
+    ROUND_TRIP_VALUE_TOLERANCE: float = Field(0.01, ge=0.0, le=0.5)
+    ROUND_TRIP_MIN_COUNT: int = Field(2, ge=1, le=1000)
+
+    # Position-neutral detection (Victor & Weintraud, WWW '21; Gan et al., TOIT 2024)
+    # Multi-pass windows over which each entity's net position change is evaluated.
+    # The margin was chosen on the evaluation harness: at 1% the detector also
+    # flags arbitrage bots, which end flat too (python -m evaluation.tune).
     POSITION_NEUTRAL_WINDOWS_HOURS: list[int] = [1, 24, 168]
-    POSITION_NEUTRAL_MARGIN: float = Field(0.01, ge=0.0, le=0.5)
+    POSITION_NEUTRAL_MARGIN: float = Field(0.001, ge=0.0, le=0.5)
     POSITION_NEUTRAL_MIN_TRADES: int = Field(4, ge=2, le=1000)
 
     # Closed-Cluster Detection (network-based, 2025)
@@ -140,6 +144,13 @@ class Settings(BaseSettings):
     ML_MODEL_PATH: str = Field("models/ml_model.pkl")
     ML_CONTAMINATION: float = Field(0.05, ge=0.001, le=0.5)
     ML_EXPLAINABILITY: bool = Field(True)
+    # The model's detection threshold is set so that at most this share of
+    # honest trades (the evaluation harness's clean pools) is flagged.
+    ML_TARGET_FPR: float = Field(0.01, gt=0.0, lt=1.0)
+    # wash-train refuses to save a model whose PR-AUC on the labelled evaluation
+    # scenarios is less than this multiple of the PR-AUC of a random ranking
+    # (which equals the share of wash trades in the scenarios).
+    ML_MIN_PR_AUC_LIFT: float = Field(2.0, ge=1.0, le=1000.0)
 
     # Data Retention
     TRADE_RETENTION_DAYS: int = Field(90, ge=1, le=3650)

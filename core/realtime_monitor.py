@@ -105,15 +105,7 @@ class RealtimeMonitor:
         if latest <= self.last_block:
             return [], {}
 
-        chain_config = get_chain_config(self.chain_id)
-        synced = 0
-        for dex in chain_config["dexes"]:
-            synced += await self.ingestor.sync_historical_swaps(
-                dex,
-                self.last_block + 1,
-                latest,
-                pool_address=self.pool_address,
-            )
+        synced = await self.ingestor.sync_pool(self.pool_address, self.last_block + 1, latest)
         self.last_block = latest
 
         if synced == 0:
@@ -138,9 +130,27 @@ class RealtimeMonitor:
             result = await session.execute(stmt)
             window_trades = list(result.scalars().all())
 
+            before = {
+                t.id: (t.is_wash_trade, t.wash_trade_score, t.detection_method)
+                for t in window_trades
+            }
             wash_trades, stats = await self.detector.run_detectors_on_trades(window_trades, session)
+            # The window sees only recent trades, so it may not reproduce labels
+            # a full audit gave (e.g. over a 24h window). It only adds labels:
+            # every other trade keeps what it had, and a stronger existing
+            # label is not downgraded.
+            flagged = {t.id for t in wash_trades}
+            for trade in window_trades:
+                was_wash, score, method = before[trade.id]
+                keep = trade.id not in flagged or (
+                    was_wash and (score or 0.0) >= (trade.wash_trade_score or 0.0)
+                )
+                if keep:
+                    trade.is_wash_trade = was_wash
+                    trade.wash_trade_score = score
+                    trade.detection_method = method
             if wash_trades:
-                # Persist labels set by the detectors on this session's ORM rows.
+                # Persist the new labels on this session's ORM rows.
                 await session.commit()
 
         alerts = []

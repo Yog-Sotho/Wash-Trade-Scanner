@@ -1,5 +1,55 @@
 # Changelog
 
+## [Unreleased] - Phase 2: measured detection
+
+### Added
+- `evaluation/`: a detection benchmark. Real swap histories of the most liquid
+  USDC/USDT–WETH pools on Ethereum (27,385 trades) and of the NexFundAI sting
+  token's market, recorded by the production ingestor; labelled wash campaigns
+  (Chainalysis heuristics 1 and 2, Gan et al., Kaiko) injected into them;
+  precision, recall, F1, PR-AUC and clean-pool false-positive rate per detector.
+  `wash-eval` / `make eval` regenerate `docs/benchmarks.md`.
+- CI job `detection-quality` (`wash-eval --check`): fails if a detector's F1,
+  recall or false-positive rate regresses, or the shipped calibration is stale.
+- `tx_from` / `tx_to` on every swap (the transaction's sender and target) and the
+  transaction's gas price; existing databases gain the columns on startup and
+  re-syncing a range completes old rows.
+- `round_trip` detector (after Chainalysis's address-level heuristic, with
+  sandwich exclusion) and entity-level `position_neutral` (per trader or
+  funding cluster).
+- Calibrated scoring (`core/calibration.py`): a hit is scored P(wash | hit) from
+  the detector's measured rates and `WASH_PRIOR`; trades are labelled at
+  `SUSPICIOUS_ACTIVITY_THRESHOLD`, which nothing used before.
+- `wash-train` cross-validates (leave one pool out), holds out the most recent
+  20% of trades, sets its threshold at `ML_TARGET_FPR`, measures the model on
+  the benchmark, stores the rates in the model file and refuses to save a model
+  below `ML_MIN_PR_AUC_LIFT` × a random ranking.
+
+### Changed
+- Detectors attribute swaps to the transaction sender instead of the Swap
+  event's `sender`/`to` (usually a router or bot contract).
+- `POSITION_NEUTRAL_MARGIN` 0.01 → 0.001 and round-trip parameters, chosen on
+  the benchmark (`python -m evaluation.tune`).
+- ML features are computed in memory from one query per pool (was four queries
+  per trade) and keyed by trader.
+- Block timestamps and transactions are fetched concurrently (bounded).
+- The real-time monitor adds labels from its rolling window but never removes or
+  downgrades labels a full audit gave.
+- Audits use the trained model's own measured threshold instead of a fixed 0.8.
+
+### Removed
+- `self_trading` (Swap `sender == to`): on the benchmark it flagged 70–79% of
+  honest trades in liquid pools. `HEURISTIC_WEIGHTS`, which nothing used.
+
+### Fixed
+- A pool's swaps were fetched, priced and counted once per DEX sharing its event
+  signature (Uniswap V2 and Sushiswap), labelled by list order; the DEX is now
+  resolved from the pool's factory.
+- Re-auditing never removed labels, so trades stayed flagged after the detectors
+  stopped flagging them.
+- An Isolation Forest without measured rates labelled trades; its probability
+  threshold (0.8) was also unreachable for the model's score range.
+
 ## [1.0.1] - 2026-04-25
 
 ### Security

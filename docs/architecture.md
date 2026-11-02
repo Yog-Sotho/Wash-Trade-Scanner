@@ -8,9 +8,10 @@ The system follows a modular, async‑first design built around the following co
           │
           ▼
 ┌─────────────────────┐
-│  ChainIngestor       │  Fetches swap events from DEX routers
-│  (per chain)         │  via WebSocket or HTTP. Applies rate
-│                     │  limiting and retry logic.
+│  ChainIngestor       │  Fetches a pool's swap events from the DEX
+│  (per chain)         │  that created it (pool.factory()), plus each
+│                     │  swap's transaction sender (tx_from) and USD
+│                     │  value. Rate limiting, retries, circuit breaker.
 └─────────┬───────────┘
           │ stores trades
           ▼
@@ -30,9 +31,12 @@ The system follows a modular, async‑first design built around the following co
           ▼                             ▼
 ┌──────────────────┐          ┌──────────────────┐
 │ HeuristicDetector │          │ MLDetector        │
-│ (rule‑based)      │          │ (Isolation Forest)│
+│ (rule‑based, by   │          │ (Isolation Forest)│
+│  transaction      │          │                   │
+│  sender)          │          │                   │
 └────────┬─────────┘          └────────┬─────────┘
-          │ labels trades                │
+          │ hits scored as P(wash) from measured rates
+          │ (core/calibration.py); labelled at ≥ threshold
           └─────────┬───────────────────┘
                     ▼
           ┌──────────────────┐
@@ -45,3 +49,13 @@ The system follows a modular, async‑first design built around the following co
           │ Audit Reporter     │  Generates risk scores,
           │ (run_audit.py)     │  exports reports (JSON/CSV)
           └───────────────────┘
+
+## Detection quality
+
+`evaluation/` is a benchmark harness, separate from the audit path: real pool
+histories recorded by the production ingestor (`evaluation/fixtures/`), labelled
+wash campaigns injected into them, and a documented real wash-trading market.
+`wash-eval` measures every detector on it and writes `docs/benchmarks.md`; the
+detector rates it measures are shipped as `config/detector_calibration.json`,
+which the audit's scoring reads. CI re-runs it and fails if a detector regresses
+or the shipped rates no longer match the detectors.
