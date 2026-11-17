@@ -8,6 +8,8 @@ include Makefile
 include pyproject.toml
 recursive-include config *.py *.json
 recursive-include evaluation *.py *.json *.json.gz
+recursive-include migrations *.py *.mako
+include alembic.ini
 recursive-include core *.py
 recursive-include models *.py
 recursive-include scripts *.py

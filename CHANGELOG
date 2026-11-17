@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased] - Phase 3: build integrity, supply chain, schema
+
+### Added
+- Hash-locked dependencies: `requirements.txt` (runtime), `requirements-dev.txt`
+  and `requirements-build.txt`, resolved from `pyproject.toml` for Python 3.11
+  and 3.12 (`make lock`). CI and the Docker image install with
+  `--require-hashes`; a test fails if `pyproject.toml` and the locks disagree.
+- Alembic migrations (`migrations/`, `alembic.ini`): the schema is created and
+  upgraded by migrations, not `create_all`. Databases created before migrations
+  are adopted at the baseline revision with their data. Integration tests pin
+  the migrations to the models and round-trip upgrade/downgrade; CI runs
+  `alembic upgrade head` on an empty database.
+- `wash-prune`: counts trades older than `TRADE_RETENTION_DAYS` and deletes them
+  only with `--yes`.
+- A test that every setting is read by the application.
+
+### Changed
+- CI gates are no longer masked: pip-audit, mypy (strict), bandit, ruff format
+  and Trivy (HIGH/CRITICAL with a fix) now fail the build. CI no longer
+  auto-commits formatting fixes to pull requests (and the job no longer needs
+  write access).
+- Docker image: multi-stage, dependencies before source, no compiler, pip or
+  setuptools in the runtime image, digest-pinned base, `HEALTHCHECK`, default
+  command `wash-api`. docker-compose runs the API as a service and audits as
+  one-shot commands.
+- `RPC_RETRIES` now sets the log-fetch retries (was ignored: always 3 attempts).
+
+### Removed
+- Unused dependencies `redis`, `python-json-logger`, `tqdm`, `hypothesis`,
+  `types-python-dateutil`, `coverage` (via pytest-cov) and `safety` (which also
+  pinned a vulnerable `filelock`); unused settings `REDIS_URL` and
+  `MIN_WASH_TRADE_VOLUME_USD`; the stale `tox.ini`.
+
+### Fixed
+- Known vulnerabilities: filelock (13 advisories), setuptools (PYSEC-2026-3447,
+  GHSA-xmj3-9gf7-h52w), zlib1g in the base image (CVE-2026-85091).
+- The 5 mypy errors in `core/storage.py`.
+- docker-compose restarted a finished one-shot audit forever.
+
 ## [Unreleased] - Phase 2: measured detection
 
 ### Added

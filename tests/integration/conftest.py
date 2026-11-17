@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 from eth_abi import encode
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from web3 import Web3
 
@@ -208,19 +209,24 @@ async def fake_chain():
     await runner.cleanup()
 
 
+async def drop_everything() -> None:
+    engine = create_async_engine(settings.DATABASE_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    await engine.dispose()
+
+
 @pytest.fixture
 async def pg_storage():
     """A real Storage on the DATABASE_* PostgreSQL with a freshly created schema.
 
-    Tables are dropped first so that Storage.initialize() always runs the full
-    CREATE TABLE / CREATE INDEX DDL. Truncating instead would let an existing
-    schema hide DDL bugs (create_all skips tables -- and their indexes -- that
-    already exist), making the outcome depend on the database's history.
+    Everything is dropped first -- tables and Alembic's version table -- so
+    that Storage.initialize() always runs every migration from empty.
+    Truncating instead would let an existing schema hide DDL bugs, making the
+    outcome depend on the database's history.
     """
-    engine = create_async_engine(settings.DATABASE_URL)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+    await drop_everything()
 
     storage = Storage()
     await storage.initialize()

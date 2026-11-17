@@ -44,6 +44,5 @@ docker-compose.yml
 .env.example
 Makefile
 MANIFEST.in
-tox.ini
 requirements-dev.txt
 tests/

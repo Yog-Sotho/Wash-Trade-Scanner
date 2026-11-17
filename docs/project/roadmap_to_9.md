@@ -214,6 +214,24 @@ consumer.
 Multi-stage (no compilers in the final image), dependency layer before source copy,
 `HEALTHCHECK`, base pinned by digest.
 
+### Phase 3 — status: done (2026-11-17)
+
+Acceptance met, each verified by reintroducing the defect:
+
+| Item | Acceptance | Evidence |
+|---|---|---|
+| 3.1 gates | a type error turns CI red | mypy, bandit, `ruff format --check` and pip-audit each exit 1 on an injected defect; `|| true` and `continue-on-error` removed; Trivy now gates too |
+| 3.2 locks | pip-audit passes | 0 known vulnerabilities on 3.11 and 3.12 from the hash locks (was 16: filelock ×13, setuptools ×3); image: 0 fixable HIGH/CRITICAL |
+| 3.3 migrations | `alembic upgrade head` from empty; test in CI | CI runs it on an empty PostgreSQL; tests pin migrations to models (catches a model change without a migration), round-trip downgrade, adopt a pre-migration database |
+| 3.4 hygiene | every setting has a consumer | test fails on an unused setting; 7 unused dependencies and 2 dead settings removed, 2 wired (`RPC_RETRIES`, `TRADE_RETENTION_DAYS` via `wash-prune`) |
+| 3.5 Docker | multi-stage, dep layer, HEALTHCHECK, digest | built and run locally: migrates an empty database, reports healthy; no pip/setuptools/gcc in the image |
+
+Deviations: `safety` was removed rather than used (it needs an interactive
+login, and pinned `filelock<4` with 13 advisories). The roadmap's "8 dead
+settings" were 4 by this phase (Phases 1-2 had wired or removed the rest).
+CI no longer auto-commits ruff fixes to PR branches: that masked the format
+gate and needed write access.
+
 ---
 
 ## Phase 4 — Observability and operational safety

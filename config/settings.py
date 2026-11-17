@@ -51,11 +51,11 @@ class Settings(BaseSettings):
     )
 
     # Redis
-    REDIS_URL: str = Field("redis://localhost:6379/0")
 
     # RPC Configuration
     RPC_RATE_LIMIT: int = Field(100, ge=1, le=10000)
     RPC_TIMEOUT: int = Field(30, ge=1, le=300)
+    # Retries after a failed eth_getLogs batch (so RPC_RETRIES + 1 attempts).
     RPC_RETRIES: int = Field(3, ge=0, le=10)
     RPC_MAX_FAILURES: int = Field(5, ge=1, le=100)
     RPC_RECOVERY_TIMEOUT: float = Field(30.0, ge=1.0, le=600.0)
@@ -87,7 +87,6 @@ class Settings(BaseSettings):
 
     # Detection Parameters
     WASH_TRADE_TIME_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
-    MIN_WASH_TRADE_VOLUME_USD: float = Field(1000.0, ge=0.0)
     SUSPICIOUS_ACTIVITY_THRESHOLD: float = Field(0.8, ge=0.0, le=1.0)
 
     # Composite scoring: each detector's measured true- and false-positive rates
@@ -153,6 +152,8 @@ class Settings(BaseSettings):
     ML_MIN_PR_AUC_LIFT: float = Field(2.0, ge=1.0, le=1000.0)
 
     # Data Retention
+    # Default age limit for `wash-prune`, which deletes older trades only when
+    # run explicitly (nothing deletes data automatically).
     TRADE_RETENTION_DAYS: int = Field(90, ge=1, le=3650)
 
     # API Server — binds to loopback by default; opening it to the internet

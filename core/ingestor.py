@@ -161,10 +161,16 @@ class ChainIngestor:
         topics: list[str],
         from_block: int,
         to_block: int,
-        max_retries: int = 3,
+        max_retries: int | None = None,
     ) -> list[LogReceipt]:
-        """Fetch logs with retry and circuit breaker protection."""
+        """Fetch logs with retry and circuit breaker protection.
+
+        Each batch gets one attempt plus RPC_RETRIES retries, unless
+        `max_retries` (total attempts) is given.
+        """
         assert self.web3 is not None
+        if max_retries is None:
+            max_retries = settings.RPC_RETRIES + 1
         batch_size = 1000
         all_logs: list[LogReceipt] = []
 

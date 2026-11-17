@@ -103,7 +103,15 @@ regression baseline match.
 | `ML_TARGET_FPR`        | `wash-train` sets the model's threshold so at most this share of the benchmark's honest trades is flagged | `0.01`  |
 | `ML_MIN_PR_AUC_LIFT`   | `wash-train` refuses to save a model whose benchmark PR‑AUC is below this multiple of a random ranking's (`--allow-weak-model` overrides) | `2.0` |
 
-`MIN_WASH_TRADE_VOLUME_USD` is accepted but not used by any detector.
+## Operations
+
+| Variable               | Description                                                                                          | Default |
+|------------------------|------------------------------------------------------------------------------------------------------|---------|
+| `RPC_RETRIES`          | Retries after a failed `eth_getLogs` batch (each batch gets `RPC_RETRIES + 1` attempts)              | `3`     |
+| `TRADE_RETENTION_DAYS` | Default age limit for `wash-prune`, which counts older trades and deletes them only with `--yes`     | `90`    |
+
+Every setting is read by the application (`tests/test_settings_hygiene.py`
+fails otherwise).
 
 ## USD Pricing
 
