@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased] - Phase 4.1: instrumentation
+
+### Added
+- Structured logging for every command: `LOG_FORMAT=json` writes one JSON
+  object per line with the request id, trace ids, `extra` fields and the
+  traceback (the container image defaults to it). uvicorn logs share the
+  format; requests are logged by `api.access` with method, path, route
+  template, status, duration and client.
+- `X-Request-ID` on every response (a valid caller id is kept); the id is on
+  every log line of the request, including the audit it starts.
+- `/metrics` (Prometheus; needs the API key when auth is on): RPC requests by
+  chain, method and outcome with latency, circuit-breaker state, openings and
+  rejections, audit durations and in-progress count, detector hits and
+  verdicts, monitor alerts, HTTP requests by route template.
+- Optional OpenTelemetry traces through FastAPI's built-in support (the SDK and
+  OTLP exporter are now dependencies): an audit started through the API is a
+  span under its request, with a client span per JSON-RPC call.
+- docs/observability.md.
+
+### Changed
+- The RPC circuit breaker is shared per chain by everything in the process
+  (audits and live monitors), instead of one per audit or monitor, so a down
+  endpoint is detected once and the published state is the endpoint's.
+- `wash-train` and `wash-prune` honour `LOG_LEVEL` (they always logged at INFO).
+
+### Fixed
+- RPC endpoint URLs, which carry provider API keys, leaked into ERROR logs and
+  into the audit-task `error` and monitor `error` messages the API returns:
+  aiohttp puts the request URL in its error messages. Configured RPC URLs are
+  now redacted to scheme and host.
+
 ## [Unreleased] - Phase 3: build integrity, supply chain, schema
 
 ### Added

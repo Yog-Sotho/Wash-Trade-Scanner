@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prometheus_client import REGISTRY
 
 from core.calibration import DetectorCalibration, override_calibration
 from core.realtime_monitor import MonitorEvent, RealtimeMonitor
@@ -143,11 +144,16 @@ async def test_poll_once_deduplicates_alerts_across_polls():
         patch("core.realtime_monitor.get_chain_config", return_value={"dexes": [{"n": 1}]}),
         patch.object(monitor, "_latest_block", AsyncMock(side_effect=[105, 110])),
     ):
+        alerted = REGISTRY.get_sample_value("wash_monitor_alerts_total", {"method": "round_trip"})
         first, _ = await monitor.poll_once()
         second, _ = await monitor.poll_once()
 
     assert len(first) == 6
     assert second == []  # same trades must not re-alert
+    # Counted once per alert, not once per pass over the window.
+    assert REGISTRY.get_sample_value("wash_monitor_alerts_total", {"method": "round_trip"}) == (
+        (alerted or 0.0) + 6
+    )
 
 
 @pytest.mark.asyncio

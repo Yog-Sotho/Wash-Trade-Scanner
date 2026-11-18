@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import select
 from web3 import Web3
 
@@ -198,6 +199,40 @@ async def test_api_serves_audited_pool(pg_storage, chain):
     assert overview["wash_volume_usd"] == pytest.approx(5985.0)
     assert overview["top_wash_pools"][0]["pool_address"] == POOL
     assert len(overview["recent_audits"]) == 1
+
+
+def _metric(name: str, **labels: str) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+async def test_audit_is_visible_in_prometheus_metrics(pg_storage, chain):
+    """A real audit over HTTP JSON-RPC shows up at /metrics: the node calls it
+    made, its duration, what the detectors fired on and what it labelled."""
+    _add_scenario(chain)
+    get_logs = {"chain_id": "1", "method": "eth_getLogs", "outcome": "ok"}
+    before = {
+        "get_logs": _metric("wash_rpc_requests_total", **get_logs),
+        "audits": _metric("wash_audit_duration_seconds_count", outcome="completed"),
+        "hits": _metric("wash_audit_detector_hits_total", detector="round_trip"),
+        "flagged": _metric("wash_audit_flagged_trades_total", method="round_trip"),
+    }
+
+    await _run_audit(pg_storage)
+
+    assert _metric("wash_rpc_requests_total", **get_logs) > before["get_logs"]
+    assert _metric("wash_rpc_request_duration_seconds_count", chain_id="1", method="eth_getLogs")
+    assert _metric("wash_audit_duration_seconds_count", outcome="completed") == before["audits"] + 1
+    assert _metric("wash_audit_detector_hits_total", detector="round_trip") == before["hits"] + 6
+    assert _metric("wash_audit_flagged_trades_total", method="round_trip") == before["flagged"] + 6
+    assert _metric("wash_rpc_circuit_state", breaker="rpc_1") == 0
+
+    app = create_app(storage=pg_storage)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (await client.get("/metrics")).text
+    assert 'wash_rpc_requests_total{chain_id="1",method="eth_getLogs",outcome="ok"}' in body
+    # The fake node's URL is never exported.
+    assert chain.rpc_url not in body
 
 
 async def test_realtime_monitor_ingests_new_swaps_and_alerts(pg_storage, chain, monkeypatch):

@@ -27,10 +27,10 @@ import numpy as np
 
 from config.settings import settings
 from core.feature_engineer import FeatureEngineer
+from core.log_config import configure_logging
 from core.ml_detector import MLDetector
 from core.storage import Storage
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 HOLDOUT_FRACTION = 0.2
@@ -140,6 +140,7 @@ async def main() -> int:
 
 def cli() -> None:
     """Synchronous entry point for the `wash-train` console script."""
+    configure_logging()
     raise SystemExit(asyncio.run(main()))
 
 

@@ -28,9 +28,11 @@ from sqlalchemy import and_, select
 
 from config.chains import get_chain_config
 from config.settings import settings
+from core import metrics
 from core.exceptions import CircuitBreakerOpenError
 from core.heuristics import HeuristicDetector
 from core.ingestor import ChainIngestor
+from core.redaction import redact
 from core.storage import Storage
 from models.schemas import SwapTrade, SwapTradeResponse
 
@@ -159,6 +161,7 @@ class RealtimeMonitor:
                 continue
             self._seen_alert_ids.add(trade.id)
             alerts.append(_trade_payload(trade))
+            metrics.MONITOR_ALERTS.labels(trade.detection_method or "unknown").inc()
 
         return alerts, stats
 
@@ -207,7 +210,7 @@ class RealtimeMonitor:
                 logger.exception(f"Realtime monitor poll failed: {exc}")
                 yield MonitorEvent(
                     type="error",
-                    payload={"reason": str(exc), "recoverable": True},
+                    payload={"reason": redact(str(exc)), "recoverable": True},
                 )
 
             try:

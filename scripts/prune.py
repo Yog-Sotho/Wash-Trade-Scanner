@@ -15,6 +15,7 @@ import logging
 import sys
 
 from config.settings import settings
+from core.log_config import configure_logging
 from core.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def main(argv: list[str] | None = None) -> int:
 
 def cli() -> None:
     """Synchronous entry point for the `wash-prune` console script."""
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     sys.exit(asyncio.run(main()))
 
 

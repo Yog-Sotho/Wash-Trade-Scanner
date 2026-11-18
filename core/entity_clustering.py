@@ -18,6 +18,7 @@ from web3.types import RPCEndpoint, TraceFilterParams
 from config.chains import get_chain_config
 from config.settings import settings
 from core.exceptions import RPCError
+from core.rpc import InstrumentedHTTPProvider
 from core.storage import Storage
 from models.schemas import AddressCluster, SwapTrade
 
@@ -183,7 +184,7 @@ class EntityClusterer:
             return G
 
         chain_config = get_chain_config(chain_id)
-        web3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(chain_config["rpc_url"]))
+        web3 = AsyncWeb3(InstrumentedHTTPProvider(chain_config["rpc_url"], chain_id))
 
         # Determine block range
         from_block: int

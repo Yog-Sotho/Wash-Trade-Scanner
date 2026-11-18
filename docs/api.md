@@ -75,9 +75,15 @@ panel at all.
 All endpoints are under `/api/v1` and require `X-API-Key` when auth is
 enabled. `/health` is always unauthenticated for liveness probes.
 
+Every response carries an `X-Request-ID` header: the caller's own, if it sent
+a valid one, else a new id. Quote it when reporting a problem; it is on every
+log line of the request (and of an audit the request started). See
+[observability.md](observability.md).
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET  | `/health` | Liveness + database connectivity |
+| GET  | `/metrics` | Prometheus metrics ([observability.md](observability.md)); needs the key when auth is on |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/trades?limit=&offset=&wash_only=` | Paginated trades for a pool |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/report` | Risk metrics: wash volume, per-method breakdown, severity |
 | POST | `/api/v1/audits` | Start a full audit in the background (body: `AuditRequest`), returns `202 {task_id}` |
