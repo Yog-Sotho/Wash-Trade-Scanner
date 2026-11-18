@@ -685,3 +685,23 @@ async def test_pool_dex_resolution_is_cached(mock_chain_config):
 
     assert [d["name"] for d in first] == ["UniswapV2", "UniswapV3"] == [d["name"] for d in second]
     factory_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("retries", "attempts"), [(0, 1), (2, 3)])
+async def test_log_fetch_attempts_follow_rpc_retries(
+    mock_chain_config, monkeypatch, retries, attempts
+):
+    """RPC_RETRIES was declared but ignored: every batch got exactly 3 attempts."""
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "RPC_RETRIES", retries)
+    monkeypatch.setattr("core.ingestor.asyncio.sleep", AsyncMock())
+    ingestor = ChainIngestor(mock_chain_config, AsyncMock(spec=Storage))
+    ingestor.web3 = MagicMock()
+    ingestor.web3.eth.get_logs = AsyncMock(side_effect=RPCError("boom"))
+
+    logs = await ingestor._get_logs_batch("0x" + "a" * 40, ["0x1"], 1, 10)
+
+    assert logs == []
+    assert ingestor.web3.eth.get_logs.await_count == attempts

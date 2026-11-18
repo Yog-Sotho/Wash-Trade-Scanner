@@ -9,15 +9,23 @@
 | SQL injection | SQLAlchemy ORM, parameterized queries only |
 | Model poisoning | Input validation, no user-controlled paths |
 | DoS via large ranges | Max 10M block span enforced |
-| Supply chain attack | Pinned dependencies, SBOM generation |
+| Supply chain attack | Hash-locked dependencies (`--require-hashes`) in CI and the image, digest-pinned base image, SBOM generation |
 
 ## CI Security Pipeline
 
-1. **Pre-flight**: GPG commit signatures, secret scan (TruffleHog), forbidden file check
-2. **Dependency audit**: pip-audit, safety scan, SBOM generation
-3. **Static analysis**: ruff lint, mypy type check, bandit security scan
-4. **Test**: pytest with 80% coverage minimum
-5. **Container**: Trivy vulnerability scan before push
+Every step below is a gate: a finding fails the pipeline.
+
+1. **Pre-flight**: secret scan (TruffleHog), forbidden file check; commit signatures are reported
+2. **Dependency audit**: pip-audit on the hash-locked environment; SBOM generation
+3. **Static analysis**: ruff lint and format check, mypy (strict), bandit
+4. **Test**: pytest with 80% coverage minimum; integration tests and `alembic upgrade head` on PostgreSQL; detection-quality benchmark
+5. **Container**: Trivy fails the build on any HIGH/CRITICAL vulnerability with a fix available (all findings are uploaded as SARIF)
+
+## Container
+
+- Multi-stage build: no compiler, pip or setuptools in the runtime image
+- Base image pinned by digest; security fixes it predates are pinned to the fixed Debian package version in the Dockerfile
+- Runs as a non-root user; `HEALTHCHECK` on the API's `/health`
 
 ## Runtime Security
 

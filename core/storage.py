@@ -6,8 +6,11 @@ Secure connection handling with SSL enforcement.
 import json
 import logging
 from datetime import UTC, date, datetime, timedelta
+from importlib import resources
 from typing import Any, cast
 
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 from sqlalchemy import CursorResult, and_, delete, func, inspect, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
@@ -21,7 +24,6 @@ from sqlalchemy.ext.asyncio import (
 from config.settings import settings
 from models.schemas import (
     AddressCluster,
-    Base,
     DetectionAuditLog,
     SwapTrade,
     TokenRiskProfile,
@@ -38,45 +40,51 @@ def _json_default(value: Any) -> str:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+def _float(value: float | None) -> float:
+    """A SUM()/COALESCE() result as a float. The columns summed are nullable,
+    so SQLAlchemy types the result as optional even where SQL coalesces it."""
+    return float(value) if value is not None else 0.0
+
+
 def _json_serializer(value: Any) -> str:
     return json.dumps(value, default=_json_default)
 
 
-def _add_missing_columns(conn: Connection) -> None:
-    """Add columns (and their indexes) that the models define but an existing
-    table lacks.
+BASELINE_REVISION = "0001"
 
-    create_all() skips tables that already exist, so a database created by an
-    earlier release would never gain a newly added column. Until schema
-    migrations land, this bridges additive changes. Only nullable columns can be
-    added this way; anything else must fail loudly rather than be guessed at.
+
+def alembic_config(connection: Connection | None = None) -> AlembicConfig:
+    """Alembic configuration for the packaged migrations (no alembic.ini needed)."""
+    config = AlembicConfig()
+    config.set_main_option("script_location", str(resources.files("migrations")))
+    if connection is not None:
+        config.attributes["connection"] = connection
+    return config
+
+
+def _adopt_pre_migration_schema(conn: Connection) -> None:
+    """Bring a database created by create_all (before migrations existed) to
+    the baseline revision and stamp it there.
+
+    Such databases differ from revision 0001 only by the columns Phase 2 added
+    (swap_trades.tx_from / tx_to) and their index; nothing else is changed.
     """
-    inspector = inspect(conn)
-    existing_tables = set(inspector.get_table_names())
-    for table in Base.metadata.sorted_tables:
-        if table.name not in existing_tables:
-            continue
-        present = {column["name"] for column in inspector.get_columns(table.name)}
-        missing = [column for column in table.columns if column.name not in present]
-        for column in missing:
-            if not column.nullable:
-                raise RuntimeError(
-                    f"Cannot add NOT NULL column {table.name}.{column.name} to an existing "
-                    "table automatically"
-                )
-            column_type = column.type.compile(dialect=conn.dialect)
-            preparer = conn.dialect.identifier_preparer
-            conn.execute(
-                text(
-                    f"ALTER TABLE {preparer.quote(table.name)} "
-                    f"ADD COLUMN IF NOT EXISTS {preparer.quote(column.name)} {column_type}"
-                )
-            )
-            logger.info(f"Added missing column {table.name}.{column.name}")
-        missing_names = {column.name for column in missing}
-        for index in table.indexes:
-            if missing_names & {column.name for column in index.columns}:
-                index.create(conn, checkfirst=True)
+    present = {column["name"] for column in inspect(conn).get_columns("swap_trades")}
+    for column in ("tx_from", "tx_to"):
+        if column not in present:
+            conn.execute(text(f"ALTER TABLE swap_trades ADD COLUMN {column} VARCHAR(42)"))
+            logger.info(f"Added missing column swap_trades.{column}")
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_swap_trades_tx_from ON swap_trades (tx_from)"))
+    alembic_command.stamp(alembic_config(conn), BASELINE_REVISION)
+    logger.info(f"Adopted a pre-migration database at revision {BASELINE_REVISION}")
+
+
+def _migrate(conn: Connection) -> None:
+    """Upgrade the schema to the latest migration (creating it if empty)."""
+    tables = set(inspect(conn).get_table_names())
+    if "alembic_version" not in tables and "swap_trades" in tables:
+        _adopt_pre_migration_schema(conn)
+    alembic_command.upgrade(alembic_config(conn), "head")
 
 
 class Storage:
@@ -104,8 +112,7 @@ class Storage:
             expire_on_commit=False,
         )
         async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            await conn.run_sync(_add_missing_columns)
+            await conn.run_sync(_migrate)
         logger.info("Database initialized")
 
     async def close(self) -> None:
@@ -416,15 +423,15 @@ class Storage:
             "wash_trades": int(wash_trades or 0),
             "wash_volume_usd": float(wash_volume or 0.0),
             "by_method": {
-                (method or "unknown"): {"trades": int(count), "volume_usd": float(volume)}
+                (method or "unknown"): {"trades": int(count), "volume_usd": _float(volume)}
                 for method, count, volume in method_rows
             },
             "by_chain": {
                 int(chain): {
                     "trades": int(count),
-                    "volume_usd": float(volume),
+                    "volume_usd": _float(volume),
                     "wash_trades": int(wash_count),
-                    "wash_volume_usd": float(wash_vol),
+                    "wash_volume_usd": _float(wash_vol),
                 }
                 for chain, count, volume, wash_count, wash_vol in chain_rows
             },
@@ -458,9 +465,9 @@ class Storage:
                 "chain_id": int(chain),
                 "pool_address": pool,
                 "trades": int(count),
-                "volume_usd": float(volume),
+                "volume_usd": _float(volume),
                 "wash_trades": int(n_wash),
-                "wash_volume_usd": float(v_wash),
+                "wash_volume_usd": _float(v_wash),
             }
             for chain, pool, count, volume, n_wash, v_wash in rows
         ]
@@ -481,9 +488,23 @@ class Storage:
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
+    @staticmethod
+    def retention_cutoff(retention_days: int) -> datetime:
+        """The block time before which trades fall outside `retention_days`."""
+        return datetime.now(UTC).replace(tzinfo=None) - timedelta(days=retention_days)
+
+    async def count_old_trades(self, retention_days: int) -> int:
+        """How many trades `cleanup_old_data` would delete."""
+        cutoff = self.retention_cutoff(retention_days)
+        async with await self.get_session() as session:
+            result = await session.execute(
+                select(func.count(SwapTrade.id)).where(SwapTrade.block_timestamp < cutoff)
+            )
+            return int(result.scalar_one())
+
     async def cleanup_old_data(self, retention_days: int) -> int:
         """Remove trades older than retention period."""
-        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=retention_days)
+        cutoff = self.retention_cutoff(retention_days)
         async with await self.get_session() as session:
             stmt = delete(SwapTrade).where(SwapTrade.block_timestamp < cutoff)
             result = cast("CursorResult[Any]", await session.execute(stmt))

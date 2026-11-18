@@ -1,3 +1,17 @@
+# Settings shared by every service that runs the scanner.
+x-app-env: &app-env
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_NAME: wash_detector
+  DATABASE_USER: wash_user
+  DATABASE_PASSWORD: wash_pass
+  DATABASE_SSL_MODE: disable
+  LOG_LEVEL: INFO
+  ML_MODEL_PATH: /app/models/ml_model.pkl
+  ETH_RPC_URL: ${ETH_RPC_URL:?ETH_RPC_URL must be set to a real RPC endpoint}
+  COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+  BOT_ALLOWLIST: ${BOT_ALLOWLIST:-}
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -16,29 +30,45 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  # The API server and web panel (the image's default command). Published on
+  # the host's loopback only. Inside the container the server binds all
+  # interfaces, which it allows only with authentication: generate a key with
+  # `docker compose run --rm audit wash-genkey` and set API_KEY_HASHES.
+  api:
     build: .
-    container_name: wash_detector_app
+    container_name: wash_detector_api
     environment:
-      DATABASE_HOST: postgres
-      DATABASE_PORT: 5432
-      DATABASE_NAME: wash_detector
-      DATABASE_USER: wash_user
-      DATABASE_PASSWORD: wash_pass
-      DATABASE_SSL_MODE: disable
-      LOG_LEVEL: INFO
-      ML_MODEL_PATH: /app/models/ml_model.pkl
-      ETH_RPC_URL: ${ETH_RPC_URL:?ETH_RPC_URL must be set to a real RPC endpoint}
-      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
-      BOT_ALLOWLIST: ${BOT_ALLOWLIST:-}
+      <<: *app-env
+      API_HOST: 0.0.0.0
+      API_AUTH_ENABLED: "true"
+      # Required by the server here (it refuses to start without keys and says
+      # so in its log); optional for compose, so the audit service still runs.
+      API_KEY_HASHES: ${API_KEY_HASHES:-}
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
-    command: python scripts/run_audit.py --chain-id 1 --pool 0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc
     restart: unless-stopped
+
+  # One-shot commands, never started by `docker compose up` and never
+  # restarted (an audit under restart: unless-stopped re-ran forever):
+  #   docker compose run --rm audit wash-audit --chain-id 1 --pool 0x...
+  audit:
+    build: .
+    profiles: ["tools"]
+    environment: *app-env
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["wash-audit", "--help"]
+    restart: "no"
 
 volumes:
   postgres_data:

@@ -216,15 +216,18 @@ async def test_resync_completes_a_trade_stored_without_its_sender(pg_storage: St
     assert stored[1].tx_from == sender
 
 
-async def test_initialize_adds_columns_missing_from_an_existing_table(pg_storage: Storage):
-    """create_all() skips existing tables; a database created before tx_from
-    existed must gain the column (and its index) instead of failing every query."""
+async def test_initialize_adopts_a_database_created_before_migrations(pg_storage: Storage):
+    """A database created by create_all() before migrations existed (and before
+    tx_from existed) has no alembic_version table. It must be brought to the
+    baseline, stamped and upgraded -- keeping its data -- not recreated or
+    left without the columns every query now reads."""
     assert pg_storage.engine is not None
     await pg_storage.save_trades_batch([_trade(0)])
     async with pg_storage.engine.begin() as conn:
         await conn.execute(text("DROP INDEX ix_swap_trades_tx_from"))
         await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_from"))
         await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_to"))
+        await conn.execute(text("DROP TABLE alembic_version"))
 
     await pg_storage.initialize()
 
@@ -244,7 +247,35 @@ async def test_initialize_adds_columns_missing_from_an_existing_table(pg_storage
                 text("SELECT indexname FROM pg_indexes WHERE tablename = 'swap_trades'")
             )
         }
+        version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
     assert {"tx_from", "tx_to"} <= columns
     assert "ix_swap_trades_tx_from" in indexes
+    assert version == _head_revision()
     trades = await pg_storage.get_pool_trades(1, POOL)
     assert len(trades) == 1 and trades[0].tx_from is None
+
+
+def _head_revision() -> str:
+    from alembic.script import ScriptDirectory
+
+    from core.storage import alembic_config
+
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
+    assert head is not None
+    return head
+
+
+async def test_wash_prune_counts_by_default_and_deletes_only_when_asked(pg_storage: Storage):
+    from scripts.prune import prune
+
+    old = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=40)
+    recent = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+    await pg_storage.save_trades_batch(
+        [_trade(0, block_timestamp=old), _trade(1, block_timestamp=recent)]
+    )
+
+    assert await prune(pg_storage, days=30, apply=False) == 1
+    assert len(await pg_storage.get_pool_trades(1, POOL)) == 2  # a count deletes nothing
+
+    assert await prune(pg_storage, days=30, apply=True) == 1
+    assert [t.log_index for t in await pg_storage.get_pool_trades(1, POOL)] == [1]

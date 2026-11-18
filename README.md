@@ -30,9 +30,13 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 
 ### 2. Install dependencies
 
+Dependencies are installed from hash-locked files (`requirements*.txt`,
+generated from `pyproject.toml` by `make lock`):
+
     python -m venv venv
     source venv/bin/activate  # or venv\Scripts\activate on Windows
-    pip install -e ".[dev]"
+    make install-dev          # = pip install --require-hashes -r requirements-dev.txt
+                              #   + pip install --no-deps -e .
 
 ### 3. Set up environment
 
@@ -51,9 +55,13 @@ See `.env.example` for full reference.
       -e POSTGRES_DB=wash_detector \
       -p 5432:5432 postgres:15-alpine
 
-Then initialise the tables:
+The schema is managed by Alembic migrations (`migrations/`): every command that
+uses the database creates or upgrades it on startup. To do it explicitly:
 
-    python -c "from core.storage import Storage; import asyncio; asyncio.run(Storage().initialize())"
+    alembic upgrade head
+
+A database created by an earlier release (before migrations) is adopted
+automatically, keeping its data.
 
 ### 5. Run an audit
 
@@ -173,7 +181,9 @@ Detection quality (no network or database needed):
 - Input validation via Pydantic (checksum addresses, block ranges, chain IDs)
 - Circuit breaker for RPC resilience
 - Database SSL/TLS enforcement
-- Secret scanning and dependency audit in CI
+- Hash-locked dependencies; CI fails on any known vulnerability (pip-audit),
+  type error (mypy), security finding (bandit) or fixable HIGH/CRITICAL image
+  vulnerability (Trivy)
 - See `docs/security.md` for full details
 
 ## API Server, Web Panel & Live Monitoring
@@ -193,6 +203,28 @@ To expose the API beyond localhost you must enable authentication — generate
 a key with `wash-genkey`, set `API_AUTH_ENABLED=true` and `API_KEY_HASHES`;
 the server refuses to bind a public interface otherwise. Full reference:
 [docs/api.md](docs/api.md).
+
+## Docker
+
+The image (`Dockerfile`) is multi-stage: dependencies are installed from the
+hash locks without a compiler, and the runtime image -- a digest-pinned
+`python:3.11-slim`, running as a non-root user -- contains the installed
+package but no pip, setuptools or build tools. Its default command is
+`wash-api`, with a `HEALTHCHECK` on `/health`.
+
+    export ETH_RPC_URL=https://...                    # required
+    docker compose run --rm audit wash-genkey         # once; prints a key and its hash
+    export API_KEY_HASHES=<hash>
+    docker compose up -d                              # API + panel on 127.0.0.1:8000
+    docker compose run --rm audit wash-audit --chain-id 1 --pool 0x...
+
+## Data retention
+
+Nothing deletes data automatically. `wash-prune` counts the trades older than
+`TRADE_RETENTION_DAYS` (default 90) and deletes them only with `--yes`:
+
+    wash-prune                  # report
+    wash-prune --days 30 --yes  # delete
 
 ## Export & Reporting
 

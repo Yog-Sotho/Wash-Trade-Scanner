@@ -10,7 +10,6 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
-  POETRY_VERSION: "1.7.1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -80,19 +79,21 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: install dependencies
+      - name: install dependencies (hash-locked)
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps -e .
 
-      - name: pip-audit scan
-        run: |
-          pip-audit --format=json --output=pip-audit.json || true
+      # A gate: fails on any known vulnerability in the installed environment
+      # (the locked dependencies plus the tooling CI runs). The project itself
+      # is not on PyPI and is skipped.
+      - name: pip-audit
+        run: pip-audit --skip-editable
 
-      # Note: `safety scan` (the current safety-cli command) requires an interactive
-      # Safety Platform login/API key and cannot run unattended without one being
-      # configured as a secret; pip-audit above already covers dependency CVE scanning
-      # without that requirement, so we don't run safety here.
+      - name: pip-audit report
+        if: always()
+        run: pip-audit --skip-editable --format=json --output=pip-audit.json || true
 
       - name: generate sbom
         run: |
@@ -111,47 +112,39 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: install dependencies
+      - name: install dependencies (hash-locked)
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps -e .
 
-      - name: ruff fix
-        run: ruff check . --fix
-
-      - name: ruff format
-        run: ruff format .
-        continue-on-error: true
-
-      - name: auto-commit fixes
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: auto-fix by ruff"
-          file_pattern: "*.py"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-
+      # Every step below is a gate: a finding fails the job. (Formatting and
+      # lint fixes are the author's to make -- `make format` -- not CI's to
+      # commit.)
       - name: ruff check
         run: ruff check .
 
-      - name: mypy type check
-        run: mypy . --ignore-missing-imports || true
+      - name: ruff format
+        run: ruff format --check .
 
-      - name: bandit security scan
-        run: bandit -c pyproject.toml -r api core config models scripts -f json -o bandit.json || true
+      - name: mypy (strict, from pyproject.toml)
+        run: mypy .
+
+      - name: bandit
+        run: bandit -c pyproject.toml -r api config core evaluation migrations models scripts
+
+      - name: bandit report
+        if: always()
+        run: bandit -c pyproject.toml -r api config core evaluation migrations models scripts -f json -o bandit.json || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -175,10 +168,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: install project
+      - name: install project (hash-locked)
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps -e .
 
       - name: run tests
         # Settings() is a required-field pydantic model instantiated at import time,
@@ -243,10 +237,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: install project
+      - name: install project (hash-locked)
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps -e .
 
       - name: run integration tests
         # Real PostgreSQL (service above); the chain and price API are served by
@@ -260,7 +255,13 @@ jobs:
           DATABASE_PASSWORD: test-password-not-a-secret
           DATABASE_SSL_MODE: disable
           ETH_RPC_URL: http://localhost:8545
-        run: pytest tests/integration --integration -v
+        run: |
+          # Acceptance for the schema migrations: the documented command builds
+          # the schema from an empty database...
+          alembic upgrade head
+          alembic current | grep -q "(head)"
+          # ...and the tests (which start from empty again) pin it to the models.
+          pytest tests/integration --integration -v
 
   detection-quality:
     # Phase 2 regression gate: re-measures every detector on the recorded real
@@ -279,10 +280,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: install project
+      - name: install project (hash-locked)
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps -e .
 
       - name: wash-eval --check
         env:
@@ -344,7 +346,20 @@ jobs:
       # Pinned to v0.35.0 by full commit SHA (not @master or a mutable tag) —
       # trivy-action tags <=0.34.2 were compromised in a March 2026 supply-chain
       # attack; 0.35.0 is the confirmed-safe, immutable-release-protected version.
-      - name: trivy scan
+      # A gate: any HIGH or CRITICAL vulnerability with a fix available fails
+      # the build (bump the base digest or pin the fixed package in the
+      # Dockerfile). Unfixed ones are reported in the SARIF upload below.
+      - name: trivy gate
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: trivy report
+        if: always()
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}

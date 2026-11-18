@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,9 +36,6 @@ dependencies = [
    "scikit-learn>=1.4.0,<2.0.0",
    "joblib>=1.3.0,<2.0.0",
    "aiohttp>=3.9.0,<4.0.0",
-   "redis>=5.0.0,<6.0.0",
-   "python-json-logger>=2.0.0,<3.0.0",
-   "tqdm>=4.66.0,<5.0.0",
    "fastapi>=0.110.0,<1.0.0",
    "uvicorn>=0.29.0,<1.0.0",
 ]
@@ -51,16 +48,16 @@ dev = [
    "pytest-cov>=4.1.0",
    "ruff>=0.2.0",
    "mypy>=1.8.0",
-   "types-python-dateutil>=2.8.0",
    "pandas-stubs>=2.2.0",
    "types-networkx>=3.2.0",
-   "coverage>=7.4.0",
-   "hypothesis>=6.98.0",
    "pip-audit>=2.7.0",
-   "safety>=3.0.0",
    "bandit>=1.7.7",
    "cyclonedx-bom>=4.0.0",
    "httpx>=0.27.0",
+   # Not imported: pins the dev/CI environment's setuptools above the versions
+   # with known advisories (PYSEC-2026-3447, GHSA-xmj3-9gf7-h52w), which
+   # pip-audit reports for whatever the base interpreter shipped.
+   "setuptools>=84.1.0",
 ]
 
 [project.scripts]
@@ -70,14 +67,16 @@ wash-api = "api.server:cli"
 wash-genkey = "scripts.generate_api_key:cli"
 wash-reprice = "scripts.backfill_prices:cli"
 wash-eval = "evaluation.cli:cli"
+wash-prune = "scripts.prune:cli"
 
 [tool.setuptools.packages.find]
-include = ["api*", "config*", "core*", "evaluation*", "models*", "scripts*"]
+include = ["api*", "config*", "core*", "evaluation*", "migrations*", "models*", "scripts*"]
 
 [tool.setuptools.package-data]
 api = ["static/*"]
 config = ["*.json"]
 evaluation = ["fixtures/*.json.gz", "*.json"]
+migrations = ["script.py.mako"]
 
 [tool.ruff]
 line-length = 100
