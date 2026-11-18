@@ -3781,9 +3781,9 @@ uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
     # via wash-trade-detector (pyproject.toml)
-web3==6.20.4 \
-    --hash=sha256:7f3cdceca369be3eb959ce3905783cd021a0786f40c60b01e40ae2ba538e6e3f \
-    --hash=sha256:a6e1c428a54bf0fd398fbf006d00235898aed794476177ce73f7db177d2ad16c
+web3==7.15.0 \
+    --hash=sha256:2a2bcbab8fcf120c2256ddbdc88fcc80a47c100ad758659a980e9fab66609171 \
+    --hash=sha256:bbeba510aaa4eb3c99662d911db9d2a648ab40f608cf0269065f7db1d1d0b0c0
     # via wash-trade-detector (pyproject.toml)
 webcolors==25.10.0 \
     --hash=sha256:032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d \
