@@ -61,10 +61,11 @@ WORKDIR /app
 USER appuser
 
 EXPOSE 8000
-# Liveness of the API process: /health answers 200 while the server runs
-# (its body reports database connectivity separately).
+# Liveness of the API process: /health/live checks no dependency, so a
+# database or RPC outage does not mark a working container unhealthy (an
+# orchestrator would restart it for nothing). Readiness is /health/ready.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('API_PORT', '8000')}/health\", timeout=4)"]
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('API_PORT', '8000')}/health/live\", timeout=4)"]
 
 # The API server (binds 127.0.0.1 unless API_HOST and authentication are set;
 # see docs/api.md). One-shot commands: docker run <image> wash-audit ...

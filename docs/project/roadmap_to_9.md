@@ -268,6 +268,28 @@ each defect). Deviations from the plan above:
 ### 4.2 Health semantics
 Split `/health/live` (process) from `/health/ready` (DB + RPC reachable).
 
+### Phase 4.2 — status: done (2026-11-18)
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| `/health/live` | Checks no dependency; the image `HEALTHCHECK` uses it | Image run: with the database and the node both down, four healthchecks passed and the container stayed `healthy` |
+| `/health/ready` | 503 unless the database and each `HEALTH_RPC_CHAIN_IDS` endpoint answer, with per-check reasons | Same run: 503 `unreachable` for each outage, 200 again on its own once both returned; integration test on PostgreSQL and HTTP JSON-RPC |
+
+Beyond the plan:
+
+- **The node must serve the right chain.** Readiness asks `eth_chainId` and
+  fails with `wrong_chain` on a mismatch: an endpoint configured for the wrong
+  network would otherwise pass every check and audit the wrong chain. The
+  integration test reproduces it (Base's setting pointing at an Ethereum node).
+- **Probes cannot spend RPC quota or pile up.** Each check is time-bounded,
+  RPC answers are cached briefly, concurrent probes share one request, and an
+  endpoint whose circuit breaker is open is reported without being called.
+- **`/health` kept, deprecated.** Its behaviour is unchanged, so existing
+  probes keep working.
+
+Each behaviour has a test that fails when it is removed (12 reintroduced
+defects, all caught).
+
 ### 4.3 Alerting
 Pluggable sink (webhook/Slack/email) so the real-time monitor can notify something other
 than an open browser tab.

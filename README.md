@@ -217,7 +217,9 @@ The image (`Dockerfile`) is multi-stage: dependencies are installed from the
 hash locks without a compiler, and the runtime image -- a digest-pinned
 `python:3.11-slim`, running as a non-root user -- contains the installed
 package but no pip, setuptools or build tools. Its default command is
-`wash-api`, with a `HEALTHCHECK` on `/health`.
+`wash-api`, with a `HEALTHCHECK` on `/health/live`. Orchestrators should probe
+`/health/live` for liveness and `/health/ready` (database and RPC reachable)
+for readiness: see [docs/api.md](docs/api.md#health-probes).
 
     export ETH_RPC_URL=https://...                    # required
     docker compose run --rm audit wash-genkey         # once; prints a key and its hash

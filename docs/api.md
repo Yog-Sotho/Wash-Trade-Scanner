@@ -73,7 +73,8 @@ panel at all.
 ## REST endpoints
 
 All endpoints are under `/api/v1` and require `X-API-Key` when auth is
-enabled. `/health` is always unauthenticated for liveness probes.
+enabled. The health probes (`/health/live`, `/health/ready`, `/health`) are
+always unauthenticated: orchestrators send no key.
 
 Every response carries an `X-Request-ID` header: the caller's own, if it sent
 a valid one, else a new id. Quote it when reporting a problem; it is on every
@@ -82,7 +83,9 @@ log line of the request (and of an audit the request started). See
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET  | `/health` | Liveness + database connectivity |
+| GET  | `/health/live` | Liveness: 200 while the process serves requests; checks no dependency |
+| GET  | `/health/ready` | Readiness: 200 when the database and each `HEALTH_RPC_CHAIN_IDS` endpoint answer, else 503 (see below) |
+| GET  | `/health` | Deprecated (use the two above): always 200; the body reports database connectivity |
 | GET  | `/metrics` | Prometheus metrics ([observability.md](observability.md)); needs the key when auth is on |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/trades?limit=&offset=&wash_only=` | Paginated trades for a pool |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/report` | Risk metrics: wash volume, per-method breakdown, severity |
@@ -93,6 +96,53 @@ Example:
 
     curl -H "X-API-Key: $KEY" \
       "http://127.0.0.1:8000/api/v1/pools/1/0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc/report"
+
+## Health probes
+
+Liveness and readiness answer different questions, and an orchestrator acts
+on them differently: a failed liveness probe restarts the process, a failed
+readiness probe only takes it out of the load balancer.
+
+- `/health/live` checks nothing but the process itself. A database or RPC
+  outage cannot be fixed by a restart, so it never fails liveness. The
+  container's `HEALTHCHECK` uses it.
+- `/health/ready` checks, concurrently:
+  - the database answers a query;
+  - for each chain in `HEALTH_RPC_CHAIN_IDS` (default `1`), the configured RPC
+    endpoint answers `eth_chainId` with that chain's id. An endpoint serving
+    another network is not ready: every audit through it would be wrong.
+
+  Each check is bounded by `HEALTH_CHECK_TIMEOUT_SECONDS` (default 5). RPC
+  answers are reused for `HEALTH_RPC_CACHE_SECONDS` (default 15), and probes
+  arriving together share one request, so frequent probes cost at most one
+  RPC call per chain per period. RPC probes go through the chain's circuit
+  breaker: an endpoint the audits found down is reported without being called.
+
+```json
+HTTP/1.1 503 Service Unavailable
+{"status": "not_ready",
+ "checks": {"database": {"ok": true, "latency_ms": 3.1},
+            "rpc_1": {"ok": false, "latency_ms": 1213.3, "reason": "unreachable"}}}
+```
+
+`reason` is one of `unreachable`, `timeout`, `wrong_chain`, `not_configured`
+(no RPC URL set for the chain) or `circuit_open`; never an error message, so
+an unauthenticated caller learns nothing about the endpoints. A chain id in
+`HEALTH_RPC_CHAIN_IDS` that does not exist stops the server at startup.
+
+Kubernetes, for example (the readiness timeout must exceed
+`HEALTH_CHECK_TIMEOUT_SECONDS`, as checks can take that long):
+
+```yaml
+livenessProbe:
+  httpGet: {path: /health/live, port: 8000}
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  httpGet: {path: /health/ready, port: 8000}
+  periodSeconds: 10
+  timeoutSeconds: 7
+```
 
 ## WebSocket: live streaming detection
 

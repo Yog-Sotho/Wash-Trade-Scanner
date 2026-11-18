@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] - Phase 4.2: health semantics
+
+### Added
+- `GET /health/live`: liveness. 200 while the process serves requests; it
+  checks no dependency, so an outage of the database or an RPC node cannot get
+  a working process restarted.
+- `GET /health/ready`: readiness. 200 only when the database answers and the
+  RPC endpoint of each chain in `HEALTH_RPC_CHAIN_IDS` (default `1`) answers
+  `eth_chainId` with that chain's id; otherwise 503 with each check's result
+  and a fixed reason word (`unreachable`, `timeout`, `wrong_chain`,
+  `not_configured`, `circuit_open`). Checks run concurrently, each within
+  `HEALTH_CHECK_TIMEOUT_SECONDS`; RPC answers are reused for
+  `HEALTH_RPC_CACHE_SECONDS`, and concurrent probes share one request. An
+  unknown chain id in `HEALTH_RPC_CHAIN_IDS` stops the server at startup.
+
+### Changed
+- The image's `HEALTHCHECK` probes `/health/live`.
+
+### Deprecated
+- `GET /health` (always 200, database flag in the body). It still answers as
+  before; use `/health/live` and `/health/ready`.
+
 ## [Unreleased] - Phase 4.1: instrumentation
 
 ### Added

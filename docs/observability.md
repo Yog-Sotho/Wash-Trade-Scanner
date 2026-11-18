@@ -37,8 +37,8 @@ The `api.access` logger records every HTTP request once it completes:
  "http_status": 202, "duration_ms": 6.694, "client_ip": "127.0.0.1"}
 ```
 
-`/health` and `/metrics` are logged at DEBUG, as the container healthcheck and
-the scraper call them every few seconds. The query string is never logged.
+The health probes and `/metrics` are logged at DEBUG, as orchestrators, the
+container healthcheck and the scraper call them every few seconds. The query string is never logged.
 
 ## Request ids
 
