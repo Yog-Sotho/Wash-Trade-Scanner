@@ -9,6 +9,7 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
 
+from core import metrics
 from core.exceptions import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
@@ -37,12 +38,18 @@ class CircuitBreakerConfig:
 
 
 class CircuitBreaker:
-    """Circuit breaker for protecting RPC calls."""
+    """Circuit breaker for protecting RPC calls.
+
+    Its state is published as wash_rpc_circuit_state{breaker=name}; use
+    shared_breaker() so that everything calling one endpoint shares one
+    breaker, and the published state is that endpoint's.
+    """
 
     def __init__(self, name: str, config: CircuitBreakerConfig | None = None):
         self.name = name
         self.config = config or CircuitBreakerConfig()
         self.state = CircuitState.CLOSED
+        metrics.CIRCUIT_STATE.labels(name).set(metrics.CIRCUIT_STATE_VALUES["closed"])
         self.failures = 0
         self.successes = 0
         self.last_failure_time: float | None = None
@@ -53,16 +60,18 @@ class CircuitBreaker:
         async with self._lock:
             if self.state == CircuitState.OPEN:
                 if time.time() - (self.last_failure_time or 0) > self.config.recovery_timeout:
-                    self.state = CircuitState.HALF_OPEN
+                    self._set_state(CircuitState.HALF_OPEN)
                     self.successes = 0
                     logger.info(f"Circuit {self.name} entering HALF_OPEN")
                 else:
+                    metrics.CIRCUIT_REJECTED.labels(self.name).inc()
                     raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
 
             if (
                 self.state == CircuitState.HALF_OPEN
                 and self.successes >= self.config.half_open_max_calls
             ):
+                metrics.CIRCUIT_REJECTED.labels(self.name).inc()
                 raise CircuitBreakerOpenError(f"Circuit {self.name} half-open limit reached")
 
         try:
@@ -78,7 +87,7 @@ class CircuitBreaker:
             if self.state == CircuitState.HALF_OPEN:
                 self.successes += 1
                 if self.successes >= self.config.success_threshold:
-                    self.state = CircuitState.CLOSED
+                    self._set_state(CircuitState.CLOSED)
                     self.failures = 0
                     self.successes = 0
                     logger.info(f"Circuit {self.name} CLOSED")
@@ -91,11 +100,19 @@ class CircuitBreaker:
             self.last_failure_time = time.time()
 
             if self.state == CircuitState.HALF_OPEN:
-                self.state = CircuitState.OPEN
+                self._set_state(CircuitState.OPEN)
                 logger.warning(f"Circuit {self.name} OPEN (half-open failure)")
             elif self.failures >= self.config.failure_threshold:
-                self.state = CircuitState.OPEN
+                self._set_state(CircuitState.OPEN)
                 logger.warning(f"Circuit {self.name} OPEN ({self.failures} failures)")
+
+    def _set_state(self, state: CircuitState) -> None:
+        if state == CircuitState.OPEN and self.state != CircuitState.OPEN:
+            metrics.CIRCUIT_OPENED.labels(self.name).inc()
+        self.state = state
+        metrics.CIRCUIT_STATE.labels(self.name).set(
+            metrics.CIRCUIT_STATE_VALUES[state.name.lower()]
+        )
 
     @property
     def is_open(self) -> bool:
@@ -104,3 +121,24 @@ class CircuitBreaker:
     @property
     def is_closed(self) -> bool:
         return self.state == CircuitState.CLOSED
+
+
+_shared: dict[str, CircuitBreaker] = {}
+
+
+def shared_breaker(name: str, config: CircuitBreakerConfig | None = None) -> CircuitBreaker:
+    """The process-wide breaker called `name`, created with `config` on first use.
+
+    An endpoint's health is not a property of one audit: when audits and
+    monitors share a breaker, an endpoint that is down is detected once and
+    spared by all of them, and the published state is the endpoint's.
+    """
+    breaker = _shared.get(name)
+    if breaker is None:
+        breaker = _shared[name] = CircuitBreaker(name, config)
+    return breaker
+
+
+def reset_shared_breakers() -> None:
+    """Forget every shared breaker (tests; each event loop needs its own locks)."""
+    _shared.clear()

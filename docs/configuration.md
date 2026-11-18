@@ -163,7 +163,13 @@ existed, or whose price was unavailable at ingestion (e.g. throttling), run:
 
 ## Logging
 
-`LOG_LEVEL` – Standard Python logging levels. Default `INFO`.
+| Variable     | Description                                                                 | Default |
+|--------------|-----------------------------------------------------------------------------|---------|
+| `LOG_LEVEL`  | Standard Python logging level, for every command                            | `INFO`  |
+| `LOG_FORMAT` | `text`, or `json` (one object per line, with request and trace ids)         | `text` (`json` in the container image) |
+
+Fields, metrics and tracing: [observability.md](observability.md). Tracing is
+configured with the standard OpenTelemetry variables listed there.
 
 ## Model Storage
 

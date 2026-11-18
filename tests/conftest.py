@@ -26,3 +26,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_circuit_breakers():
+    """RPC breakers are shared process-wide; give every test its own."""
+    from core.circuit_breaker import reset_shared_breakers
+
+    reset_shared_breakers()
+    yield
+    reset_shared_breakers()

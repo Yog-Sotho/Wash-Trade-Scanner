@@ -15,7 +15,7 @@ import sys
 
 from pydantic import ValidationError as PydanticValidationError
 
-from config.settings import settings
+from core.log_config import configure_logging
 from core.pricing import PriceOracle
 from core.storage import Storage
 from core.validators import validate_address
@@ -99,10 +99,7 @@ async def main() -> int:
 
 def cli() -> None:
     """Synchronous entry point for the `wash-reprice` console script."""
-    logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    configure_logging()
     sys.exit(asyncio.run(main()))
 
 

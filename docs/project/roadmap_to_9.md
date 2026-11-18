@@ -241,6 +241,30 @@ JSON logging via the already-declared `python-json-logger`; `X-Request-ID` middl
 propagated into log context and responses; `/metrics` exposing detector hit counts, RPC
 latency/failures, circuit-breaker state, audit durations; optional OpenTelemetry traces.
 
+### Phase 4.1 — status: done (2026-11-18)
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| JSON logging | `LOG_FORMAT=json` for every command, uvicorn included; default in the image | Run against the real server and image; tests |
+| `X-Request-ID` | Kept if valid, else generated; on every log line of the request and of the audit it starts; in the response | Live run: all 18 audit-pipeline log lines carried the caller's id |
+| `/metrics` | Detector hits and verdicts, RPC latency and failures, breaker state, audit durations, HTTP RED by route | Live audit over HTTP JSON-RPC; integration test reads them through the API |
+| OpenTelemetry (optional) | FastAPI's built-in tracing plus audit and per-RPC-call spans; off unless configured | Exported to a local OTLP receiver and decoded: audit span under `POST /api/v1/audits`, 32 RPC client spans under it, no URL in the export |
+
+Each behaviour has a test that fails when it is removed (checked by reintroducing
+each defect). Deviations from the plan above:
+
+- **No python-json-logger.** Phase 3 removed it as unused; a small stdlib
+  formatter does the job without a dependency.
+- **Tracing reuses FastAPI's.** FastAPI (locked at 0.163.1; its `opentelemetry`
+  extra first appeared in 0.142.0) creates OpenTelemetry spans for every
+  request itself; the project adds only the SDK and exporter
+  (`fastapi[opentelemetry]`) and its own audit and RPC spans.
+- **Circuit breakers became per chain.** One breaker per audit made a "breaker
+  state" metric meaningless (several instances, one label) and let each new
+  audit hammer an endpoint already known to be down.
+- **A leak found on the way.** RPC URLs (with provider keys) reached ERROR logs
+  and API error messages via aiohttp's exception text. Fixed by redaction.
+
 ### 4.2 Health semantics
 Split `/health/live` (process) from `/health/ready` (DB + RPC reachable).
 

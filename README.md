@@ -161,6 +161,7 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 - [API & Real-Time Monitoring](docs/api.md)
 - [Architecture Overview](docs/architecture.md)
 - [Security Guide](docs/security.md)
+- [Observability](docs/observability.md): logs, request ids, metrics, traces
 
 ## Testing
 
@@ -203,6 +204,12 @@ To expose the API beyond localhost you must enable authentication — generate
 a key with `wash-genkey`, set `API_AUTH_ENABLED=true` and `API_KEY_HASHES`;
 the server refuses to bind a public interface otherwise. Full reference:
 [docs/api.md](docs/api.md).
+
+The server serves Prometheus metrics at `/metrics` (RPC latency and errors,
+circuit-breaker state, audit durations, detector hits, HTTP traffic), gives
+every request an `X-Request-ID` that follows it into the logs, and can export
+OpenTelemetry traces. Set `LOG_FORMAT=json` for one JSON object per log line.
+See [docs/observability.md](docs/observability.md).
 
 ## Docker
 

@@ -51,9 +51,12 @@ RUN apt-get update \
     && mkdir -p /app/models /app/logs \
     && chown -R appuser:appuser /app
 COPY --from=builder /opt/venv /opt/venv
+# Logs are one JSON object per line for the container's log collector
+# (override with LOG_FORMAT=text); see docs/observability.md.
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    LOG_FORMAT=json
 WORKDIR /app
 USER appuser
 

@@ -30,6 +30,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 from api.auth import (
@@ -39,9 +40,16 @@ from api.auth import (
     require_api_key,
     verify_api_key,
 )
-from api.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
+from api.middleware import (
+    REQUEST_ID_HEADER,
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 from config.settings import settings
+from core.log_config import configure_logging
 from core.realtime_monitor import RealtimeMonitor
+from core.redaction import redact
 from core.reporting import compute_risk_metrics
 from core.storage import Storage
 from core.validators import AuditParameters, validate_address
@@ -92,7 +100,8 @@ def create_app(storage: Storage | None = None) -> FastAPI:
     app.state.audit_tasks = {}
 
     # Order matters: middleware added last runs first (outermost), so the
-    # security headers wrap even rate-limited (429) responses.
+    # security headers wrap even rate-limited (429) responses, and the request
+    # context (id, access log, metrics) wraps everything, CORS preflights too.
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     if settings.cors_origins_list:
@@ -100,8 +109,10 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=settings.cors_origins_list,
             allow_methods=["GET", "POST"],
-            allow_headers=["X-API-Key", "Content-Type"],
+            allow_headers=["X-API-Key", "Content-Type", REQUEST_ID_HEADER],
+            expose_headers=[REQUEST_ID_HEADER],
         )
+    app.add_middleware(RequestContextMiddleware)
 
     def get_storage() -> Storage:
         if app.state.storage is None:
@@ -114,6 +125,12 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         storage = get_storage()
         db_ok = await storage.health_check()
         return {"status": "ok" if db_ok else "degraded", "database": db_ok}
+
+    @app.get("/metrics", dependencies=[Depends(require_api_key)], include_in_schema=False)
+    async def prometheus_metrics() -> Response:
+        """Prometheus metrics (docs/observability.md). Authenticated like the
+        API: give the scraper the key in an X-API-Key header."""
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get(
         f"{PREFIX}/pools/{{chain_id}}/{{pool_address}}/trades",
@@ -152,9 +169,9 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         return {"chain_id": chain_id, "pool_address": pool, **metrics}
 
     async def _run_audit_task(task_id: str, request: AuditRequest) -> None:
-        # Imported lazily: scripts.run_audit configures logging at import time
-        # and pulls in the whole pipeline, which API-only deployments may not
-        # need until an audit is actually requested.
+        # Imported lazily: scripts.run_audit pulls in the whole pipeline, which
+        # API-only deployments may not need until an audit is requested. The
+        # task inherits the request's context, so its logs carry the request id.
         from scripts.run_audit import AuditRunner
 
         tasks: dict[str, dict[str, Any]] = app.state.audit_tasks
@@ -173,7 +190,7 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             tasks[task_id] = {"status": "completed", "result": result}
         except Exception as exc:
             logger.exception(f"Audit task {task_id} failed")
-            tasks[task_id] = {"status": "failed", "error": str(exc)}
+            tasks[task_id] = {"status": "failed", "error": redact(str(exc))}
 
     @app.post(
         f"{PREFIX}/audits",
@@ -293,7 +310,7 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             # Best-effort notification; the socket may already be gone.
             try:
                 await websocket.send_json(
-                    {"type": "error", "data": {"reason": str(exc), "recoverable": False}}
+                    {"type": "error", "data": {"reason": redact(str(exc)), "recoverable": False}}
                 )
                 await websocket.close(code=1011)
             except Exception:  # nosec B110
@@ -343,6 +360,11 @@ def run_server() -> None:
         host=settings.API_HOST,
         port=settings.API_PORT,
         log_level=settings.LOG_LEVEL.lower(),
+        # Keep the logging configure_logging() set up (uvicorn's own config
+        # would replace it), and log requests from RequestContextMiddleware,
+        # which knows the request id, instead of uvicorn's access logger.
+        log_config=None,
+        access_log=False,
     )
 
 
@@ -353,8 +375,5 @@ def app_factory() -> FastAPI:
 
 def cli() -> None:
     """Synchronous entry point for the `wash-api` console script."""
-    logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    configure_logging()
     run_server()

@@ -12,7 +12,7 @@ import logging
 import signal
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,23 +20,22 @@ from core.reporting import classify_severity, compute_risk_metrics
 
 __all__ = ["AuditRunner", "classify_severity", "main"]
 
+from opentelemetry import trace
 from pydantic import ValidationError as PydanticValidationError
 
-from config.settings import settings
+from core import metrics
 from core.entity_clustering import EntityClusterer
 from core.exceptions import WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
 from core.ingestor import MultiChainIngestor
+from core.log_config import configure_logging
 from core.ml_detector import MLDetector
 from core.storage import Storage
 from core.validators import AuditParameters
 
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 
 class AuditRunner:
@@ -71,8 +70,37 @@ class AuditRunner:
         export_format: str | None = None,
         export_path: str | None = None,
     ) -> dict[str, Any]:
-        """Execute full audit pipeline."""
+        """Execute full audit pipeline, timed (wash_audit_duration_seconds) and
+        traced as one span."""
+        start = time.perf_counter()
+        outcome = "failed"
+        with (
+            _tracer.start_as_current_span(
+                "audit",
+                attributes={
+                    "wash.chain_id": params.chain_id,
+                    "wash.pool_address": params.pool_address.lower(),
+                },
+            ) as span,
+            metrics.AUDITS_IN_PROGRESS.track_inprogress(),
+        ):
+            try:
+                result = await self._run_audit(params, export_format, export_path)
+                outcome = "completed"
+                span.set_attribute("wash.trades_processed", result["trades_processed"])
+                span.set_attribute("wash.wash_trades_detected", result["wash_trades_detected"])
+                return result
+            finally:
+                metrics.AUDIT_DURATION.labels(outcome).observe(time.perf_counter() - start)
+
+    async def _run_audit(
+        self,
+        params: AuditParameters,
+        export_format: str | None,
+        export_path: str | None,
+    ) -> dict[str, Any]:
         start_time = time.time()
+        detector_hits: dict[str, int] = {}
 
         if self._shutdown_event.is_set():
             raise WashTradeError("Audit cancelled by shutdown signal")
@@ -151,6 +179,7 @@ class AuditRunner:
                             detection_method=method,
                         )
                     detection_methods.extend(stats.keys())
+                detector_hits.update(stats)
 
             if use_ml:
                 logger.info("Running ML detection...")
@@ -160,6 +189,7 @@ class AuditRunner:
                 ml_wash_trades = await ml_detector.detect_wash_trades(
                     params.chain_id, params.pool_address
                 )
+                detector_hits["ml"] = len(ml_wash_trades)
                 if ml_wash_trades:
                     # detect_wash_trades persists its labels itself.
                     flagged_trade_ids.update(t.id for t in ml_wash_trades)
@@ -211,6 +241,13 @@ class AuditRunner:
                 export_format,
                 export_path,
             )
+
+        # Counted once the audit has succeeded, export included.
+        for detector, hits in detector_hits.items():
+            metrics.AUDIT_DETECTOR_HITS.labels(detector).inc(hits)
+        flagged = Counter(t.detection_method or "unknown" for t in trades if t.is_wash_trade)
+        for method, count in flagged.items():
+            metrics.AUDIT_FLAGGED_TRADES.labels(method).inc(count)
 
         return {
             "chain_id": params.chain_id,
@@ -337,6 +374,7 @@ async def main() -> int:
 
 def cli() -> None:
     """Synchronous entry point for the `wash-audit` console script."""
+    configure_logging()
     sys.exit(asyncio.run(main()))
 
 

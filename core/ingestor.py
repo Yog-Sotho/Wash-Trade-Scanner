@@ -9,15 +9,16 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from web3 import AsyncHTTPProvider, AsyncWeb3, Web3
+from web3 import AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware  # type: ignore[attr-defined]
 from web3.types import EventData, LogReceipt
 
 from config.chains import get_chain_config
 from config.settings import settings
-from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from core.circuit_breaker import CircuitBreakerConfig, shared_breaker
 from core.exceptions import CircuitBreakerOpenError, RPCError
 from core.pricing import PriceOracle
+from core.rpc import InstrumentedHTTPProvider
 from core.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -73,8 +74,10 @@ class ChainIngestor:
         self.price_oracle = price_oracle or PriceOracle.from_settings()
         self.web3: AsyncWeb3 | None = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
-        self.circuit_breaker = CircuitBreaker(
-            name=f"rpc_{chain_config['chain_id']}",
+        # One breaker per chain for the whole process: audits and monitors
+        # calling the same endpoint share its health (core/circuit_breaker.py).
+        self.circuit_breaker = shared_breaker(
+            f"rpc_{chain_config['chain_id']}",
             config=CircuitBreakerConfig(
                 failure_threshold=settings.RPC_MAX_FAILURES,
                 recovery_timeout=settings.RPC_RECOVERY_TIMEOUT,
@@ -99,7 +102,7 @@ class ChainIngestor:
                 f"Set {env_var} in the environment to a real endpoint."
             )
 
-        provider = AsyncHTTPProvider(rpc)
+        provider = InstrumentedHTTPProvider(rpc, self.chain_config["chain_id"])
         self.web3 = AsyncWeb3(provider)
 
         if self.chain_config.get("chain_id") in (56, 97):

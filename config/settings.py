@@ -50,8 +50,6 @@ class Settings(BaseSettings):
         "require", pattern="^(disable|allow|prefer|require|verify-ca|verify-full)$"
     )
 
-    # Redis
-
     # RPC Configuration
     RPC_RATE_LIMIT: int = Field(100, ge=1, le=10000)
     RPC_TIMEOUT: int = Field(30, ge=1, le=300)
@@ -179,6 +177,9 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    # "text" for terminals; "json" (one object per line, with request and trace
+    # ids) for log collectors. The container image defaults to json.
+    LOG_FORMAT: str = Field("text", pattern="^(text|json)$")
 
     # External APIs
     COINGECKO_API_KEY: str = Field("")

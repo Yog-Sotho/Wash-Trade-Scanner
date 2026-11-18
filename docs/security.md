@@ -30,7 +30,10 @@ Every step below is a gate: a finding fails the pipeline.
 ## Runtime Security
 
 - Database SSL mode `require` minimum
-- No plaintext credentials in logs
+- No plaintext credentials in logs, metrics or traces: configured RPC URLs
+  (which carry provider API keys) are redacted from every log line and from
+  error messages the API returns, and never recorded in metrics or spans
+- `/metrics` requires the API key whenever authentication is on
 - Circuit breaker prevents retry storms
 - Input validation fails fast (no partial processing)
 

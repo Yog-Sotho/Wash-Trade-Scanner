@@ -127,12 +127,12 @@ async def test_audit_connects_with_rpc_url_from_environment(monkeypatch):
     ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
 
     with (
-        patch("core.ingestor.AsyncHTTPProvider") as mock_provider,
+        patch("core.ingestor.InstrumentedHTTPProvider") as mock_provider,
         patch("core.ingestor.AsyncWeb3", return_value=_connected_web3_mock()),
     ):
         await ingestor.initialize([1])
 
-    mock_provider.assert_called_once_with("https://eth.example.org/real-key")
+    mock_provider.assert_called_once_with("https://eth.example.org/real-key", 1)
 
 
 @pytest.mark.asyncio
@@ -146,7 +146,7 @@ async def test_misconfigured_chain_does_not_break_other_chains(monkeypatch):
     ingestor = MultiChainIngestor(AsyncMock(spec=Storage))
 
     with (
-        patch("core.ingestor.AsyncHTTPProvider"),
+        patch("core.ingestor.InstrumentedHTTPProvider"),
         patch("core.ingestor.AsyncWeb3", return_value=_connected_web3_mock()),
     ):
         with pytest.raises(ValueError, match="BSC_RPC_URL"):
