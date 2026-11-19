@@ -421,6 +421,54 @@ Only meaningful once Phase 2 makes improvement measurable.
 - **Explainability.** Per-flag evidence bundles (the specific cycle, window and
   counterparties) so findings are defensible, not just scored.
 
+### Phase 6 — status: done (2026-11-19), cross-chain excepted
+
+Measured by the harness on the reported seeds (the development seeds chose the
+parameters), [docs/benchmarks.md](../benchmarks.md):
+
+| The audit's decision | Before | After |
+|---|---|---|
+| Precision / recall / F1 | 0.423 / 0.487 / 0.453 | **0.638 / 0.856 / 0.731** |
+| PR-AUC | 0.253 | **0.765** |
+| Clean-pool false positives (27,385 honest trades) | 28 (0.10%) | **20 (0.07%)** |
+| `unlinked_ring` / `funded_ring` recall | 0.000 / 0.171 | **0.901 / 0.958** |
+| Cross-pool campaigns: per-pool audit → audit with `--related-pool` | – | recall **0 → 0.861** |
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| Temporal graph modelling | `coordinated_trading`: matched opposite trades by different wallets within 3 blocks and 5% (a two-node delta-temporal motif), groups pruned until each member's trades are mostly pairs with the group, flagged at 3+ pairs when the group ends flat | Rings 0.17 → 0.96 (funded) and 0 → 0.90 (unlinked); 0 clean false positives; the snapshot SCC detector, on the router graph, stays at recall 0 with 17 |
+| Cross-pool correlation | `--related-pool` / `related_pools`: round trips, neutrality and coordination per token pair across the pools | Two real USDC/WETH pools over the same blocks: split round trips 0 → 1.00, split rings 0 → 0.78; 10 false positives on the 15,525 clean trades (6 per pool) |
+| MEV and arbitrage discrimination | Sandwich legs (Torres et al. 2021, Qin et al. 2022) and atomic arbitrage, by structure, taken out before every detector; cross-pool legs that sold back dearer in one transaction are not round trips | 44 sandwiches by 22 attackers in the clean pools; every `position_neutral` false positive was one (precision 0.59 → 1.00); no injected trade taken |
+| Explainability | An evidence bundle on every label: each detector that fired, what it saw, its measured rates and P(wash); API, alerts, panel, export | Stored per trade (migration 0003); a test runs every detector over a real pool and requires a finding for every trade it flags |
+
+Not done, and why:
+
+- **Cross-chain correlation.** No labelled cross-chain data exists to measure
+  it on, and every result here is measured; a detector the harness cannot
+  score is not shipped. Same-address EOAs across EVM chains and bridge events
+  are the natural inputs when such data exists.
+- **The profit test for arbitrage.** Arbitrage makes money and wash trading
+  pays fees, but on the 0.05% pools a round trip's return is dominated by
+  price drift: measured, it does not separate the two, so only structure
+  (sandwiches, atomic arbitrage) is used.
+
+Choices the harness priced:
+
+- **Window and tolerance.** The coordination window and value tolerance sit
+  where the documented heuristic puts them (3 blocks, 5%). Narrower misses
+  the rings; 5 blocks adds 4 clean false positives and 10 adds 8; 10% adds 11
+  (a one-parameter sweep on the development seeds, in `evaluation/tuning.json`).
+- **A tuning pick not shipped.** The tuning rule (highest recall among decisive
+  settings) picked 5 blocks and 2 pairs: +1.3 points of recall for 16 clean
+  false positives. The shipped setting has none; both are recorded in
+  `evaluation/tuning.json` and the benchmark page.
+
+Each behaviour has a test that fails when it is removed. Of 33 reintroduced
+defects, 31 were caught at once. The two that escaped exposed real gaps:
+- an untested atomic-arbitrage rule, now tested and caught;
+- a direction check that was redundant and would have missed triangular
+  arbitrage, now removed.
+
 ---
 
 ## Sequencing

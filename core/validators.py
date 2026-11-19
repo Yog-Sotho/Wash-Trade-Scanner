@@ -19,6 +19,9 @@ class AuditParameters(BaseModel):
     end_block: int | None = Field(None, ge=0)
     use_ml: bool = Field(True)
     use_heuristics: bool = Field(True)
+    # Other pools of the same chain audited with this one (cross-pool
+    # correlation): their trades are judged together, per token pair.
+    related_pools: list[str] = Field(default_factory=list, max_length=9)
 
     @field_validator("pool_address")
     @classmethod
@@ -26,6 +29,17 @@ class AuditParameters(BaseModel):
         # Lowercase is the stored form of every address column; the ingestor
         # converts to EIP-55 itself where web3 requires it.
         return validate_address(v).lower()
+
+    @field_validator("related_pools")
+    @classmethod
+    def validate_related_pools(cls, v: list[str], info: ValidationInfo) -> list[str]:
+        primary = info.data.get("pool_address")
+        related: list[str] = []
+        for address in v:
+            address = validate_address(address).lower()
+            if address != primary and address not in related:
+                related.append(address)
+        return related
 
     @field_validator("end_block")
     @classmethod

@@ -109,7 +109,7 @@ log line of the request (and of an audit the request started). See
 | GET  | `/metrics` | Prometheus metrics ([observability.md](observability.md)); needs the key when auth is on |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/trades?limit=&offset=&wash_only=` | Paginated trades for a pool |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/report` | Risk metrics: wash volume, per-method breakdown, severity |
-| POST | `/api/v1/audits` | Start a full audit in the background (body: `AuditRequest`), returns `202 {task_id}`; 409 (with the running `task_id`) if the pool is already being audited; 429 if `AUDIT_MAX_CONCURRENT` audits are running |
+| POST | `/api/v1/audits` | Start a full audit in the background (body: `AuditRequest`; `related_pools`: up to 9 other pools of the chain to audit with it, per token pair), returns `202 {task_id}`; 409 (with the running `task_id`) if the pool is already being audited; 429 if `AUDIT_MAX_CONCURRENT` audits are running |
 | GET  | `/api/v1/audits/{task_id}` | Poll audit status/result |
 
 Example:
@@ -128,6 +128,11 @@ instance can report them and a restart does not lose them:
  "created_at": "2026-11-19T01:40:20.6", "finished_at": "2026-11-19T01:41:31.2",
  "result": {"trades_processed": 9, "wash_trades_detected": 6, "risk_metrics": {...}}}
 ```
+
+Besides the counts and `risk_metrics`, a result carries `funding_clusters`
+(what funding-link clustering examined), `excluded_as_mev` (trades taken out
+before detection as sandwich legs or atomic arbitrage, by kind),
+`related_pools` and `pools` (trades and wash trades per audited pool).
 
 `status` is `running`, `completed` (with `result`), `failed` (with `error`) or
 `interrupted`: the server running it stopped. A shutting-down server marks its
@@ -215,3 +220,29 @@ Event frames:
 Transient RPC failures emit `error` events without dropping the connection;
 the monitor keeps polling. Close codes: `4401` unauthorized, `4422` invalid
 pool address.
+
+## Evidence
+
+Every trade labelled wash carries `wash_evidence` (null otherwise): each
+detector that fired on it, the most probative first, with what it saw and what
+its hit is worth.
+
+```json
+{"probability": 0.80, "decided_by": "round_trip", "prior": 0.01, "threshold": 0.5,
+ "detectors": [
+   {"detector": "round_trip", "probability": 0.80, "tpr": 0.43, "fpr_upper": 0.0011,
+    "entity": "0xaaaa...",
+    "summary": "Bought and sold back 2 blocks later, the two legs' USD values 0.50% apart; one of 3 such round trips by this trader in this pool",
+    "details": {"blocks_apart": 2, "value_gap": 0.005, "round_trips_by_trader": 3, ...},
+    "trades": [{"tx": "0x...", "log_index": 4, "block": 101, "trader": "0xaaaa...",
+                "sold": "0xa0b8...", "bought": "0xc02a...", "amount_in": 1000000000.0,
+                "amount_out": 500000000000000000.0, "usd": 1000.0}, ...],
+    "trades_total": 2}]}
+```
+
+`probability` is P(wash | the detector fired), from its measured true-positive
+rate and the 95% upper bound of its false-positive rate on real pools
+([benchmarks.md](benchmarks.md)); `trades` lists up to ten of the trades the
+detector saw together (a round trip's two legs, a window, a ring's pairs),
+`trades_total` how many there were. The same bundle is sent with alerts and
+written by `wash-audit --export json` for every flagged trade.

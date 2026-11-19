@@ -21,9 +21,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.advanced_heuristics import trader_of
 from core.calibration import DetectorCalibration, fpr_upper_bound, override_calibration
 from core.heuristics import HeuristicDetector
-from core.mev import without_sandwiches
+from core.mev import without_mev
 from evaluation.dataset import Fixture, load_fixture, to_swap_trades
-from evaluation.inject import PATTERNS, Campaign, Market, inject
+from evaluation.inject import (
+    CROSS_POOL_PATTERNS,
+    PATTERNS,
+    Campaign,
+    Market,
+    inject,
+    inject_cross_pool,
+)
 from evaluation.metrics import Counts, average_precision
 from models.schemas import AddressCluster, SwapTrade
 
@@ -55,17 +62,25 @@ DOCUMENTED_CASES: dict[str, str] = {
 }
 
 
-def detector_suite() -> dict[str, DetectorFn]:
+# Clean pools of one token pair over the same blocks: their union is a real
+# two-pool market, inter-pool arbitrage included, for cross-pool scenarios.
+CROSS_POOL_PAIRS: tuple[tuple[str, str], ...] = (("univ2_usdc_weth", "univ3_usdc_weth_005"),)
+# The detectors that judge a token pair across pools in cross-pool mode.
+CROSS_POOL_DETECTORS = ("round_trip", "position_neutral", "coordinated_trading", "composite")
+
+
+def detector_suite(cross_pool: bool = False) -> dict[str, DetectorFn]:
     """Every production detector run on its own, by the method name it
     labels trades with, plus ``composite``: the audit's actual decision
-    (all detectors, calibrated scoring, SUSPICIOUS_ACTIVITY_THRESHOLD)."""
-    h = HeuristicDetector()
+    (all detectors, calibrated scoring, SUSPICIOUS_ACTIVITY_THRESHOLD).
+    With `cross_pool`, as in an audit of several pools of one token pair."""
+    h = HeuristicDetector(cross_pool=cross_pool)
 
     # Each detector sees what it sees in an audit: the trades without the
-    # sandwich attackers' legs (core/mev.py), so its measured rates are the
+    # MEV legs (core/mev.py), so its measured rates are the
     # rates the composite scores with.
     def candidates(trades: list[SwapTrade]) -> list[SwapTrade]:
-        return without_sandwiches(trades)[0]
+        return without_mev(trades)[0]
 
     def plain(
         method: Callable[[list[SwapTrade], AsyncSession], Awaitable[list[SwapTrade]]],
@@ -226,6 +241,64 @@ async def _run_scenarios(
     return results, totals
 
 
+async def _run_cross_pool(loaded: list[Fixture], seeds: range) -> dict[str, Any] | None:
+    """Cross-pool campaigns in the union of two real pools of one pair,
+    scored per token pair (the cross-pool audit) and, for comparison, per pool
+    (what auditing each pool alone sees)."""
+    by_name = {f.name: f for f in loaded}
+    pairs = [p for p in CROSS_POOL_PAIRS if p[0] in by_name and p[1] in by_name]
+    if not pairs:
+        return None
+    cross = {
+        name: fn
+        for name, fn in detector_suite(cross_pool=True).items()
+        if name in CROSS_POOL_DETECTORS
+    }
+    suites = {**cross, "composite_per_pool": detector_suite()["composite"]}
+    results = {name: DetectorResult() for name in suites}
+    scenarios = 0
+    for first_name, second_name in pairs:
+        first, second = by_name[first_name], by_name[second_name]
+        union = first.rows + second.rows
+        name = f"{first_name}+{second_name}"
+        for detector_name, detector in suites.items():
+            started = time.perf_counter()
+            outcome = await _run_one(detector, union, set(), [])
+            results[detector_name].seconds += time.perf_counter() - started
+            counts = Counts()
+            for trade, positive, score in outcome:
+                counts.add(score > 0, positive, trade.volume_usd or 0.0)
+            results[detector_name].clean[name] = counts
+            results[detector_name].clean_flags[name] = _flags_by_trader(
+                [t for t, _, score in outcome if score > 0]
+            )
+        market = Market(first.rows, int(first.meta["chain_id"]))
+        other = Market(second.rows, int(second.meta["chain_id"]))
+        for pattern in CROSS_POOL_PATTERNS:
+            for seed in seeds:
+                campaign = inject_cross_pool(pattern, market, other, seed)
+                rows = union + campaign.rows
+                positives = {row["transaction_hash"] for row in campaign.rows}
+                scenarios += 1
+                for detector_name, detector in suites.items():
+                    started = time.perf_counter()
+                    outcome = await _run_one(detector, rows, positives, _clusters(campaign))
+                    results[detector_name].seconds += time.perf_counter() - started
+                    counts = Counts()
+                    for trade, positive, score in outcome:
+                        counts.add(score > 0, positive, trade.volume_usd or 0.0)
+                        results[detector_name].scores.append(score)
+                        results[detector_name].labels.append(positive)
+                    results[detector_name].overall.merge(counts)
+                    results[detector_name].by_pattern.setdefault(pattern, Counts()).merge(counts)
+    return {
+        "pairs": [list(p) for p in pairs],
+        "patterns": list(CROSS_POOL_PATTERNS),
+        "scenarios": scenarios,
+        "detectors": {name: _summarise(result) for name, result in results.items()},
+    }
+
+
 def _flags_by_trader(flagged: list[SwapTrade]) -> list[dict[str, Any]]:
     by_trader: dict[str, list[SwapTrade]] = {}
     for trade in flagged:
@@ -305,6 +378,7 @@ async def evaluate(
         )
     try:
         results, totals = await _run_scenarios(loaded, suite, range(seeds), patterns, True)
+        cross_pool = await _run_cross_pool(loaded, range(seeds))
     finally:
         override_calibration(None)
 
@@ -322,6 +396,7 @@ async def evaluate(
         **totals,
         "calibration": calibration,
         "detectors": {name: _summarise(result) for name, result in results.items()},
+        "cross_pool": cross_pool,
     }
 
 

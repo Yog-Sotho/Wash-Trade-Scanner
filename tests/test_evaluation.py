@@ -500,3 +500,60 @@ def test_stale_calibration_is_reported():
     assert any(p.startswith("gone:") for p in problems)
     assert any(p.startswith("new:") for p in problems)
     assert stale_calibration(shipped, shipped) == []
+
+
+# ------------------------------------------------------------- phase 6 harness
+
+
+async def test_each_detector_is_measured_without_mev_as_in_an_audit():
+    """Calibration must measure what the composite scores: detectors see the
+    trades without sandwich legs (core/mev.py) in the harness too."""
+    from evaluation.runner import detector_suite
+    from tests.test_mev import ATTACKER, VICTIM, sandwich
+    from tests.test_mev import WETH as MEV_WETH
+
+    trades = [t for block in range(100, 104) for t in sandwich(block)]
+    for trade in trades:  # the bot ends exactly flat: neutral in every window
+        if trade.tx_from == ATTACKER and trade.token_in == MEV_WETH:
+            trade.amount_out = 3000.0
+    flagged = await detector_suite()["position_neutral"](trades, [])
+    assert all(t.tx_from == VICTIM for t in flagged)
+
+
+def test_cross_pool_campaigns_split_each_mechanism_over_the_two_pools():
+    from evaluation.inject import inject_cross_pool
+
+    rows = _background()
+    other_rows = [{**r, "pool_address": "0x" + "d" * 40} for r in rows]
+    market, other = Market(rows, chain_id=1), Market(other_rows, chain_id=1)
+    trips = inject_cross_pool("xpool_round_trip", market, other, seed=1)
+    for buy, sell in zip(trips.rows[::2], trips.rows[1::2], strict=True):
+        assert buy["pool_address"] != sell["pool_address"]
+        assert sell["token_in"] == buy["token_out"] and sell["amount_in"] == buy["amount_out"]
+    ring = inject_cross_pool("xpool_ring", market, other, seed=1)
+    for first, second in zip(ring.rows[::2], ring.rows[1::2], strict=True):
+        assert first["pool_address"] != second["pool_address"]
+        assert first["tx_from"] != second["tx_from"]
+    with pytest.raises(ValueError):
+        inject_cross_pool("aa_round_trip", market, other, seed=1)
+
+
+def test_the_gate_covers_the_cross_pool_detectors():
+    from evaluation.cli import _baseline_view
+
+    summary = {
+        "overall": {"precision": 0.5, "recall": 0.9, "f1": 0.64, "pr_auc": 0.4},
+        "clean_pools": {"all": {"fpr": 0.001}},
+    }
+    results = {
+        "seeds": 2,
+        "detectors": {"composite": summary},
+        "cross_pool": {"detectors": {"composite": summary}},
+    }
+    view = _baseline_view(results)
+    assert set(view["detectors"]) == {"composite", "cross_pool:composite"}
+    worse = json.loads(json.dumps(results))
+    worse["cross_pool"]["detectors"]["composite"]["overall"]["recall"] = 0.5
+    assert regressions(_baseline_view(worse), view) == [
+        "cross_pool:composite: recall fell from 0.9 to 0.5"
+    ]

@@ -120,7 +120,9 @@ class AdvancedHeuristicDetector:
         Two legs in the same block with another trader's swap between them are
         a sandwich -- an MEV attack on that trader, not wash trading -- and are
         not paired. Legs in a single transaction are paired: buying and
-        selling atomically is how volume bots manufacture volume cheaply.
+        selling atomically is how volume bots manufacture volume cheaply --
+        unless they are in different pools and sold back at a better price
+        than they bought (cross-pool arbitrage).
         """
         wash_trades: list[SwapTrade] = []
         max_blocks = settings.ROUND_TRIP_MAX_BLOCKS
@@ -154,6 +156,8 @@ class AdvancedHeuristicDetector:
                         if not self._values_match(first, second, tolerance):
                             continue
                         if self._is_sandwich(first, second, ordered, position, trader):
+                            continue
+                        if self._is_atomic_arbitrage(first, second):
                             continue
                         used.update((id(first), id(second)))
                         pairs.append((first, second))
@@ -218,6 +222,22 @@ class AdvancedHeuristicDetector:
                 "tolerance": settings.ROUND_TRIP_VALUE_TOLERANCE,
             },
         )
+
+    @staticmethod
+    def _is_atomic_arbitrage(first: SwapTrade, second: SwapTrade) -> bool:
+        """Two legs in different pools of one transaction that sold back, per
+        unit, for at least what was paid: arbitrage between the pools, not a
+        round trip (which, atomic in one pool or across pools, pays fees and
+        loses)."""
+        if first.pool_address == second.pool_address:
+            return False
+        if first.transaction_hash != second.transaction_hash:
+            return False
+        paid, bought = first.amount_in or 0.0, first.amount_out or 0.0
+        sold, received = second.amount_in or 0.0, second.amount_out or 0.0
+        if paid <= 0 or bought <= 0 or sold <= 0:
+            return False
+        return received / sold * bought >= paid
 
     @staticmethod
     def _is_sandwich(

@@ -22,6 +22,14 @@ source; the parameters below say which:
   cadence, alternating sides -- the pattern Kaiko reported in the FBI's
   NexFundAI market (identical trades, same size and timing, for a month).
 
+Cross-pool patterns (``inject_cross_pool``) split the same mechanisms over two
+pools of one token pair, so that each pool alone sees only one side:
+
+- ``xpool_round_trip``: heuristic 1's round trips, bought in one pool and
+  sold back in the other.
+- ``xpool_ring``: heuristic 2's ring, each matched pair's legs in different
+  pools.
+
 Injected trades are valued with the production pricing rules from the USD
 value the background itself shows for each token at that time, so a campaign
 is priced exactly as an audit would price it.
@@ -47,6 +55,7 @@ PATTERNS = (
     "unlinked_ring",
     "repeated_size_bot",
 )
+CROSS_POOL_PATTERNS = ("xpool_round_trip", "xpool_ring")
 
 _LOG_INDEX_BASE = 10_000  # keeps injected log indexes clear of real ones
 
@@ -155,11 +164,13 @@ class _Builder:
         usd: float,
         via_bot: str | None = None,
         amount_in: float | None = None,
+        market: Market | None = None,
     ) -> dict[str, Any]:
         """One swap of `usd` worth of `token_in`, sent by `trader` through the
         background's main router, or through `via_bot` (a contract that calls
-        the pool directly and keeps the output)."""
-        m = self.market
+        the pool directly and keeps the output); in `market` if given (a
+        cross-pool campaign's other pool), else the builder's."""
+        m = market or self.market
         token_out = m.tokens[1] if token_in == m.tokens[0] else m.tokens[0]
         unit_in = m.unit_usd(token_in, block)
         unit_out = m.unit_usd(token_out, block)
@@ -269,6 +280,64 @@ def _repeated_size_bot(b: _Builder) -> None:
         else:
             b.swap(block, operator, other, 0.0, via_bot=bot, amount_in=leg["amount_out"])
         block += cadence
+
+
+def _cross_pool_round_trips(b: _Builder, other: Market) -> None:
+    wallet = b.address()
+    b.campaign.wallets.append(wallet)
+    rounds = b.rng.randint(3, 8)
+    block = b.start_block(rounds * 625)
+    for n in range(rounds):
+        # Alternate which pool takes the buy: each sees buys and sells, but
+        # never one trader's buy and its sale.
+        first, second = (b.market, other) if n % 2 == 0 else (other, b.market)
+        token_in = b.rng.choice(first.priced_tokens)
+        buy = b.swap(block, wallet, token_in, b.notional(), market=first)
+        sell_block = block + b.rng.randint(1, 25)
+        b.swap(
+            sell_block, wallet, buy["token_out"], 0.0, amount_in=buy["amount_out"], market=second
+        )
+        block = sell_block + b.rng.randint(30, 600)
+
+
+def _cross_pool_ring(b: _Builder, other: Market) -> None:
+    m = b.market
+    wallets = [b.address() for _ in range(b.rng.randint(5, 10))]
+    b.campaign.wallets.extend(wallets)
+    events = b.rng.randint(4, 10)
+    block = b.start_block(events * 400)
+    for n in range(events):
+        buyer, seller = b.rng.sample(wallets, 2)
+        first, second = (m, other) if n % 2 == 0 else (other, m)
+        usd = b.notional()
+        token = b.rng.choice(first.priced_tokens)
+        opposite = first.tokens[1] if token == first.tokens[0] else first.tokens[0]
+        b.swap(block, buyer, token, usd, market=first)
+        b.swap(
+            block + b.rng.randint(0, 3),
+            seller,
+            opposite,
+            usd * b.rng.uniform(0.95, 1.05),
+            market=second,
+        )
+        block += b.rng.randint(20, 400)
+
+
+def inject_cross_pool(pattern: str, market: Market, other: Market, seed: int) -> Campaign:
+    """Build one campaign of a cross-pool `pattern` over two pools of one
+    token pair, deterministic in `seed`."""
+    if set(market.tokens) != set(other.tokens):
+        raise ValueError("cross-pool campaigns need two pools of one token pair")
+    # Seeded for reproducible simulations, not for anything security-related.
+    rng = random.Random(f"{pattern}:{market.pool}:{other.pool}:{seed}")  # nosec B311
+    builder = _Builder(market, rng, pattern)
+    if pattern == "xpool_round_trip":
+        _cross_pool_round_trips(builder, other)
+    elif pattern == "xpool_ring":
+        _cross_pool_ring(builder, other)
+    else:
+        raise ValueError(f"unknown cross-pool pattern {pattern}")
+    return builder.campaign
 
 
 def inject(pattern: str, market: Market, seed: int) -> Campaign:

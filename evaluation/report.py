@@ -67,8 +67,8 @@ def render(
     add("## Headline")
     add("")
     add(
-        "The audit's decision (which trades it labels wash) before and after Phase 2, "
-        f"on the same data. Labelled scenarios: {results['scenarios']} "
+        "The audit's decision (which trades it labels wash) under Phase 1's rules and "
+        f"now, on the same data. Labelled scenarios: {results['scenarios']} "
         f"({results['seeds']} seeds × {len(results['patterns'])} patterns × "
         f"{len(clean)} clean pools)."
     )
@@ -88,7 +88,7 @@ def render(
                 documented,
             )
         )
-    add(_headline_row("Phase 2 (calibrated composite)", detectors["composite"], documented))
+    add(_headline_row("Current (calibrated composite)", detectors["composite"], documented))
     add("")
     if before is not None:
         self_trading = before["detectors"].get("self_trading")
@@ -213,6 +213,40 @@ def render(
                     f"| `{pool}` | `{t['trader']}` | {t['trades']} | "
                     f"${t['volume_usd']:,.0f} | {legs}{more} |"
                 )
+        add("")
+
+    # ------------------------------------------------------------ cross-pool
+    cross = results.get("cross_pool")
+    if cross:
+        pairs = ", ".join(" + ".join(f"`{n}`" for n in pair) for pair in cross["pairs"])
+        add("## Cross-pool")
+        add("")
+        add(
+            f"Campaigns split over two pools of one token pair ({pairs}: the same blocks), "
+            "so that no pool alone holds enough of one trader's round trips, or of a "
+            "ring's matched pairs, to show them. "
+            f"{cross['scenarios']} scenarios in the union of the two real histories; the "
+            "clean run is that union, real inter-pool arbitrage included. "
+            "`composite_per_pool` is what auditing each pool alone decides; the other rows "
+            "audit the pools together (`--related-pool`), judging each token pair across them."
+        )
+        add("")
+        cross_patterns = cross["patterns"]
+        add(
+            "| Detector | Precision | Recall | "
+            + " | ".join(f"`{p}` recall" for p in cross_patterns)
+            + " | Clean FPR | Clean FP |"
+        )
+        add("|---|---|---|" + "---|" * len(cross_patterns) + "---|---|")
+        for name, d in cross["detectors"].items():
+            o = d["overall"]
+            c = d["clean_pools"]["all"]
+            cells = [_fmt(d["by_pattern"].get(p, {}).get("recall")) for p in cross_patterns]
+            add(
+                f"| `{name}` | {_fmt(o['precision'])} | {_fmt(o['recall'])} | "
+                + " | ".join(cells)
+                + f" | {_fmt(c['fpr'], pct=True)} | {c['fp']:,} |"
+            )
         add("")
 
     # ------------------------------------------------------------ calibration

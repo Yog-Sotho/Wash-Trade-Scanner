@@ -206,6 +206,7 @@ class AuditRequest(BaseModel):
     end_block: int | None = None
     use_ml: bool = True
     use_heuristics: bool = True
+    related_pools: list[str] = []
 
 
 class AuditResponse(BaseModel):

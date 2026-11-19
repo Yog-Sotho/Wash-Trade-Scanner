@@ -29,14 +29,92 @@
     "composite": {
       "clean_pools": {
         "all": {
-          "fpr": 0.001
+          "fpr": 0.0007
         }
       },
       "overall": {
-        "f1": 0.4529,
-        "pr_auc": 0.253,
-        "precision": 0.4232,
-        "recall": 0.4872
+        "f1": 0.7314,
+        "pr_auc": 0.7653,
+        "precision": 0.6383,
+        "recall": 0.8563
+      }
+    },
+    "coordinated_trading": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0
+        }
+      },
+      "overall": {
+        "f1": 0.5751,
+        "pr_auc": 0.3973,
+        "precision": 0.974,
+        "recall": 0.408
+      }
+    },
+    "cross_pool:composite": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0006
+        }
+      },
+      "overall": {
+        "f1": 0.6306,
+        "pr_auc": 0.8041,
+        "precision": 0.4975,
+        "recall": 0.8609
+      }
+    },
+    "cross_pool:composite_per_pool": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0004
+        }
+      },
+      "overall": {
+        "f1": 0.0,
+        "pr_auc": 0.0,
+        "precision": 0.0,
+        "recall": 0.0
+      }
+    },
+    "cross_pool:coordinated_trading": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0
+        }
+      },
+      "overall": {
+        "f1": 0.6628,
+        "pr_auc": 0.4957,
+        "precision": 1.0,
+        "recall": 0.4957
+      }
+    },
+    "cross_pool:position_neutral": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0
+        }
+      },
+      "overall": {
+        "f1": 0.4028,
+        "pr_auc": 0.2522,
+        "precision": 1.0,
+        "recall": 0.2522
+      }
+    },
+    "cross_pool:round_trip": {
+      "clean_pools": {
+        "all": {
+          "fpr": 0.0006
+        }
+      },
+      "overall": {
+        "f1": 0.3268,
+        "pr_auc": 0.108,
+        "precision": 0.2958,
+        "recall": 0.3652
       }
     },
     "high_frequency_bot": {
@@ -55,13 +133,13 @@
     "position_neutral": {
       "clean_pools": {
         "all": {
-          "fpr": 0.0003
+          "fpr": 0.0
         }
       },
       "overall": {
-        "f1": 0.3767,
-        "pr_auc": 0.1636,
-        "precision": 0.5927,
+        "f1": 0.4327,
+        "pr_auc": 0.2761,
+        "precision": 1.0,
         "recall": 0.2761
       }
     },
@@ -94,7 +172,7 @@
     "volume_anomaly": {
       "clean_pools": {
         "all": {
-          "fpr": 0.0437
+          "fpr": 0.0432
         }
       },
       "overall": {

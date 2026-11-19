@@ -20,6 +20,13 @@ The attacker is the transaction sender or, as sandwich bots often send the two
 legs from different accounts, the bot contract that called the pool and kept
 the output. Only the attacker's two legs are taken out; the victim's swap is
 an ordinary trade.
+
+When several pools are audited together (cross-pool correlation), atomic
+arbitrage is taken out too: one transaction buying in one pool and selling
+in another, ending with more of a token and less of none. Its legs look like
+a round trip across pools, but an atomic transaction can only gain from a
+price difference between the pools: that is arbitrage, not wash trading,
+which pays the pools' fees and loses.
 """
 
 from __future__ import annotations
@@ -100,8 +107,56 @@ def find_sandwiches(trades: list[SwapTrade]) -> list[Sandwich]:
     return found
 
 
-def without_sandwiches(trades: list[SwapTrade]) -> tuple[list[SwapTrade], list[Sandwich]]:
-    """`trades` minus every sandwich attacker's legs, and the sandwiches."""
-    sandwiches = find_sandwiches(trades)
-    legs = {id(t) for s in sandwiches for t in (s.front, s.back)}
-    return [t for t in trades if id(t) not in legs], sandwiches
+@dataclass(frozen=True)
+class Arbitrage:
+    legs: tuple[SwapTrade, ...]
+    gain: dict[str, float]  # per token: what the transaction ended with more of
+
+
+def find_atomic_arbitrage(trades: list[SwapTrade]) -> list[Arbitrage]:
+    """Transactions that swap in two or more of the given pools and end with
+    more of a token and less of none: a cycle (two pools of one pair, or a
+    triangle through three) that gained. A route that is not a cycle spends
+    its input, and a purchase spends what it pays with, so neither passes."""
+    by_tx: dict[str, list[SwapTrade]] = defaultdict(list)
+    for trade in trades:
+        by_tx[trade.transaction_hash].append(trade)
+
+    found: list[Arbitrage] = []
+    for legs in by_tx.values():
+        if len(legs) < 2 or len({t.pool_address for t in legs}) < 2:
+            continue
+        net: dict[str, float] = defaultdict(float)
+        gross: dict[str, float] = defaultdict(float)
+        for t in legs:
+            token_in, token_out = _direction(t)
+            net[token_in] -= t.amount_in or 0.0
+            net[token_out] += t.amount_out or 0.0
+            gross[token_in] += t.amount_in or 0.0
+            gross[token_out] += t.amount_out or 0.0
+        # Float noise aside (raw amounts are integers stored as floats).
+        if any(net[token] < -1e-9 * gross[token] for token in net):
+            continue  # it lost something: not arbitrage
+        gain = {token: value for token, value in net.items() if value > 1e-9 * gross[token]}
+        if gain:
+            ordered = tuple(sorted(legs, key=lambda t: t.log_index or 0))
+            found.append(Arbitrage(ordered, gain))
+    return found
+
+
+@dataclass(frozen=True)
+class MevFindings:
+    sandwiches: list[Sandwich]
+    arbitrages: list[Arbitrage]
+
+    @property
+    def legs(self) -> set[int]:
+        sandwich_legs = {id(t) for s in self.sandwiches for t in (s.front, s.back)}
+        return sandwich_legs | {id(t) for a in self.arbitrages for t in a.legs}
+
+
+def without_mev(trades: list[SwapTrade]) -> tuple[list[SwapTrade], MevFindings]:
+    """`trades` minus the legs of every sandwich attack and atomic arbitrage."""
+    findings = MevFindings(find_sandwiches(trades), find_atomic_arbitrage(trades))
+    legs = findings.legs
+    return [t for t in trades if id(t) not in legs], findings

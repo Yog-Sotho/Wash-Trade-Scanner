@@ -135,7 +135,7 @@ async def test_trades_taken_out_as_mev_are_reported_not_counted_as_hits():
             AuditParameters(chain_id=1, pool_address="0x" + "b" * 40, use_ml=False)
         )
 
-    assert result["excluded_as_mev"] == 6
+    assert result["excluded_as_mev"] == {"sandwich": 6, "arbitrage": 0}
     assert hits(EXCLUDED_MEV) == before  # not a detector
 
 

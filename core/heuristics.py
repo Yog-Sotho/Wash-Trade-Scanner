@@ -9,6 +9,7 @@ import logging
 import math
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 import networkx as nx
@@ -19,14 +20,16 @@ from config.settings import settings
 from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade, trader_of
 from core.calibration import wash_probability
 from core.evidence import EvidenceLog, Finding
-from core.mev import without_sandwiches
+from core.mev import without_mev
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
 
-# The stats key counting trades taken out as MEV before detection: not a
-# detector's hits.
+# Stats keys counting trades taken out as MEV before detection: not a
+# detector's hits (EXCLUDED_PREFIX marks them all).
+EXCLUDED_PREFIX = "excluded_mev_"
 EXCLUDED_MEV = "excluded_mev_sandwich"
+EXCLUDED_ARBITRAGE = "excluded_mev_arbitrage"
 
 
 def _load_allowlist() -> set[str]:
@@ -410,10 +413,11 @@ class HeuristicDetector:
         hits: dict[int, list[str]] = defaultdict(list)
         evidence = EvidenceLog()
         all_trades = trades
-        # Sandwich attackers' legs are MEV, not wash: no detector sees them
-        # (core/mev.py). They are counted, and never labelled.
-        trades, sandwiches = without_sandwiches(trades)
-        stats[EXCLUDED_MEV] = 2 * len(sandwiches)
+        # Sandwich attackers' and atomic arbitrageurs' legs are MEV, not wash:
+        # no detector sees them (core/mev.py). They are counted, never labelled.
+        trades, mev = without_mev(trades)
+        stats[EXCLUDED_MEV] = 2 * len(mev.sandwiches)
+        stats[EXCLUDED_ARBITRAGE] = sum(len(a.legs) for a in mev.arbitrages)
 
         detectors = [
             ("round_trip", self.advanced.detect_round_trips),
@@ -473,14 +477,17 @@ class HeuristicDetector:
         chain_id: int,
         pool_address: str,
         session: AsyncSession,
+        related_pools: Sequence[str] = (),
     ) -> tuple[list[SwapTrade], dict[str, int]]:
-        """Run all heuristic detectors over a pool's stored trades."""
+        """Run all heuristic detectors over a pool's stored trades, together
+        with the related pools' (cross-pool correlation)."""
+        pools = [pool_address, *related_pools]
         trades_stmt = (
             select(SwapTrade)
             .where(
                 and_(
                     SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
+                    SwapTrade.pool_address.in_(pools),
                 )
             )
             .order_by(SwapTrade.block_timestamp)

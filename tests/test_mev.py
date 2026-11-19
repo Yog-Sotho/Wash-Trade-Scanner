@@ -11,7 +11,7 @@ import pytest
 from config.settings import settings
 from core.calibration import DetectorCalibration, override_calibration
 from core.heuristics import EXCLUDED_MEV, HeuristicDetector
-from core.mev import find_sandwiches, without_sandwiches
+from core.mev import find_atomic_arbitrage, find_sandwiches, without_mev
 from models.schemas import SwapTrade
 
 WETH, USDC = "0x" + "e" * 40, "0x" + "c" * 40
@@ -105,8 +105,8 @@ def test_a_bot_contract_sending_from_two_accounts_is_one_attacker():
 
 def test_only_the_attackers_legs_are_taken_out():
     front, victim, back = sandwich()
-    kept, found = without_sandwiches([front, victim, back])
-    assert kept == [victim] and len(found) == 1
+    kept, found = without_mev([front, victim, back])
+    assert kept == [victim] and len(found.sandwiches) == 1
 
 
 async def test_a_sandwich_bot_is_never_labelled_and_its_legs_are_counted():
@@ -119,7 +119,7 @@ async def test_a_sandwich_bot_is_never_labelled_and_its_legs_are_counted():
             if trade.tx_from == ATTACKER and trade.token_in == WETH:
                 trade.amount_out = 3000.0
 
-        candidates, _ = without_sandwiches(trades)
+        candidates, _ = without_mev(trades)
         h = HeuristicDetector()
         assert await h.advanced.detect_position_neutral(trades, None) != []  # would fire
 
@@ -130,3 +130,69 @@ async def test_a_sandwich_bot_is_never_labelled_and_its_legs_are_counted():
     assert wash == []
     assert stats[EXCLUDED_MEV] == 8
     assert all(t.tx_from == VICTIM for t in candidates)
+
+
+# ------------------------------------------------------------ atomic arbitrage
+
+
+def leg(pool: str, sold: str, amount_in: float, amount_out: float, tx: str, log_index: int):
+    trade = swap(ATTACKER, 100, log_index, sold, amount_in, amount_out)
+    trade.pool_address = pool
+    trade.transaction_hash = tx
+    return trade
+
+
+def test_buying_in_one_pool_and_selling_dearer_in_another_atomically_is_arbitrage():
+    buy = leg("0xpoolA", USDC, 3000.0, 1.0, "0xtx", 0)
+    sell = leg("0xpoolB", WETH, 1.0, 3006.0, "0xtx", 1)  # sold all it bought, for more
+    (found,) = find_atomic_arbitrage([buy, sell])
+    assert found.legs == (buy, sell)
+    assert found.gain == {USDC: pytest.approx(6.0)}
+
+
+def test_an_atomic_round_trip_that_loses_is_not_arbitrage():
+    """Buying and selling back across pools at a loss: fees paid for volume."""
+    buy = leg("0xpoolA", USDC, 3000.0, 1.0, "0xtx", 0)
+    sell = leg("0xpoolB", WETH, 1.0, 2991.0, "0xtx", 1)
+    assert find_atomic_arbitrage([buy, sell]) == []
+
+
+def test_legs_in_separate_transactions_or_one_pool_are_not_atomic_arbitrage():
+    buy = leg("0xpoolA", USDC, 3000.0, 1.0, "0xtx1", 0)
+    sell = leg("0xpoolB", WETH, 1.0, 3006.0, "0xtx2", 1)
+    assert find_atomic_arbitrage([buy, sell]) == []
+    same_pool = leg("0xpoolA", WETH, 1.0, 3006.0, "0xtx1", 1)
+    assert find_atomic_arbitrage([buy, same_pool]) == []
+
+
+def test_an_atomic_purchase_across_two_pools_is_not_arbitrage():
+    """Ending with more WETH and less USDC is buying, however it is routed."""
+    buy = leg("0xpoolA", USDC, 3000.0, 1.0, "0xtx", 0)
+    sell = leg("0xpoolB", WETH, 0.9, 2800.0, "0xtx", 1)
+    assert find_atomic_arbitrage([buy, sell]) == []
+
+
+def test_a_triangle_through_three_pools_that_gains_is_arbitrage():
+    dai = "0x" + "d" * 40
+    first = leg("0xpoolA", USDC, 3000.0, 1.0, "0xtx", 0)  # USDC -> WETH
+    second = leg("0xpoolB", WETH, 1.0, 3004.0, "0xtx", 1)  # WETH -> DAI
+    second.token_out = dai
+    third = leg("0xpoolC", dai, 3004.0, 3003.0, "0xtx", 2)  # DAI -> USDC
+    third.token_out = USDC
+    (found,) = find_atomic_arbitrage([first, second, third])
+    assert found.gain == {USDC: pytest.approx(3.0)}
+
+
+def test_a_one_way_route_through_two_pools_is_not_arbitrage():
+    first = leg("0xpoolA", USDC, 3000.0, 0.5, "0xtx", 0)
+    second = leg("0xpoolB", USDC, 3000.0, 0.5, "0xtx", 1)  # both buy WETH
+    assert find_atomic_arbitrage([first, second]) == []
+
+
+def test_without_mev_takes_out_sandwiches_and_arbitrage_alike():
+    front, victim, back = sandwich()
+    buy = leg("0xpoolA", USDC, 3000.0, 1.0, "0xarb", 0)
+    sell = leg("0xpoolB", WETH, 1.0, 3006.0, "0xarb", 1)
+    kept, found = without_mev([front, victim, back, buy, sell])
+    assert kept == [victim]
+    assert (len(found.sandwiches), len(found.arbitrages)) == (1, 1)
