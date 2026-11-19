@@ -95,12 +95,17 @@ def test_security_headers_present(client):
 
 
 def test_trades_endpoint(client, storage):
-    storage.get_pool_trades.return_value = [_trade(1, is_wash=True), _trade(2)]
+    wash = _trade(1, is_wash=True)
+    wash.wash_evidence = {"decided_by": "round_trip", "detectors": [{"summary": "why"}]}
+    storage.get_pool_trades.return_value = [wash, _trade(2)]
     response = client.get(f"/api/v1/pools/1/{POOL}/trades")
     assert response.status_code == 200
     body = response.json()
     assert body["count"] == 2
     assert body["trades"][0]["id"] == 1
+    # Each label comes with its evidence (core/evidence.py).
+    assert body["trades"][0]["wash_evidence"]["decided_by"] == "round_trip"
+    assert body["trades"][1]["wash_evidence"] is None
 
 
 def test_trades_endpoint_wash_only(client, storage):

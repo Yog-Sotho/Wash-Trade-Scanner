@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased] - Phase 6: beyond the state of the art
+
+### Added
+- Evidence for every wash label (`swap_trades.wash_evidence`, migration
+  0003): each detector that fired on the trade, most probative first, with
+  what it saw (a round trip's partner leg, blocks apart and value gap; a
+  position-neutral window's trades and net position; a ring's members, pairs
+  and coverage; ...) and what its hit is worth (measured TPR, FPR upper bound,
+  P(wash | hit)). Served by the trades API, sent with alerts (a "why" line per
+  trade in Slack and email), shown in the panel, and listed per flagged trade
+  by `wash-audit --export json`.
+- `coordinated_trading`: multi-wallet wash trading found as temporal motifs:
+  wallets trading opposite sides within 3 blocks at values within 5%,
+  repeatedly, as a closed group that ends flat (Chainalysis heuristic 2; Gan
+  et al. 2024; Paranjape et al. 2017). It catches the injected rings the
+  snapshot cycle detector never caught, with no false positive on the clean
+  pools (docs/benchmarks.md). Settings `COORDINATION_*`.
+- MEV discrimination (`core/mev.py`): sandwich attackers' legs (front-run, a
+  victim's same-direction swap, back-run selling what the front-run bought,
+  one block) and atomic cross-pool arbitrage are taken out before any
+  detector runs, in audits and in the benchmark alike. Audit results report
+  how many (`excluded_as_mev`). `SANDWICH_AMOUNT_TOLERANCE`.
+- Cross-pool correlation: `wash-audit --related-pool ADDRESS` (API:
+  `related_pools`, up to 9) audits pools of one chain together; round trips,
+  position neutrality and coordination are judged per token pair across them,
+  so wash trading split over pools is seen. A round trip's legs in different
+  pools of one transaction that sold back at a better price are arbitrage and
+  are not paired. Results add a per-pool breakdown (`pools`).
+- Benchmark: cross-pool campaigns (`xpool_round_trip`, `xpool_ring`) in the
+  union of two real USDC/WETH pools over the same blocks, scored per pool and
+  across pools, and gated in CI like every other detector.
+
+### Changed
+- `config/detector_calibration.json`, `evaluation/baseline.json` and
+  `docs/benchmarks.md` regenerated: every detector is measured as the audit
+  runs it, without MEV legs.
+- A tuning record may name a shipped setting other than the tuning rule's
+  pick, with its reason (`evaluation/tuning.json`); the docs render both.
+
 ## [Unreleased] - Phase 5: performance and scale
 
 ### Fixed

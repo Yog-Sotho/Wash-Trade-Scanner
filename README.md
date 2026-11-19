@@ -7,10 +7,14 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
 ## Features
 
 - **Multi‑chain & Multi‑DEX** – instant support for Ethereum, BSC, Polygon, Arbitrum, Optimism, Base, Avalanche, Fantom, Celo, Gnosis, Moonbeam, Aurora, Harmony, Cronos, Metis, Boba, zkSync Era, Polygon zkEVM, Linea, Scroll, Mantle, Kava, Klaytn.
-- **Measured detection** – every detector is benchmarked on real Ethereum pools and labelled wash campaigns, and CI fails if one regresses ([docs/benchmarks.md](docs/benchmarks.md)). On 27,385 honest trades from the most liquid USDC/USDT–WETH pools, the audit labels 0.10% as wash; the Phase 1 rules labelled 78.9%.
+- **Measured detection** – every detector is benchmarked on real Ethereum pools and labelled wash campaigns, and CI fails if one regresses ([docs/benchmarks.md](docs/benchmarks.md)). On 27,385 honest trades from the most liquid USDC/USDT–WETH pools, the audit labels 0.07% as wash (the Phase 1 rules labelled 78.9%), while finding 86% of the injected wash trades.
   - Trades are attributed to the **transaction sender** (`tx_from`), not to the router or bot contract named in the swap event
   - **Round trips** (A‑A wash trading, after Chainalysis's heuristic 1): a trader buying and selling back the same value within 50 blocks
   - **Position neutrality** (Victor & Weintraud, WWW '21; Gan et al., ACM TOIT 2024) – a trader, or a funding‑linked group of traders, ending flat in every token while trading both sides
+  - **Coordinated trading** (temporal motifs, after Chainalysis's heuristic 2) – wallets trading opposite sides of a pool within 3 blocks at matched values, repeatedly, as a closed group that ends flat: rings with no observable funding link
+  - **MEV is not wash** – sandwich attackers' legs and atomic arbitrage are recognised by structure and taken out before detection
+  - **Cross‑pool** – `--related-pool` audits pools of one token pair together, so wash trading split over them is seen
+  - **Evidence for every label** – each flagged trade says which detectors fired, what they saw (the partner leg, the window, the ring's members) and what each hit is worth; in the API, alerts and exports
   - **Calibrated scoring** – each detector's measured true/false‑positive rates turn a hit into P(wash), so noisy signals (repeated sizes, high frequency, volume outliers, closed clusters) inform the score but cannot label a trade on their own
   - Entity clustering via on‑chain funding traces (uses `trace_filter` or an opt‑in, capped block scan); every audit reports what it examined (`funding_clusters`)
 - **Measured performance** – a full audit of 10,000 real trades in 41 s and a re‑audit in 3 s, one RPC request per block, streamed and resumable ([docs/performance.md](docs/performance.md)).
@@ -128,18 +132,20 @@ The benchmark measures each detector's true‑positive rate and its clean‑pool
 false‑positive rate (95% upper bound), shipped in `config/detector_calibration.json`.
 A hit is scored as P(wash | hit) by Bayes' rule with prior `WASH_PRIOR` (1%), and a
 trade is labelled wash only if that reaches `SUSPICIOUS_ACTIVITY_THRESHOLD` (0.8).
-Today `round_trip` and `position_neutral` are precise enough to label on their own;
+Today `round_trip`, `position_neutral` and `coordinated_trading` are precise enough to label on their own;
 the other signals raise a trade's score without labelling it. CI fails if the
 shipped calibration no longer matches what the detectors measure.
 
 ### Known limits
 
 Measured, and listed in [docs/benchmarks.md](docs/benchmarks.md): round trips
-spread over more than 50 blocks and multi‑wallet rings without observable funding
-links are mostly missed; on the documented NexFundAI market (the FBI sting
-token), whose wash trading Kaiko attributes to many co‑funded wallets, the audit
-labels nothing; and the Isolation Forest does no better than random ranking on
-these patterns.
+spread over more than 50 blocks are mostly missed; rings are caught when their
+matched legs land within 3 blocks and 5% in value (the documented heuristic), and
+a ring timed or sized more loosely is not; on the documented NexFundAI market
+(the FBI sting token), whose wash trading Kaiko attributes to many co‑funded
+wallets, the audit labels nothing; the Isolation Forest does no better than
+random ranking on these patterns; and wash trading split across chains is not
+correlated (there is no labelled cross‑chain data to measure it on).
 
 ### Reporting
 

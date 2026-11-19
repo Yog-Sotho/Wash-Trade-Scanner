@@ -30,16 +30,27 @@ The system follows a modular, async‑first design built around the following co
 │  (volume, frequency, graph metrics)       │
 └─────────┬────────────────────────────────┘
           │
+          ▼
+┌──────────────────────────────────────────┐
+│  MEV filter (core/mev.py)                 │
+│  Sandwich attackers' legs and atomic      │
+│  cross-pool arbitrage are taken out       │
+│  before any detector sees them            │
+└─────────┬────────────────────────────────┘
           ├─────────────────────────────┐
           ▼                             ▼
 ┌──────────────────┐          ┌──────────────────┐
 │ HeuristicDetector │          │ MLDetector        │
 │ (rule‑based, by   │          │ (Isolation Forest)│
 │  transaction      │          │                   │
-│  sender)          │          │                   │
+│  sender; per pool │          │                   │
+│  or, with related │          │                   │
+│  pools, per token │          │                   │
+│  pair)            │          │                   │
 └────────┬─────────┘          └────────┬─────────┘
           │ hits scored as P(wash) from measured rates
-          │ (core/calibration.py); labelled at ≥ threshold
+          │ (core/calibration.py); labelled at ≥ threshold,
+          │ each label with its evidence (core/evidence.py)
           └─────────┬───────────────────┘
                     ▼
           ┌──────────────────┐

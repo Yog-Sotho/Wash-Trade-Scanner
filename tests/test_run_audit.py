@@ -101,6 +101,45 @@ async def test_a_failed_clustering_is_reported_with_the_audit():
 
 
 @pytest.mark.asyncio
+async def test_trades_taken_out_as_mev_are_reported_not_counted_as_hits():
+    from prometheus_client import REGISTRY
+
+    from core.heuristics import EXCLUDED_MEV
+
+    def hits(detector: str) -> float:
+        labels = {"detector": detector}
+        return REGISTRY.get_sample_value("wash_audit_detector_hits_total", labels) or 0.0
+
+    before = hits(EXCLUDED_MEV)
+    with (
+        patch("scripts.run_audit.MultiChainIngestor") as MockIngestor,
+        patch("scripts.run_audit.FeatureEngineer"),
+        patch("scripts.run_audit.HeuristicDetector") as MockHeuristics,
+        patch("scripts.run_audit.MLDetector"),
+        patch("scripts.run_audit.EntityClusterer") as MockClusterer,
+    ):
+        MockIngestor.return_value.initialize = AsyncMock()
+        MockIngestor.return_value.audit_pool = AsyncMock(return_value=0)
+        MockClusterer.return_value.cluster_addresses = AsyncMock(return_value=[])
+        MockHeuristics.return_value.run_all_heuristics = AsyncMock(
+            return_value=([], {EXCLUDED_MEV: 6, "round_trip": 0})
+        )
+        runner = AuditRunner()
+        runner.storage = AsyncMock(spec=Storage)
+        runner.storage.get_pool_trades.return_value = []
+        session_cm = AsyncMock()
+        session_cm.__aenter__.return_value = AsyncMock()
+        runner.storage.get_session.return_value = session_cm
+
+        result = await runner.run_audit(
+            AuditParameters(chain_id=1, pool_address="0x" + "b" * 40, use_ml=False)
+        )
+
+    assert result["excluded_as_mev"] == {"sandwich": 6, "arbitrage": 0}
+    assert hits(EXCLUDED_MEV) == before  # not a detector
+
+
+@pytest.mark.asyncio
 async def test_run_audit_reports_severity_and_method_breakdown():
     from datetime import datetime
 

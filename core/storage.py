@@ -20,6 +20,7 @@ from sqlalchemy import (
     delete,
     func,
     inspect,
+    or_,
     select,
     text,
     update,
@@ -264,14 +265,33 @@ class Storage:
                     and_(
                         SwapTrade.chain_id == chain_id,
                         SwapTrade.pool_address == pool_address,
-                        SwapTrade.is_wash_trade.is_(True),
+                        or_(
+                            SwapTrade.is_wash_trade.is_(True), SwapTrade.wash_evidence.is_not(None)
+                        ),
                     )
                 )
-                .values(is_wash_trade=False, wash_trade_score=0.0, detection_method=None)
+                .values(
+                    is_wash_trade=False,
+                    wash_trade_score=0.0,
+                    detection_method=None,
+                    wash_evidence=None,
+                )
             )
             result = cast("CursorResult[Any]", await session.execute(stmt))
             await session.commit()
             return result.rowcount
+
+    async def save_trade_labels(self, labels: list[dict[str, Any]]) -> int:
+        """Write each trade's label and evidence: dicts of id, is_wash_trade,
+        wash_trade_score, detection_method and wash_evidence. One statement,
+        executed once per trade (labels differ per trade now that each
+        carries its own evidence)."""
+        if not labels:
+            return 0
+        async with await self.get_session() as session:
+            await session.execute(update(SwapTrade), labels)
+            await session.commit()
+        return len(labels)
 
     async def update_trade_labels(
         self,

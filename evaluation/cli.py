@@ -100,7 +100,11 @@ def regressions(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
 
 
 def _baseline_view(results: dict[str, Any]) -> dict[str, Any]:
-    """The subset of results the regression gate compares."""
+    """The subset of results the regression gate compares; cross-pool
+    detectors as `cross_pool:<name>`."""
+    detectors = dict(results["detectors"])
+    for name, d in ((results.get("cross_pool") or {}).get("detectors") or {}).items():
+        detectors[f"cross_pool:{name}"] = d
     return {
         "seeds": results["seeds"],
         "detectors": {
@@ -108,7 +112,7 @@ def _baseline_view(results: dict[str, Any]) -> dict[str, Any]:
                 "overall": {k: d["overall"][k] for k in ("precision", "recall", "f1", "pr_auc")},
                 "clean_pools": {"all": {"fpr": d["clean_pools"]["all"]["fpr"]}},
             }
-            for name, d in results["detectors"].items()
+            for name, d in detectors.items()
         },
     }
 

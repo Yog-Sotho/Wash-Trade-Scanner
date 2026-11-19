@@ -143,7 +143,7 @@ class RealtimeMonitor:
             window_trades = list(result.scalars().all())
 
             before = {
-                t.id: (t.is_wash_trade, t.wash_trade_score, t.detection_method)
+                t.id: (t.is_wash_trade, t.wash_trade_score, t.detection_method, t.wash_evidence)
                 for t in window_trades
             }
             wash_trades, stats = await self.detector.run_detectors_on_trades(window_trades, session)
@@ -157,7 +157,7 @@ class RealtimeMonitor:
             # alerted on or known, and must not be announced again.
             newly_flagged = {t.id for t in wash_trades if not before[t.id][0]}
             for trade in window_trades:
-                was_wash, score, method = before[trade.id]
+                was_wash, score, method, evidence = before[trade.id]
                 keep = trade.id not in flagged or (
                     was_wash and (score or 0.0) >= (trade.wash_trade_score or 0.0)
                 )
@@ -165,6 +165,7 @@ class RealtimeMonitor:
                     trade.is_wash_trade = was_wash
                     trade.wash_trade_score = score
                     trade.detection_method = method
+                    trade.wash_evidence = evidence
             if wash_trades:
                 # Persist the new labels on this session's ORM rows.
                 await session.commit()

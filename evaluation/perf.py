@@ -389,7 +389,7 @@ class Meter:
         "clear_labels": ("core.storage", "Storage", "clear_pool_labels"),
         "clustering": ("core.entity_clustering", "EntityClusterer", "cluster_addresses"),
         "heuristics": ("core.heuristics", "HeuristicDetector", "run_all_heuristics"),
-        "write_labels": ("core.storage", "Storage", "update_trade_labels"),
+        "write_labels": ("core.storage", "Storage", "save_trade_labels"),
         "ml": ("core.ml_detector", "MLDetector", "detect_wash_trades"),
         "audit_log": ("core.storage", "Storage", "create_audit_log"),
     }

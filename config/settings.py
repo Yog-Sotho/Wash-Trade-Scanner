@@ -118,6 +118,24 @@ class Settings(BaseSettings):
     POSITION_NEUTRAL_MARGIN: float = Field(0.001, ge=0.0, le=0.5)
     POSITION_NEUTRAL_MIN_TRADES: int = Field(4, ge=2, le=1000)
 
+    # Coordinated trading: temporal motifs of multi-wallet wash trading
+    # (Chainalysis heuristic 2; Gan et al., TOIT 2024; Paranjape et al., WSDM '17).
+    # A matched pair is two wallets trading opposite sides within
+    # COORDINATION_MAX_BLOCKS at values within COORDINATION_VALUE_TOLERANCE. A
+    # group is flagged when it made COORDINATION_MIN_PAIRS such pairs, each
+    # member's trades are at least COORDINATION_MIN_COVERAGE matched, and the
+    # group's net change in every token is within COORDINATION_NET_MARGIN of
+    # what it moved. Chosen on the harness's development seeds.
+    COORDINATION_MAX_BLOCKS: int = Field(3, ge=0, le=1000)
+    COORDINATION_VALUE_TOLERANCE: float = Field(0.05, ge=0.0, le=0.5)
+    COORDINATION_MIN_PAIRS: int = Field(3, ge=2, le=1000)
+    COORDINATION_MIN_COVERAGE: float = Field(0.8, ge=0.0, le=1.0)
+    COORDINATION_NET_MARGIN: float = Field(0.1, ge=0.0, le=1.0)
+
+    # MEV discrimination: a sandwich's back-run sells what its front-run bought,
+    # within this share (core/mev.py; Torres et al. 2021, Qin et al. 2022).
+    SANDWICH_AMOUNT_TOLERANCE: float = Field(0.1, ge=0.0, le=1.0)
+
     # Closed-Cluster Detection (network-based, 2025)
     CLOSED_CLUSTER_INTERNAL_RATIO: float = Field(0.9, ge=0.5, le=1.0)
     CLOSED_CLUSTER_MIN_TRADES: int = Field(6, ge=2, le=1000)

@@ -12,7 +12,7 @@ import logging
 import signal
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,13 +27,14 @@ from core import metrics
 from core.entity_clustering import EntityClusterer, FundingCoverage
 from core.exceptions import AuditCancelledError, WashTradeError
 from core.feature_engineer import FeatureEngineer
-from core.heuristics import HeuristicDetector
+from core.heuristics import EXCLUDED_PREFIX, HeuristicDetector
 from core.ingestor import MultiChainIngestor
 from core.log_config import configure_logging
 from core.ml_detector import MLDetector
 from core.redaction import redact
 from core.storage import Storage
 from core.validators import AuditParameters
+from models.schemas import SwapTrade, SwapTradeResponse
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer(__name__)
@@ -108,7 +109,10 @@ class AuditRunner:
 
         assert self.storage is not None, "call initialize() first"
         feature_engineer = FeatureEngineer(self.storage)
-        heuristic_detector = HeuristicDetector()
+        pools = [params.pool_address, *params.related_pools]
+        # With related pools, round trips, neutrality and coordination are
+        # judged per token pair across them (cross-pool correlation).
+        heuristic_detector = HeuristicDetector(cross_pool=bool(params.related_pools))
         ml_detector = MLDetector(self.storage, feature_engineer)
         entity_clusterer = EntityClusterer(self.storage)
 
@@ -128,18 +132,18 @@ class AuditRunner:
         if self._shutdown_event.is_set():
             raise AuditCancelledError("Audit cancelled by shutdown signal")
 
-        logger.info(
-            f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}"
-        )
-        trades_synced = await ingestor.audit_pool(
-            chain_id=params.chain_id,
-            pool_address=params.pool_address,
-            start_block=params.start_block,
-            end_block=params.end_block,
-            # Checked between ingestion batches: SIGINT/SIGTERM stops the sync
-            # within one batch, keeping the batches already saved.
-            stop=self._shutdown_event,
-        )
+        trades_synced = 0
+        for pool in pools:
+            logger.info(f"Syncing historical data for pool {pool} on chain {params.chain_id}")
+            trades_synced += await ingestor.audit_pool(
+                chain_id=params.chain_id,
+                pool_address=pool,
+                start_block=params.start_block,
+                end_block=params.end_block,
+                # Checked between ingestion batches: SIGINT/SIGTERM stops the
+                # sync within one batch, keeping the batches already saved.
+                stop=self._shutdown_event,
+            )
         logger.info(f"Synced {trades_synced} trades")
 
         flagged_trade_ids: set[int] = set()
@@ -147,16 +151,17 @@ class AuditRunner:
 
         # An audit's labels are this run's: clear what earlier runs (possibly
         # with other detectors or calibration) left behind.
-        await self.storage.clear_pool_labels(params.chain_id, params.pool_address)
+        for pool in pools:
+            await self.storage.clear_pool_labels(params.chain_id, pool)
 
         funding = FundingCoverage("not_run", reason="heuristics are off")
+        excluded_mev: dict[str, int] = {"sandwich": 0, "arbitrage": 0}
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
                 logger.info("Clustering addresses by funding links...")
                 try:
-                    await entity_clusterer.cluster_addresses(
-                        params.chain_id, params.pool_address, session
-                    )
+                    for pool in reversed(pools):  # the audited pool's coverage last
+                        await entity_clusterer.cluster_addresses(params.chain_id, pool, session)
                     funding = entity_clusterer.coverage or FundingCoverage("skipped")
                 except Exception as exc:
                     logger.warning(f"Entity clustering skipped: {exc}")
@@ -166,25 +171,26 @@ class AuditRunner:
 
                 logger.info("Running heuristic detection...")
                 heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
-                    params.chain_id, params.pool_address, session
+                    params.chain_id, params.pool_address, session, params.related_pools
                 )
                 if heuristics_wash_trades:
-                    # Persist each trade's real detector score and method instead
-                    # of flattening everything to one label.
-                    by_label: dict[tuple[str, float], list[int]] = defaultdict(list)
-                    for t in heuristics_wash_trades:
-                        method = t.detection_method or "heuristic"
-                        score = t.wash_trade_score or 0.8
-                        by_label[(method, score)].append(t.id)
-                        flagged_trade_ids.add(t.id)
-                    for (method, score), trade_ids in by_label.items():
-                        await self.storage.update_trade_labels(
-                            trade_ids,
-                            is_wash_trade=True,
-                            wash_trade_score=score,
-                            detection_method=method,
-                        )
+                    # Each trade's own score, deciding method and evidence.
+                    await self.storage.save_trade_labels(
+                        [
+                            {
+                                "id": t.id,
+                                "is_wash_trade": True,
+                                "wash_trade_score": t.wash_trade_score or 0.0,
+                                "detection_method": t.detection_method or "heuristic",
+                                "wash_evidence": t.wash_evidence,
+                            }
+                            for t in heuristics_wash_trades
+                        ]
+                    )
+                    flagged_trade_ids.update(t.id for t in heuristics_wash_trades)
                     detection_methods.extend(stats.keys())
+                for key in [k for k in stats if k.startswith(EXCLUDED_PREFIX)]:
+                    excluded_mev[key.removeprefix(EXCLUDED_PREFIX)] = stats.pop(key)
                 detector_hits.update(stats)
 
             if use_ml:
@@ -192,9 +198,11 @@ class AuditRunner:
                 # The model's own measured threshold and rates decide (see
                 # MLDetector.detect_wash_trades); a fixed 0.8 was unreachable
                 # for an Isolation Forest's probabilities (at most ~0.73).
-                ml_wash_trades = await ml_detector.detect_wash_trades(
-                    params.chain_id, params.pool_address
-                )
+                ml_wash_trades = [
+                    trade
+                    for pool in pools
+                    for trade in await ml_detector.detect_wash_trades(params.chain_id, pool)
+                ]
                 detector_hits["ml"] = len(ml_wash_trades)
                 if ml_wash_trades:
                     # detect_wash_trades persists its labels itself.
@@ -205,7 +213,10 @@ class AuditRunner:
 
         # Re-fetch so volume metrics reflect the labels persisted by this run,
         # not the pre-detection snapshot.
-        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
+        by_pool = {
+            pool: await self.storage.get_pool_trades(params.chain_id, pool) for pool in pools
+        }
+        trades = [trade for pool_trades in by_pool.values() for trade in pool_trades]
         risk_metrics = compute_risk_metrics(trades)
 
         duration = time.time() - start_time
@@ -222,6 +233,7 @@ class AuditRunner:
             parameters_used={
                 "use_ml": use_ml,
                 "use_heuristics": params.use_heuristics,
+                "related_pools": params.related_pools,
             },
             results_summary=risk_metrics,
         )
@@ -247,6 +259,7 @@ class AuditRunner:
                 duration,
                 export_format,
                 export_path,
+                flagged_trades=[t for t in trades if t.is_wash_trade],
             )
 
         # Counted once the audit has succeeded, export included.
@@ -267,6 +280,17 @@ class AuditRunner:
             # What funding-link clustering examined: no clusters means no
             # links only when this is complete.
             "funding_clusters": funding.as_dict(),
+            # Trades taken out as MEV before detection, by kind (core/mev.py).
+            "excluded_as_mev": excluded_mev,
+            # Audited together with the pool, per token pair (cross-pool).
+            "related_pools": params.related_pools,
+            "pools": {
+                pool: {
+                    "trades": len(pool_trades),
+                    "wash_trades_detected": sum(1 for t in pool_trades if t.is_wash_trade),
+                }
+                for pool, pool_trades in by_pool.items()
+            },
         }
 
     def _print_results(
@@ -318,6 +342,7 @@ class AuditRunner:
         duration: float,
         export_format: str,
         export_path: str | None,
+        flagged_trades: list[SwapTrade] | None = None,
     ) -> None:
         results = {
             "chain_id": params.chain_id,
@@ -328,6 +353,11 @@ class AuditRunner:
             "detection_methods": detection_methods,
             "duration": duration,
             "timestamp": datetime.now(UTC).isoformat(),
+            # Every labelled trade with the evidence for its label (JSON only).
+            "flagged_trades": [
+                SwapTradeResponse.model_validate(t).model_dump(mode="json")
+                for t in sorted(flagged_trades or [], key=lambda t: (t.block_number, t.log_index))
+            ],
         }
 
         if export_format == "json":
@@ -354,6 +384,13 @@ async def main() -> int:
     parser.add_argument("--end-block", type=int, help="Ending block number")
     parser.add_argument("--no-ml", action="store_true", help="Disable ML detection")
     parser.add_argument("--no-heuristics", action="store_true", help="Disable heuristic detection")
+    parser.add_argument(
+        "--related-pool",
+        action="append",
+        metavar="ADDRESS",
+        help="Another pool of the same chain to audit with this one, judging each token "
+        "pair across the pools (repeatable, at most 9)",
+    )
     parser.add_argument("--export", choices=["json", "csv"], help="Export results to file")
     parser.add_argument("--export-path", type=str, help="Path for export file")
     args = parser.parse_args()
@@ -366,6 +403,7 @@ async def main() -> int:
             end_block=args.end_block,
             use_ml=not args.no_ml,
             use_heuristics=not args.no_heuristics,
+            related_pools=args.related_pool or [],
         )
     except PydanticValidationError as exc:
         logger.error(f"Invalid parameters: {exc}")

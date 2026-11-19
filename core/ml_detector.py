@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from config.settings import settings
 from core.advanced_heuristics import flag_trade
 from core.calibration import DetectorCalibration
+from core.evidence import merge_bundle, trade_ref, trader_address
 from core.exceptions import InsufficientDataError, ModelNotTrainedError
 from core.feature_engineer import FeatureEngineer
 from core.storage import Storage
@@ -215,6 +216,29 @@ class MLDetector:
         total = sum(feature_importance.values()) or 1.0
         return {k: v / total for k, v in feature_importance.items()}
 
+    def _evidence(
+        self, trade: SwapTrade, anomaly: float, threshold: float, probability: float
+    ) -> dict[str, Any]:
+        """The model's entry in a trade's evidence bundle (core/evidence.py)."""
+        return {
+            "detector": "ml_isolation_forest",
+            "probability": round(probability, 6),
+            "tpr": self.metrics.get("tpr"),
+            "fpr_upper": self.metrics.get("fpr_upper"),
+            "entity": trader_address(trade),
+            "summary": (
+                f"Isolation Forest anomaly probability {anomaly:.3f}, at or above the "
+                f"threshold {threshold:.3f} measured when the model was trained"
+            ),
+            "details": {
+                "anomaly_probability": round(anomaly, 6),
+                "threshold": threshold,
+                "features": list(self.feature_columns),
+            },
+            "trades": [trade_ref(trade)],
+            "trades_total": 1,
+        }
+
     async def detect_wash_trades(
         self,
         chain_id: int,
@@ -272,6 +296,12 @@ class MLDetector:
                 # flag_trade keeps a higher-confidence heuristic label if one
                 # was already persisted for this trade.
                 flag_trade(trade, wash_probability, "ml_isolation_forest")
+                trade.wash_evidence = merge_bundle(
+                    trade.wash_evidence,
+                    self._evidence(trade, prob, threshold, wash_probability),
+                    prior=settings.WASH_PRIOR,
+                    threshold=settings.SUSPICIOUS_ACTIVITY_THRESHOLD,
+                )
                 wash_trades.append(trade)
 
             if wash_trades:

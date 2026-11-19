@@ -138,6 +138,17 @@ and then the only way is to fetch every block of the window, one request each.
   time with a fixed 10 ms sleep, bypassing both. Each block is retried, and
   blocks that still fail are counted instead of silently skipped.
 
+## Since Phase 6
+
+Phase 6 added evidence bundles, the `coordinated_trading` detector and the MEV
+filter to every audit. On the same benchmark and machine: first audit
+41.6 s, re-audit 3.2 s. The heuristics stage takes
+1.1 s instead of 0.8 s. Labels and their evidence are
+written in one statement (27 SQL statements in all, was 28).
+The audit labels 6 of this clean pool's trades as wash, instead of
+10. The raw run is `phase6` in
+[`evaluation/perf_results.json`](../evaluation/perf_results.json).
+
 ## Method
 
 - **Pool.** The first 10,000 trades (blocks 26,300,001–26,304,335) of the

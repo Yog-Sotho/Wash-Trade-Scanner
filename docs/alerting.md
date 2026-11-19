@@ -39,8 +39,8 @@ Each sink is on when its address is set; any combination works.
 | Sink | Settings | Sends |
 |---|---|---|
 | Webhook | `ALERT_WEBHOOK_URL` (http or https), optional `ALERT_WEBHOOK_SECRET` | The alert as JSON (below), signed when the secret is set |
-| Slack | `ALERT_SLACK_WEBHOOK_URL` (an [incoming webhook](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/), https) | One message: summary and up to 10 trades |
-| Email | `ALERT_EMAIL_TO` (comma-separated), `ALERT_EMAIL_FROM`, `ALERT_SMTP_HOST`, `ALERT_SMTP_PORT` (587), `ALERT_SMTP_USERNAME`, `ALERT_SMTP_PASSWORD`, `ALERT_SMTP_TLS` (`starttls`, `ssl` or `none`) | One plain-text email: summary and up to 10 trades |
+| Slack | `ALERT_SLACK_WEBHOOK_URL` (an [incoming webhook](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/), https) | One message: summary and up to 10 trades, each with why it was flagged |
+| Email | `ALERT_EMAIL_TO` (comma-separated), `ALERT_EMAIL_FROM`, `ALERT_SMTP_HOST`, `ALERT_SMTP_PORT` (587), `ALERT_SMTP_USERNAME`, `ALERT_SMTP_PASSWORD`, `ALERT_SMTP_TLS` (`starttls`, `ssl` or `none`) | One plain-text email: summary and up to 10 trades, each with why it was flagged |
 
 The server refuses to start with `ALERT_EMAIL_TO` set but no SMTP host or
 sender, or with a chain id in `MONITOR_POOLS` that does not exist. With
@@ -66,7 +66,8 @@ they are redacted from every log line, like the RPC URLs.
   "trades": [
     {"id": 41, "transaction_hash": "0x...", "block_number": 201, "tx_from": "0x...",
      "volume_usd": 1000.0, "is_wash_trade": true, "wash_trade_score": 0.97,
-     "detection_method": "round_trip", "...": "every field of the API's trade object"}
+     "detection_method": "round_trip", "wash_evidence": {"decided_by": "round_trip", "...": "..."},
+     "...": "every field of the API's trade object"}
   ]
 }
 ```

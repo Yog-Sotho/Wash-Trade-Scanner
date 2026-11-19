@@ -126,6 +126,7 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     assert result["wash_trades_detected"] == 6
     # The fake node, like most hosted ones, has no trace_filter: the audit says
     # its funding links were not looked for.
+    assert result["excluded_as_mev"] == {"sandwich": 0, "arbitrage": 0}  # none here
     assert result["funding_clusters"]["method"] == "skipped"
     assert result["funding_clusters"]["complete"] is False
 
@@ -150,6 +151,16 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     expected_score = wash_probability("round_trip", settings.WASH_PRIOR)
     assert expected_score >= settings.SUSPICIOUS_ACTIVITY_THRESHOLD
     assert all(t.wash_trade_score == pytest.approx(expected_score) for t in trades[:6])
+    # Every label is stored with its evidence: the round trip's two legs (the
+    # partner leg found on chain), their gap, and what the hit is worth.
+    for trade in trades[:6]:
+        entry = trade.wash_evidence["detectors"][0]
+        assert trade.wash_evidence["decided_by"] == "round_trip"
+        assert entry["probability"] == pytest.approx(expected_score, rel=1e-5)
+        assert trade.transaction_hash in [leg["tx"] for leg in entry["trades"]]
+        assert entry["details"]["round_trips_by_trader"] == 3
+        assert all(leg["trader"] == A for leg in entry["trades"])
+    assert all(t.wash_evidence is None for t in trades[6:])
 
     metrics = result["risk_metrics"]
     assert metrics["total_volume_usd"] == pytest.approx(8985.0)
@@ -195,7 +206,17 @@ async def test_reaudit_clears_labels_the_current_detectors_do_not_give(pg_storag
     await _run_audit(pg_storage)
     trades = await _stored_trades(pg_storage)
     bot_swap = next(t for t in trades if t.tx_from == E)
-    await pg_storage.update_trade_labels([bot_swap.id], True, 1.0, "self_trading")
+    await pg_storage.save_trade_labels(
+        [
+            {
+                "id": bot_swap.id,
+                "is_wash_trade": True,
+                "wash_trade_score": 1.0,
+                "detection_method": "self_trading",
+                "wash_evidence": {"decided_by": "self_trading", "detectors": []},
+            }
+        ]
+    )
 
     result = await _run_audit(pg_storage)
 
@@ -203,6 +224,7 @@ async def test_reaudit_clears_labels_the_current_detectors_do_not_give(pg_storag
     relabelled = next(t for t in await _stored_trades(pg_storage) if t.tx_from == E)
     assert relabelled.is_wash_trade is False
     assert relabelled.detection_method is None
+    assert relabelled.wash_evidence is None  # stale evidence goes with the stale label
 
 
 async def test_api_serves_audited_pool(pg_storage, chain):
@@ -383,3 +405,72 @@ async def test_realtime_monitor_ingests_new_swaps_and_alerts(pg_storage, chain, 
 
     again, _ = await monitor.poll_once()  # no new blocks
     assert again == []
+
+
+async def test_the_json_export_lists_each_flagged_trade_with_its_evidence(
+    pg_storage, chain, tmp_path
+):
+    import json
+
+    _add_scenario(chain)
+    runner = AuditRunner()
+    runner.storage = pg_storage
+    params = AuditParameters(
+        chain_id=1, pool_address=POOL_CHECKSUMMED, start_block=100, end_block=130, use_ml=False
+    )
+    path = tmp_path / "audit.json"
+    await runner.run_audit(params, export_format="json", export_path=str(path))
+
+    exported = json.loads(path.read_text())
+    flagged = exported["flagged_trades"]
+    assert len(flagged) == exported["wash_trades_detected"] == 6
+    assert [t["block_number"] for t in flagged] == sorted(t["block_number"] for t in flagged)
+    assert all(t["wash_evidence"]["decided_by"] == "round_trip" for t in flagged)
+
+
+POOL_2 = "0x" + "5" * 40  # a second USDC/WETH pool
+
+
+async def test_round_trips_split_over_two_pools_are_found_only_when_audited_together(
+    pg_storage, chain
+):
+    """A buys in one pool and sells back in the other, three times, switching
+    pools each time: each pool alone holds at most one of A's round trips,
+    below the two the detector requires; audited together, all three
+    (roadmap Phase 6, cross-pool correlation)."""
+    chain.set_pool_tokens(POOL_2, USDC, WETH)
+    for n, block in enumerate((101, 110, 120)):
+        first, second = (POOL, POOL_2) if n % 2 == 0 else (POOL_2, POOL)
+        chain.add_v2_swap(block, T0 + 12 * (block - 101), first, ROUTER, A, SELL_USDC, A)
+        chain.add_v2_swap(block + 2, T0 + 12 * (block - 99), second, ROUTER, A, SELL_BACK, A)
+
+    runner = AuditRunner()
+    runner.storage = pg_storage
+    alone = await runner.run_audit(
+        AuditParameters(
+            chain_id=1, pool_address=POOL_CHECKSUMMED, start_block=100, end_block=130, use_ml=False
+        )
+    )
+    assert alone["wash_trades_detected"] == 0
+
+    together = await runner.run_audit(
+        AuditParameters(
+            chain_id=1,
+            pool_address=POOL_CHECKSUMMED,
+            start_block=100,
+            end_block=130,
+            use_ml=False,
+            related_pools=[POOL_2],
+        )
+    )
+    assert together["wash_trades_detected"] == 6
+    assert together["related_pools"] == [POOL_2]
+    assert together["pools"] == {
+        POOL: {"trades": 3, "wash_trades_detected": 3},
+        POOL_2: {"trades": 3, "wash_trades_detected": 3},
+    }
+    trades = await _stored_trades(pg_storage)
+    assert all(t.is_wash_trade and t.detection_method == "round_trip" for t in trades)
+    legs = trades[0].wash_evidence["detectors"][0]["trades"]
+    assert {leg["tx"] for leg in legs} <= {t.transaction_hash for t in trades}
+    assert len({t.pool_address for t in trades}) == 2

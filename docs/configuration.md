@@ -75,6 +75,23 @@ regression baseline match.
 | `POSITION_NEUTRAL_MARGIN`           | Max net change in every token, relative to the amount moved, to call an entity flat    | `0.001` †    |
 | `POSITION_NEUTRAL_MIN_TRADES`       | Minimum trades by an entity in a window before it can be flagged                       | `4` †        |
 
+### Coordinated trading and MEV
+
+| Variable                            | Description                                                                          | Default      |
+|-------------------------------------|--------------------------------------------------------------------------------------|--------------|
+| `COORDINATION_MAX_BLOCKS`           | Max blocks between two wallets' opposite trades to count as a matched pair            | `3` ‡        |
+| `COORDINATION_VALUE_TOLERANCE`      | Max relative value difference of a matched pair                                       | `0.05`       |
+| `COORDINATION_MIN_PAIRS`            | Matched pairs a group of wallets must make to be flagged                              | `3` ‡        |
+| `COORDINATION_MIN_COVERAGE`         | Share of each member's trades that must be pairs with the group                       | `0.8` ‡      |
+| `COORDINATION_NET_MARGIN`           | Max net change of the group in every token, relative to the amount moved              | `0.1`        |
+| `SANDWICH_AMOUNT_TOLERANCE`         | Max relative difference between what a sandwich's front-run bought and its back-run sold | `0.1`     |
+
+‡ Searched by `python -m evaluation.tune`; the shipped values are not its pick,
+which costs 16 clean-pool false positives for 1.3 points of recall
+([benchmarks.md](benchmarks.md#parameter-selection)). The window and the value
+tolerance sit at the documented heuristic's 3 blocks and 5%: narrower misses
+the injected rings, wider adds false positives.
+
 ### Supporting signals
 
 | Variable                            | Description                                                                       | Default      |

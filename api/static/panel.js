@@ -24,6 +24,15 @@ const SEVERITY_COLOR = {
   CRITICAL: "var(--status-critical)",
 };
 
+/* Why a trade is labelled wash: each detector that fired, most probative
+   first (core/evidence.py), as plain text for a tooltip. */
+function evidenceText(bundle) {
+  if (!bundle || !bundle.detectors || !bundle.detectors.length) return "";
+  return bundle.detectors
+    .map((d) => `${d.detector} (P=${Number(d.probability).toFixed(2)}): ${d.summary}`)
+    .join("\n");
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -394,7 +403,7 @@ async function loadPoolTrades() {
       el("td", { class: "addr", text: shortAddr(trade.recipient), title: trade.recipient }),
       el("td", { class: "num", text: trade.volume_usd == null ? "—" : usd.format(trade.volume_usd) }),
       el("td", trade.is_wash_trade
-        ? { class: "flag", text: trade.detection_method || "wash" }
+        ? { class: "flag", text: trade.detection_method || "wash", title: evidenceText(trade.wash_evidence) }
         : { class: "flag-ok", text: "clean" }),
       el("td", { class: "num", text: trade.is_wash_trade ? trade.wash_trade_score.toFixed(2) : "—" }),
     );
@@ -462,10 +471,12 @@ $("#monitor-form").addEventListener("submit", (event) => {
     if (event_.type === "alert") {
       monitor.alerts += 1;
       const d = event_.data;
+      const why = d.wash_evidence && d.wash_evidence.detectors && d.wash_evidence.detectors[0];
       feedItem("alert",
         `${d.detection_method} score ${Number(d.wash_trade_score).toFixed(2)} ` +
         `${shortAddr(d.sender)} → ${shortAddr(d.recipient)} ` +
-        (d.volume_usd != null ? usd.format(d.volume_usd) : ""));
+        (d.volume_usd != null ? usd.format(d.volume_usd) : "") +
+        (why ? ` — ${why.summary}` : ""));
     } else if (event_.type === "stats") {
       monitor.polls += 1;
       feedItem("stats", `block ${event_.data.block}: ${event_.data.new_alerts} new alerts`);

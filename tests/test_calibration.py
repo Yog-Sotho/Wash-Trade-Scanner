@@ -56,6 +56,7 @@ def test_shipped_calibration_covers_every_audit_detector():
     assert set(shipped) == {
         "round_trip",
         "position_neutral",
+        "coordinated_trading",
         "circular_trading",
         "closed_cluster",
         "repeated_amounts",

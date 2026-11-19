@@ -254,6 +254,7 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             end_block=request.end_block,
             use_ml=request.use_ml,
             use_heuristics=request.use_heuristics,
+            related_pools=request.related_pools,
         )
         outcome, task_id = await audits.start(params)
         if outcome == "busy":
