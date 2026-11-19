@@ -167,6 +167,15 @@ class Settings(BaseSettings):
     API_DOCS_ENABLED: bool = Field(True)
     API_HSTS_ENABLED: bool = Field(False)
 
+    # Readiness (GET /health/ready): the database must answer, and so must the
+    # RPC endpoint of each of these chains (comma-separated ids; empty = check
+    # the database only), with its own chain id. Each check gets the timeout;
+    # RPC answers are reused for the cache period so that frequent probes do
+    # not spend RPC quota (0 = probe every time).
+    HEALTH_RPC_CHAIN_IDS: str = Field("1", pattern=r"^\s*(\d+\s*(,\s*\d+\s*)*)?$")
+    HEALTH_CHECK_TIMEOUT_SECONDS: float = Field(5.0, gt=0.0, le=60.0)
+    HEALTH_RPC_CACHE_SECONDS: float = Field(15.0, ge=0.0, le=3600.0)
+
     # Web Panel
     PANEL_ENABLED: bool = Field(True)
     PANEL_SESSION_TTL_MINUTES: int = Field(720, ge=5, le=43200)
@@ -236,6 +245,12 @@ class Settings(BaseSettings):
         if not self.API_KEY_HASHES:
             return set()
         return {h.strip().lower() for h in self.API_KEY_HASHES.split(",") if h.strip()}
+
+    @property
+    def health_rpc_chain_id_list(self) -> list[int]:
+        """Chain ids whose RPC endpoint readiness requires, in order, deduplicated."""
+        ids = [int(part) for part in self.HEALTH_RPC_CHAIN_IDS.split(",") if part.strip()]
+        return list(dict.fromkeys(ids))
 
     @property
     def cors_origins_list(self) -> list[str]:

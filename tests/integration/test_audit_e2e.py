@@ -201,6 +201,34 @@ async def test_api_serves_audited_pool(pg_storage, chain):
     assert len(overview["recent_audits"]) == 1
 
 
+async def test_readiness_against_the_real_database_and_node(pg_storage, chain, monkeypatch):
+    """Ready with PostgreSQL and the node over HTTP JSON-RPC; not ready when
+    a chain's endpoint serves another network."""
+    monkeypatch.setattr(settings, "HEALTH_RPC_CHAIN_IDS", "1")
+    app = create_app(storage=pg_storage)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        ready = await client.get("/health/ready")
+    assert ready.status_code == 200
+    assert {name: check["ok"] for name, check in ready.json()["checks"].items()} == {
+        "database": True,
+        "rpc_1": True,
+    }
+    assert "eth_chainId" in chain.rpc_methods
+
+    # Base's setting points at the Ethereum node: a configuration mistake that
+    # would silently audit the wrong chain.
+    monkeypatch.setattr(settings, "BASE_RPC_URL", chain.rpc_url)
+    monkeypatch.setattr(settings, "HEALTH_RPC_CHAIN_IDS", "1,8453")
+    app = create_app(storage=pg_storage)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        wrong = await client.get("/health/ready")
+    assert wrong.status_code == 503
+    assert wrong.json()["checks"]["rpc_8453"]["reason"] == "wrong_chain"
+    assert wrong.json()["checks"]["rpc_1"]["ok"] is True
+
+
 def _metric(name: str, **labels: str) -> float:
     return REGISTRY.get_sample_value(name, labels) or 0.0
 

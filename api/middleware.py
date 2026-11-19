@@ -27,7 +27,7 @@ REQUEST_ID_HEADER = "X-Request-ID"
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 # Probed every few seconds by the container healthcheck and the metrics
 # scraper: logged at DEBUG so they do not drown the access log.
-_QUIET_PATHS = frozenset({"/health", "/metrics"})
+_QUIET_PATHS = frozenset({"/health", "/health/live", "/health/ready", "/metrics"})
 
 access_logger = logging.getLogger("api.access")
 

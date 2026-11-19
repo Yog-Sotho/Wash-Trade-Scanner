@@ -15,7 +15,7 @@ from web3.types import EventData, LogReceipt
 
 from config.chains import get_chain_config
 from config.settings import settings
-from core.circuit_breaker import CircuitBreakerConfig, shared_breaker
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, shared_breaker
 from core.exceptions import CircuitBreakerOpenError, RPCError
 from core.pricing import PriceOracle
 from core.rpc import InstrumentedHTTPProvider
@@ -60,6 +60,21 @@ class RateLimiter:
             self.calls.append(time.time())
 
 
+def chain_breaker(chain_id: int) -> CircuitBreaker:
+    """The process-wide breaker for a chain's RPC endpoint.
+
+    One per chain for the whole process: audits, monitors and readiness probes
+    calling the same endpoint share its health (core/circuit_breaker.py).
+    """
+    return shared_breaker(
+        f"rpc_{chain_id}",
+        CircuitBreakerConfig(
+            failure_threshold=settings.RPC_MAX_FAILURES,
+            recovery_timeout=settings.RPC_RECOVERY_TIMEOUT,
+        ),
+    )
+
+
 class ChainIngestor:
     """Per-chain blockchain data ingestor."""
 
@@ -74,15 +89,7 @@ class ChainIngestor:
         self.price_oracle = price_oracle or PriceOracle.from_settings()
         self.web3: AsyncWeb3 | None = None
         self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
-        # One breaker per chain for the whole process: audits and monitors
-        # calling the same endpoint share its health (core/circuit_breaker.py).
-        self.circuit_breaker = shared_breaker(
-            f"rpc_{chain_config['chain_id']}",
-            config=CircuitBreakerConfig(
-                failure_threshold=settings.RPC_MAX_FAILURES,
-                recovery_timeout=settings.RPC_RECOVERY_TIMEOUT,
-            ),
-        )
+        self.circuit_breaker = chain_breaker(chain_config["chain_id"])
         self.is_running = False
         self.latest_block = 0
         self.contracts: dict[str, Any] = {}

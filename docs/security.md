@@ -25,7 +25,9 @@ Every step below is a gate: a finding fails the pipeline.
 
 - Multi-stage build: no compiler, pip or setuptools in the runtime image
 - Base image pinned by digest; security fixes it predates are pinned to the fixed Debian package version in the Dockerfile
-- Runs as a non-root user; `HEALTHCHECK` on the API's `/health`
+- Runs as a non-root user; `HEALTHCHECK` on the API's `/health/live`
+- Health probes are unauthenticated and say only up/down and, for readiness,
+  which check failed (a fixed reason word, never an error message or URL)
 
 ## Runtime Security
 

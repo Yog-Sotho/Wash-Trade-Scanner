@@ -40,12 +40,14 @@ from api.auth import (
     require_api_key,
     verify_api_key,
 )
+from api.health import ReadinessChecker
 from api.middleware import (
     REQUEST_ID_HEADER,
     RateLimitMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
+from config.chains import get_chain_config
 from config.settings import settings
 from core.log_config import configure_logging
 from core.realtime_monitor import RealtimeMonitor
@@ -77,6 +79,10 @@ def _validated_pool(pool_address: str) -> str:
 def create_app(storage: Storage | None = None) -> FastAPI:
     """Application factory. Pass `storage` to reuse an existing instance
     (tests inject a mock here); otherwise one is created on startup."""
+    # An unknown chain in HEALTH_RPC_CHAIN_IDS is a configuration error: fail
+    # at startup, not on every readiness probe.
+    for chain_id in settings.health_rpc_chain_id_list:
+        get_chain_config(chain_id)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
@@ -119,9 +125,32 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Storage not initialized")
         return app.state.storage  # type: ignore[no-any-return]
 
+    async def database_answers() -> bool:
+        storage: Storage | None = app.state.storage
+        return storage is not None and await storage.health_check()
+
+    readiness = ReadinessChecker(database_answers)
+
+    # Probes are unauthenticated by design (orchestrators send no API key) and
+    # say nothing beyond up/down and, for readiness, which check failed.
+    @app.get("/health/live")
+    async def health_live() -> dict[str, str]:
+        """Liveness: the process serves requests. Checks no dependency, so a
+        database or RPC outage never gets a working process restarted."""
+        return {"status": "alive"}
+
+    @app.get("/health/ready")
+    async def health_ready(response: Response) -> dict[str, Any]:
+        """Readiness: 200 when the database and each HEALTH_RPC_CHAIN_IDS
+        endpoint answer (see api/health.py), else 503 with the failed checks."""
+        ready, checks = await readiness.check()
+        response.status_code = 200 if ready else 503
+        return {"status": "ready" if ready else "not_ready", "checks": checks}
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        """Liveness + database connectivity. Unauthenticated by design."""
+        """Deprecated: use /health/live or /health/ready. Always 200 while the
+        process runs; the body reports database connectivity."""
         storage = get_storage()
         db_ok = await storage.health_check()
         return {"status": "ok" if db_ok else "degraded", "database": db_ok}

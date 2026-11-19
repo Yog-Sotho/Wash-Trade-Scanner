@@ -154,6 +154,16 @@ existed, or whose price was unavailable at ingestion (e.g. throttling), run:
 | `PANEL_ENABLED`             | Serve the web panel at `/panel`                                    | `true`      |
 | `PANEL_SESSION_TTL_MINUTES` | Panel session cookie lifetime (minutes)                            | `720`       |
 
+## Health Probes
+
+See [api.md](api.md#health-probes).
+
+| Variable                       | Description                                                                    | Default |
+|--------------------------------|--------------------------------------------------------------------------------|---------|
+| `HEALTH_RPC_CHAIN_IDS`         | Comma-separated chains whose RPC endpoint `/health/ready` requires (empty = database only) | `1` |
+| `HEALTH_CHECK_TIMEOUT_SECONDS` | Time limit of each readiness check                                              | `5`     |
+| `HEALTH_RPC_CACHE_SECONDS`     | How long an RPC check's answer is reused (0 = probe every time)                 | `15`    |
+
 ## Real-Time Monitor
 
 | Variable                        | Description                                    | Default |
