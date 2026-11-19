@@ -170,6 +170,26 @@ See [api.md](api.md#health-probes).
 |---------------------------------|------------------------------------------------|---------|
 | `MONITOR_POLL_INTERVAL_SECONDS` | Chain-head poll cadence for websocket monitors | `12`    |
 | `MONITOR_WINDOW_MINUTES`        | Rolling detection window size                  | `60`    |
+| `MONITOR_POOLS`                 | `chain_id:pool` pairs the server watches continuously, alerting the sinks below | (empty) |
+
+## Alerting
+
+See [alerting.md](alerting.md). Each sink is on when its address is set.
+
+| Variable                  | Description                                                        | Default    |
+|---------------------------|--------------------------------------------------------------------|------------|
+| `ALERT_WEBHOOK_URL`       | Webhook receiving each alert as JSON (http or https)               | (empty)    |
+| `ALERT_WEBHOOK_SECRET`    | Signs webhook requests with HMAC-SHA256 (`X-Wash-Signature`)       | (empty)    |
+| `ALERT_SLACK_WEBHOOK_URL` | Slack incoming webhook (https)                                     | (empty)    |
+| `ALERT_EMAIL_TO`          | Comma-separated recipients                                         | (empty)    |
+| `ALERT_EMAIL_FROM`        | Sender address (required with `ALERT_EMAIL_TO`)                    | (empty)    |
+| `ALERT_SMTP_HOST`         | SMTP server (required with `ALERT_EMAIL_TO`)                       | (empty)    |
+| `ALERT_SMTP_PORT`         | SMTP port                                                          | `587`      |
+| `ALERT_SMTP_USERNAME`     | SMTP login (none if empty)                                         | (empty)    |
+| `ALERT_SMTP_PASSWORD`     | SMTP password                                                      | (empty)    |
+| `ALERT_SMTP_TLS`          | `starttls`, `ssl` or `none`                                        | `starttls` |
+| `ALERT_TIMEOUT_SECONDS`   | Time limit of each delivery attempt                                | `10`       |
+| `ALERT_MAX_ATTEMPTS`      | Attempts per alert and sink before it is given up                  | `3`        |
 
 ## Logging
 

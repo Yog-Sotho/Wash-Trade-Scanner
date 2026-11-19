@@ -49,12 +49,14 @@ from api.middleware import (
 )
 from config.chains import get_chain_config
 from config.settings import settings
+from core.alerts import AlertDispatcher, sinks_from_settings
 from core.log_config import configure_logging
 from core.realtime_monitor import RealtimeMonitor
 from core.redaction import redact
 from core.reporting import compute_risk_metrics
 from core.storage import Storage
 from core.validators import AuditParameters, validate_address
+from core.watch import PoolWatcher
 from models.schemas import AuditRequest, SwapTradeResponse
 
 logger = logging.getLogger(__name__)
@@ -79,10 +81,13 @@ def _validated_pool(pool_address: str) -> str:
 def create_app(storage: Storage | None = None) -> FastAPI:
     """Application factory. Pass `storage` to reuse an existing instance
     (tests inject a mock here); otherwise one is created on startup."""
-    # An unknown chain in HEALTH_RPC_CHAIN_IDS is a configuration error: fail
-    # at startup, not on every readiness probe.
+    # An unknown chain in HEALTH_RPC_CHAIN_IDS or MONITOR_POOLS, or a
+    # half-configured alert sink, is a configuration error: fail at startup.
     for chain_id in settings.health_rpc_chain_id_list:
         get_chain_config(chain_id)
+    for chain_id, _pool in settings.monitor_pool_list:
+        get_chain_config(chain_id)
+    sinks = sinks_from_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
@@ -90,7 +95,17 @@ def create_app(storage: Storage | None = None) -> FastAPI:
             app.state.storage = Storage()
             await app.state.storage.initialize()
             app.state.owns_storage = True
+        # Background monitors of MONITOR_POOLS and the sinks they alert.
+        dispatcher = AlertDispatcher(sinks)
+        watcher = PoolWatcher(app.state.storage, settings.monitor_pool_list, dispatcher)
+        if settings.monitor_pool_list and not sinks:
+            logger.warning("MONITOR_POOLS is set but no alert sink is: alerts are only logged")
+        await dispatcher.start()
+        await watcher.start()
+        app.state.watcher = watcher
         yield
+        await watcher.stop()  # first: no new alerts
+        await dispatcher.stop()  # then deliver what is queued
         if app.state.owns_storage:
             await app.state.storage.close()
 

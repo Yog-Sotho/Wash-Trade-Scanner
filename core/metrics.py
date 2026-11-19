@@ -76,6 +76,13 @@ MONITOR_ALERTS = Counter(
     ["method"],
 )
 
+ALERT_DELIVERIES = Counter(
+    "wash_alert_deliveries_total",
+    "Alert batches handed to a sink, by outcome: sent; failed (every attempt "
+    "failed, or the receiver refused it); dropped (the sink's queue was full).",
+    ["sink", "outcome"],
+)
+
 # ------------------------------------------------------------------ HTTP
 
 HTTP_REQUESTS = Counter(

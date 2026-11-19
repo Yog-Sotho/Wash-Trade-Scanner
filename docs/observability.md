@@ -85,6 +85,7 @@ audits you want to see in the metrics run through the API
 | `wash_audit_detector_hits_total` | counter | `detector` | Trades each detector fired on, in completed audits (`ml` included). A hit is not a verdict |
 | `wash_audit_flagged_trades_total` | counter | `method` | Trades completed audits labelled wash, by the deciding method |
 | `wash_monitor_alerts_total` | counter | `method` | Alerts the real-time monitor raised (each flagged trade once) |
+| `wash_alert_deliveries_total` | counter | `sink`, `outcome` | Alerts handed to a sink ([alerting.md](alerting.md)): `sent`, `failed` (attempts exhausted or refused), `dropped` (queue full) |
 | `wash_http_requests_total` | counter | `method`, `route`, `status` | HTTP requests. `route` is the route template (`/api/v1/pools/{chain_id}/{pool_address}/trades`), `unmatched` for unknown paths |
 | `wash_http_request_duration_seconds` | histogram | `method`, `route` | Their latency |
 

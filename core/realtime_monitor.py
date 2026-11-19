@@ -3,8 +3,9 @@ Real-time streaming wash trade detection.
 
 Polls the chain head for a single pool, ingests new swap events as they land,
 re-runs the full detector stack over a rolling time window, and yields alert
-events for newly flagged trades. Consumed by the API's websocket endpoint but
-usable standalone::
+events for newly flagged trades. Consumed by the API's websocket endpoint and
+by the background watcher (core/watch.py, MONITOR_POOLS), and usable
+standalone::
 
     monitor = RealtimeMonitor(storage, chain_id=1, pool_address="0x...")
     async for event in monitor.stream():
@@ -45,6 +46,15 @@ class MonitorEvent:
 
     type: str  # "status" | "alert" | "stats" | "error"
     payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class MonitorPass:
+    """The outcome of one poll: the alerts and detector stats, or the error."""
+
+    alerts: list[dict[str, Any]] = field(default_factory=list)
+    stats: dict[str, int] = field(default_factory=dict)
+    error: dict[str, Any] | None = None
 
 
 def _trade_payload(trade: SwapTrade) -> dict[str, Any]:
@@ -142,6 +152,10 @@ class RealtimeMonitor:
             # every other trade keeps what it had, and a stronger existing
             # label is not downgraded.
             flagged = {t.id for t in wash_trades}
+            # Alert only on trades this pass newly labelled wash: one already
+            # labelled (by an audit, or by a monitor before a restart) was
+            # alerted on or known, and must not be announced again.
+            newly_flagged = {t.id for t in wash_trades if not before[t.id][0]}
             for trade in window_trades:
                 was_wash, score, method = before[trade.id]
                 keep = trade.id not in flagged or (
@@ -157,13 +171,42 @@ class RealtimeMonitor:
 
         alerts = []
         for trade in wash_trades:
-            if trade.id in self._seen_alert_ids:
+            if trade.id in self._seen_alert_ids or trade.id not in newly_flagged:
                 continue
             self._seen_alert_ids.add(trade.id)
             alerts.append(_trade_payload(trade))
             metrics.MONITOR_ALERTS.labels(trade.detection_method or "unknown").inc()
 
         return alerts, stats
+
+    async def stream_passes(self) -> AsyncIterator[MonitorPass]:
+        """Yield one MonitorPass per poll until stop() is called.
+
+        A failed poll yields a pass carrying the error and the loop goes on:
+        transient RPC failures must not end monitoring. Used by stream() and
+        by the background watcher (core/watch.py), which batches each pass's
+        alerts into one notification.
+        """
+        if self.ingestor is None:
+            await self.initialize()
+
+        while not self._stop_event.is_set():
+            try:
+                alerts, stats = await self.poll_once()
+                result = MonitorPass(alerts=alerts, stats=stats)
+            except CircuitBreakerOpenError:
+                result = MonitorPass(
+                    error={"reason": "rpc_circuit_breaker_open", "recoverable": True}
+                )
+            except Exception as exc:
+                logger.exception(f"Realtime monitor poll failed: {exc}")
+                result = MonitorPass(error={"reason": redact(str(exc)), "recoverable": True})
+            yield result
+
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval)
+            except TimeoutError:
+                continue
 
     async def stream(self) -> AsyncIterator[MonitorEvent]:
         """Yield monitor events until stop() is called.
@@ -187,35 +230,20 @@ class RealtimeMonitor:
             },
         )
 
-        while not self._stop_event.is_set():
-            try:
-                alerts, stats = await self.poll_once()
-                for alert in alerts:
-                    yield MonitorEvent(type="alert", payload=alert)
-                if stats:
-                    yield MonitorEvent(
-                        type="stats",
-                        payload={
-                            "block": self.last_block,
-                            "detections_by_method": stats,
-                            "new_alerts": len(alerts),
-                        },
-                    )
-            except CircuitBreakerOpenError:
-                yield MonitorEvent(
-                    type="error",
-                    payload={"reason": "rpc_circuit_breaker_open", "recoverable": True},
-                )
-            except Exception as exc:
-                logger.exception(f"Realtime monitor poll failed: {exc}")
-                yield MonitorEvent(
-                    type="error",
-                    payload={"reason": redact(str(exc)), "recoverable": True},
-                )
-
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval)
-            except TimeoutError:
+        async for result in self.stream_passes():
+            if result.error is not None:
+                yield MonitorEvent(type="error", payload=result.error)
                 continue
+            for alert in result.alerts:
+                yield MonitorEvent(type="alert", payload=alert)
+            if result.stats:
+                yield MonitorEvent(
+                    type="stats",
+                    payload={
+                        "block": self.last_block,
+                        "detections_by_method": result.stats,
+                        "new_alerts": len(result.alerts),
+                    },
+                )
 
         yield MonitorEvent(type="status", payload={"state": "stopped"})

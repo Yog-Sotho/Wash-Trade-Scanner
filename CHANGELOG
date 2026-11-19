@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased] - Phase 4.3: alerting
+
+### Added
+- Background monitoring: `wash-api` watches every `MONITOR_POOLS` pool
+  (`chain_id:pool`, comma-separated) continuously, with no browser open, and
+  restarts a failed monitor with backoff (5 s doubling to 5 min).
+- Alert sinks, each on when its address is set: a webhook (JSON, signed with
+  HMAC-SHA256 over timestamp and body when `ALERT_WEBHOOK_SECRET` is set),
+  Slack (incoming webhook) and email (SMTP). Everything one monitor pass newly
+  flags is one alert. Delivery is queued per sink, never blocks monitoring,
+  and is retried with exponential backoff or the receiver's `Retry-After`
+  (`ALERT_MAX_ATTEMPTS`, `ALERT_TIMEOUT_SECONDS`).
+- `wash_alert_deliveries_total{sink, outcome}`; docs/alerting.md.
+
+### Changed
+- The real-time monitor (websocket and background) alerts only on trades a
+  pass newly labels wash: a trade an audit or an earlier run already labelled
+  is not announced again, so a restart does not repeat alerts.
+- Alert webhook URLs are redacted from logs, like RPC URLs.
+
 ## [Unreleased] - Phase 4.2: health semantics
 
 ### Added

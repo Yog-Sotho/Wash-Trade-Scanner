@@ -25,21 +25,28 @@ Every other swap moves 1,000 USDC against 0.5 WETH, with ETH at $2,000, so
 those legs are worth exactly $1,000.
 """
 
+import asyncio
+import hashlib
+import hmac
+import json
 import time
 from datetime import UTC, datetime
 
 import httpx
 import pytest
+from aiohttp import web
 from prometheus_client import REGISTRY
 from sqlalchemy import select
 from web3 import Web3
 
 from api.server import create_app
 from config.settings import settings
+from core.alerts import AlertDispatcher, WebhookSink
 from core.calibration import wash_probability
 from core.realtime_monitor import RealtimeMonitor
 from core.storage import Storage
 from core.validators import AuditParameters
+from core.watch import PoolWatcher
 from models.schemas import SwapTrade
 from scripts.run_audit import AuditRunner
 
@@ -261,6 +268,77 @@ async def test_audit_is_visible_in_prometheus_metrics(pg_storage, chain):
     assert 'wash_rpc_requests_total{chain_id="1",method="eth_getLogs",outcome="ok"}' in body
     # The fake node's URL is never exported.
     assert chain.rpc_url not in body
+
+
+async def _until(predicate, timeout: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        await asyncio.sleep(0.05)
+
+
+async def test_watched_pool_alerts_a_signed_webhook_once(pg_storage, chain, monkeypatch):
+    """MONITOR_POOLS end to end: new swaps on the node become one signed
+    webhook call; after a restart, the same trades are not announced again."""
+    monkeypatch.setattr(settings, "NATIVE_PRICE_SOURCE", "none")
+    monkeypatch.setattr(settings, "MONITOR_POLL_INTERVAL_SECONDS", 1.0)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    received: list[tuple[dict, bytes]] = []
+
+    async def hook(request: web.Request) -> web.Response:
+        received.append((dict(request.headers), await request.read()))
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_post("/hook", hook)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    host, port = runner.addresses[0][:2]
+    sink = WebhookSink(f"http://{host}:{port}/hook", secret="s3cret")
+    chain.head = 200
+
+    async def watch():
+        dispatcher = AlertDispatcher([sink])
+        watcher = PoolWatcher(pg_storage, [(1, POOL)], dispatcher)
+        await dispatcher.start()
+        await watcher.start()
+        await _until(lambda: (1, POOL) in watcher._monitors)
+        monitor = watcher._monitors[(1, POOL)]
+        await _until(lambda: monitor.last_block >= chain.head)
+        return dispatcher, watcher, monitor
+
+    try:
+        dispatcher, watcher, monitor = await watch()
+        now = int(time.time()) - 60
+        for i, amounts in enumerate([SELL_USDC, SELL_BACK] * 3):
+            chain.add_v2_swap(201 + i, now + i, POOL, ROUTER, A, amounts, A)
+        await _until(lambda: len(received) == 1)
+        await watcher.stop()
+        await dispatcher.stop()
+
+        headers, body = received[0]
+        alert = json.loads(body)
+        assert alert["chain_id"] == 1 and alert["pool_address"] == POOL
+        assert alert["trade_count"] == 6
+        assert alert["methods"] == {"round_trip": 6}
+        assert alert["wash_volume_usd"] == pytest.approx(5985.0)
+        signed = headers["X-Wash-Timestamp"].encode() + b"." + body
+        digest = hmac.new(b"s3cret", signed, hashlib.sha256).hexdigest()
+        assert headers["X-Wash-Signature"] == f"sha256={digest}"
+
+        # Restart. A new swap makes the monitor re-run detection over the
+        # window, which flags the six trades again; they are already labelled,
+        # so nothing is sent.
+        dispatcher, watcher, monitor = await watch()
+        chain.add_v2_swap(207, now + 7, POOL, ROUTER, D, SELL_USDC, D)
+        await _until(lambda: monitor.last_block >= 207)
+        await dispatcher.drain()
+        await watcher.stop()
+        await dispatcher.stop()
+        assert len(received) == 1
+    finally:
+        await runner.cleanup()
 
 
 async def test_realtime_monitor_ingests_new_swaps_and_alerts(pg_storage, chain, monkeypatch):
