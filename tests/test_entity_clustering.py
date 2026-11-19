@@ -41,13 +41,18 @@ async def test_find_connected_components_empty_graph(clusterer):
 
 
 def _mock_session_with_scalars(rows_by_call):
-    """Return a session whose session.execute(...) results yield rows_by_call in order."""
+    """Return a session whose session.execute(...) results yield rows_by_call
+    in order. The first call is the traders query: each of its rows is a
+    trader (tx_from) with a router as the swap's sender."""
     session = AsyncMock(spec=AsyncSession)
     results = []
-    for rows in rows_by_call:
+    for i, rows in enumerate(rows_by_call):
         result = MagicMock()
         result.scalars.return_value.all.return_value = rows
-        result.fetchall.return_value = [(r,) for r in rows]
+        if i == 0:
+            result.fetchall.return_value = [(r, "0xrouter") for r in rows]
+        else:
+            result.fetchall.return_value = [(r,) for r in rows]
         result.scalar_one_or_none.return_value = None
         results.append(result)
     session.execute = AsyncMock(side_effect=results)
@@ -110,18 +115,16 @@ async def test_fetch_funding_edges_trace_filter(clusterer):
         return_value={
             "result": [
                 {
-                    "action": {
-                        "from": ALICE,
-                        "to": BOB,
-                        "value": "0x64",  # 100 wei
-                    }
+                    "action": {"from": ALICE, "to": BOB, "value": "0x64"},  # 100 wei
+                    "blockNumber": 42,
+                    "transactionPosition": 7,
+                    "traceAddress": [0, 1],  # an internal transfer
                 },
                 {
-                    "action": {
-                        "from": ALICE,
-                        "to": CAROL,
-                        "value": "0x0",  # zero-value transfer, should be skipped
-                    }
+                    "action": {"from": ALICE, "to": CAROL, "value": "0x0"},  # no value
+                    "blockNumber": 43,
+                    "transactionPosition": 0,
+                    "traceAddress": [],
                 },
             ]
         }
@@ -131,7 +134,11 @@ async def test_fetch_funding_edges_trace_filter(clusterer):
         web3, {ALICE, BOB}, from_block=1, to_block=100
     )
 
-    assert edges == [(ALICE.lower(), BOB.lower(), 100)]
+    assert edges == [(ALICE.lower(), BOB.lower(), 100, (42, 7, 0))]
+    # Transfers into the addresses: who funded them, wherever from.
+    (_method, (params,)) = web3.provider.make_request.await_args.args
+    assert "fromAddress" not in params
+    assert {a.lower() for a in params["toAddress"]} == {ALICE.lower(), BOB.lower()}
 
 
 @pytest.mark.asyncio
@@ -152,6 +159,8 @@ async def test_fetch_funding_edges_block_scan(clusterer):
                 "transactions": [
                     {"from": "0xAlice", "to": "0xBob", "value": hex(500)},
                     {"from": "0xStranger", "to": "0xNobody", "value": "0x3e7"},  # unrelated
+                    {"from": "0xBob", "to": "0xStranger", "value": "0x1"},  # outgoing
+                    {"from": "0xBob", "to": None, "value": "0x1"},  # a deployment
                     "0xnot-a-dict-should-be-skipped",
                 ]
             }
@@ -162,7 +171,7 @@ async def test_fetch_funding_edges_block_scan(clusterer):
         web3, {"0xalice", "0xbob"}, from_block=1, to_block=1
     )
 
-    assert edges == [("0xalice", "0xbob", 500)]
+    assert edges == [("0xalice", "0xbob", 500, (1, 0, 0))]
     assert failed == 0
     method, params = web3.provider.make_request.await_args.args
     assert (method, params) == ("eth_getBlockByNumber", ["0x1", True])
@@ -230,8 +239,9 @@ async def test_build_funding_graph_uses_trace_filter(clusterer):
             patch.object(
                 clusterer,
                 "_fetch_funding_edges_trace_filter",
-                AsyncMock(return_value=[("0xalice", "0xbob", 100)]),
+                AsyncMock(return_value=[("0xalice", "0xbob", 100, (5, 0, 0))]),
             ),
+            patch.object(clusterer, "_contracts", AsyncMock(return_value=set())),
         ):
             graph = await clusterer.build_funding_graph(
                 1,
@@ -265,8 +275,9 @@ async def test_build_funding_graph_falls_back_to_block_scan(clusterer, monkeypat
             patch.object(
                 clusterer,
                 "_fetch_funding_edges_block_scan",
-                AsyncMock(return_value=([("0xalice", "0xbob", 50)], 0)),
+                AsyncMock(return_value=([("0xalice", "0xbob", 50, (1, 0, 0))], 0)),
             ),
+            patch.object(clusterer, "_contracts", AsyncMock(return_value=set())),
         ):
             graph = await clusterer.build_funding_graph(
                 1,
@@ -309,6 +320,7 @@ async def _graph_without_trace_support(clusterer, from_block, to_block, failed=0
         patch("core.entity_clustering.AsyncWeb3") as MockWeb3,
         patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=False)),
         patch.object(clusterer, "_fetch_funding_edges_block_scan", scan),
+        patch.object(clusterer, "_contracts", AsyncMock(return_value=set())),
     ):
         MockWeb3.return_value = AsyncMock()
         graph = await clusterer.build_funding_graph(
@@ -445,3 +457,173 @@ async def test_clustering_shares_the_chains_rate_limit_and_breaker(clusterer):
     web3.provider.make_request = AsyncMock(return_value={"result": {}})
     await clusterer._request(web3, "eth_getBlockByNumber", ["0x1", True])
     limiter.acquire.assert_awaited_once()
+
+
+# ------------------------------------------------- first funders and hubs
+
+
+def _addr(n: int) -> str:
+    return f"0x{n:040x}"
+
+
+EXCHANGE, ROUTER, OPERATOR = _addr(0xE0), _addr(0xC0), _addr(0x0B)
+
+
+async def _graph(clusterer, edges, addresses, contracts=(), eoas=None):
+    """build_funding_graph over the given transfers, on a node whose
+    eth_getCode answers code for `contracts` and none for the rest."""
+    code_for = {c.lower() for c in contracts}
+
+    async def make_request(method, params):
+        assert method == "eth_getCode"
+        return {"result": "0x6080" if params[0].lower() in code_for else "0x"}
+
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(side_effect=make_request)
+    with (
+        patch("core.entity_clustering.AsyncWeb3", return_value=web3),
+        patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+        patch.object(clusterer, "_fetch_funding_edges_trace_filter", AsyncMock(return_value=edges)),
+    ):
+        graph = await clusterer.build_funding_graph(
+            1, addresses, AsyncMock(), from_block_override=0, to_block_override=10**6, eoas=eoas
+        )
+    return graph, web3.provider.make_request
+
+
+def _clusters_of(graph) -> list[set[str]]:
+    return [set(c) for c in nx.weakly_connected_components(graph) if len(c) > 1]
+
+
+async def test_wallets_first_funded_by_one_operator_are_one_entity(clusterer):
+    wallets = [_addr(0x100 + i) for i in range(6)]
+    edges = [(OPERATOR, w, 10**17, (100 + i, 0, 0)) for i, w in enumerate(wallets)]
+    graph, _ = await _graph(clusterer, edges, wallets, eoas=wallets)
+    assert _clusters_of(graph) == [{OPERATOR, *wallets}]
+
+
+async def test_an_exchange_hot_wallet_funding_many_traders_links_none_of_them(
+    clusterer, monkeypatch
+):
+    """The bug this rule fixes: everyone who withdrew from one exchange was
+    one entity."""
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "FUNDING_MAX_FANOUT", 50)
+    users = [_addr(0x1000 + i) for i in range(51)]
+    edges = [(EXCHANGE, u, 10**18, (i, 0, 0)) for i, u in enumerate(users)]
+    graph, _ = await _graph(clusterer, edges, users, eoas=users)
+    assert _clusters_of(graph) == []
+
+    graph, _ = await _graph(clusterer, edges[:50], users[:50], eoas=users[:50])
+    assert len(_clusters_of(graph)) == 1  # at the cap it still links
+
+
+async def test_a_contract_funder_links_nobody(clusterer):
+    """A router refunding ETH to two of its users does not make them one."""
+    a, b = _addr(0x201), _addr(0x202)
+    edges = [(ROUTER, a, 5, (1, 0, 1)), (ROUTER, b, 5, (2, 0, 1))]
+    graph, _ = await _graph(clusterer, edges, [a, b], contracts=[ROUTER], eoas=[a, b])
+    assert _clusters_of(graph) == []
+
+
+async def test_a_listed_funder_links_nobody(clusterer, monkeypatch):
+    from config.settings import settings
+
+    a, b = _addr(0x301), _addr(0x302)
+    edges = [(EXCHANGE, a, 5, (1, 0, 0)), (EXCHANGE, b, 5, (2, 0, 0))]
+    monkeypatch.setattr(settings, "FUNDING_EXCLUDED_FUNDERS", EXCHANGE.upper().replace("0X", "0x"))
+    graph, _ = await _graph(clusterer, edges, [a, b], eoas=[a, b])
+    assert _clusters_of(graph) == []
+
+
+async def test_only_the_first_funding_links(clusterer):
+    """A later payment between two unrelated wallets is not ownership."""
+    a, b = _addr(0x401), _addr(0x402)
+    edges = [
+        (b, a, 10**16, (900, 3, 0)),  # b pays a, long after a was funded
+        (_addr(0x4A), a, 10**18, (100, 0, 0)),  # a's first funder
+        (_addr(0x4B), b, 10**18, (120, 0, 0)),  # b's first funder
+    ]
+    graph, _ = await _graph(clusterer, edges, [a, b], eoas=[a, b])
+    assert not any({a, b} <= c for c in _clusters_of(graph))
+
+    edges[0] = (b, a, 10**16, (50, 0, 0))  # b funded a before anyone else did
+    graph, _ = await _graph(clusterer, edges, [a, b], eoas=[a, b])
+    assert any({a, b} <= c for c in _clusters_of(graph))
+
+
+async def test_audited_contracts_are_no_ones_wallet(clusterer):
+    """A recipient that is a contract (a router unwrapping WETH) is left out,
+    and only addresses in a link and not known to be wallets cost a code
+    lookup: the bot contract nobody funded costs none."""
+    trader = _addr(0x501)
+    edges = [(trader, ROUTER, 1, (1, 0, 0))]  # the trader was the router's first funder
+    bot = _addr(0x5B0)
+    graph, lookups = await _graph(
+        clusterer, edges, [trader, ROUTER, bot], contracts=[ROUTER, bot], eoas=[trader]
+    )
+    assert ROUTER not in graph and _clusters_of(graph) == []
+    assert [call.args[1][0].lower() for call in lookups.await_args_list] == [ROUTER]
+
+
+async def test_an_address_whose_code_cannot_be_fetched_links_nobody(clusterer):
+    a, b, funder = _addr(0x601), _addr(0x602), _addr(0x6F)
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(return_value={"error": {"message": "rate limited"}})
+    assert await clusterer._contracts(web3, {funder}) == {funder}
+
+    edges = [(funder, a, 1, (1, 0, 0)), (funder, b, 1, (2, 0, 0))]
+    with (
+        patch("core.entity_clustering.AsyncWeb3", return_value=web3),
+        patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+        patch.object(clusterer, "_fetch_funding_edges_trace_filter", AsyncMock(return_value=edges)),
+    ):
+        graph = await clusterer.build_funding_graph(
+            1, [a, b], AsyncMock(), from_block_override=0, to_block_override=9, eoas=[a, b]
+        )
+    assert _clusters_of(graph) == []
+
+
+async def test_clustering_uses_the_traders_not_the_routers_they_swap_through(clusterer):
+    """Swap senders are routers; the pool's traders are the transactions'
+    senders. A swap without one falls back to its sender, code-checked."""
+    session = AsyncMock(spec=AsyncSession)
+    traders, recipients = MagicMock(), MagicMock()
+    traders.fetchall.return_value = [
+        ("0xAlice", "0xRouter"),
+        ("0xbob", "0xrouter"),
+        (None, "0xBot"),
+    ]
+    recipients.fetchall.return_value = [("0xCarol",), ("0xrouter",)]
+    session.execute = AsyncMock(side_effect=[traders, recipients])
+    build = AsyncMock(return_value=nx.DiGraph())
+
+    with patch.object(clusterer, "build_funding_graph", build):
+        await clusterer.cluster_addresses(1, "0xpool", session)
+
+    _chain, addresses, _session = build.await_args.args
+    assert addresses == ["0xalice", "0xbob", "0xbot", "0xcarol", "0xrouter"]
+    assert build.await_args.kwargs["eoas"] == {"0xalice", "0xbob"}
+
+
+def test_excluded_funders_setting_is_validated():
+    from pydantic import ValidationError
+
+    from config.settings import Settings
+
+    mixed_case = "0x" + EXCHANGE[2:].upper()
+    listed = Settings(FUNDING_EXCLUDED_FUNDERS=f" {mixed_case} , {ROUTER}")
+    assert listed.funding_excluded_funder_set == {EXCHANGE, ROUTER}
+    with pytest.raises(ValidationError):
+        Settings(FUNDING_EXCLUDED_FUNDERS="binance")
+
+
+async def test_transfers_into_addresses_not_audited_link_nothing(clusterer):
+    """A node returning more than was asked for (transfers into other
+    addresses) must not add strangers to a cluster or count them as funded."""
+    a, b, stranger = _addr(0x701), _addr(0x702), _addr(0x7FF)
+    edges = [(OPERATOR, stranger, 1, (1, 0, 0)), (OPERATOR, a, 1, (2, 0, 0))]
+    graph, _ = await _graph(clusterer, edges, [a, b], eoas=[a, b])
+    assert stranger not in graph
+    assert _clusters_of(graph) == [{OPERATOR, a}]

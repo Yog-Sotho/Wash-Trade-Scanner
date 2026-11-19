@@ -47,7 +47,7 @@ Each detector run on its own (`composite` is the audit's decision). Trade-level,
 | `closed_cluster` | – | 0.000 | – | 0.000 | 0.00% | 0.00% |
 | `repeated_amounts` | 0.017 | 0.213 | 0.031 | 0.004 | 1.96% | 1.12% |
 | `high_frequency_bot` | 0.000 | 0.000 | 0.000 | 0.000 | 0.23% | 0.00% |
-| `volume_anomaly` | 0.000 | 0.000 | 0.000 | 0.000 | 4.32% | 0.45% |
+| `volume_anomaly` | 0.000 | 0.000 | 0.000 | 0.000 | 4.33% | 0.45% |
 | `wash_cluster` | – | 0.000 | – | 0.000 | 0.00% | 0.00% |
 | `composite` | 0.638 | 0.856 | 0.731 | 0.765 | 0.07% | 0.06% |
 
@@ -79,7 +79,7 @@ Share of honest trades (and of their USD volume) flagged, no wash trading inject
 | `closed_cluster` | 0.00% (0.00% vol) | 0.00% (0.00% vol) | 0.00% (0.00% vol) |
 | `repeated_amounts` | 4.74% (1.93% vol) | 0.78% (0.25% vol) | 2.76% (2.61% vol) |
 | `high_frequency_bot` | 2.79% (0.00% vol) | 0.00% (0.00% vol) | 0.00% (0.00% vol) |
-| `volume_anomaly` | 0.66% (0.03% vol) | 4.87% (0.01% vol) | 4.41% (1.31% vol) |
+| `volume_anomaly` | 0.66% (0.03% vol) | 4.88% (0.01% vol) | 4.41% (1.31% vol) |
 | `wash_cluster` | 0.00% (0.00% vol) | 0.00% (0.00% vol) | 0.00% (0.00% vol) |
 | `composite` | 0.00% (0.00% vol) | 0.05% (0.03% vol) | 0.12% (0.14% vol) |
 
@@ -119,7 +119,7 @@ Rates shipped in `config/detector_calibration.json`, measured on the development
 | `closed_cluster` | 0.000 | 0 / 27,385 | 0.01% | 0.000 | no |
 | `repeated_amounts` | 0.219 | 538 / 27,385 | 2.11% | 0.095 | no |
 | `high_frequency_bot` | 0.000 | 63 / 27,385 | 0.28% | 0.000 | no |
-| `volume_anomaly` | 0.003 | 1,184 / 27,385 | 4.53% | 0.001 | no |
+| `volume_anomaly` | 0.003 | 1,185 / 27,385 | 4.53% | 0.001 | no |
 | `wash_cluster` | 0.000 | 0 / 27,385 | 0.01% | 0.000 | no |
 
 ## Isolation Forest (leave-one-pool-out)
@@ -158,6 +158,19 @@ Without trade-level labels this reports how much of the market each detector fla
 | `phase1_audit (before)` | 32.80% | 29.94% |
 
 Phase 1's share here came from its `self_trading` rule, which flags any swap a contract makes for itself -- 70-79% of the honest trades in the clean pools above -- not from detecting this market's wash trading. Phase 2's detectors label none of it: the documented mechanism is multi-wallet, and funding links are not in the recorded data. This is the largest open gap (see docs/project/roadmap_to_9.md).
+
+## Trade-size forensics
+
+Pool-level statistics from Cong, Li, Tang and Yang, "Crypto Wash Trading" (Management Science, 2023), reported with every audit and never used to label a trade (`core/forensics.py`). People trade round amounts and their trade sizes follow Benford's law; scripts manufacturing volume do neither. Round share: swaps where either side has at most two significant digits. Benford MAD: mean absolute deviation of the input amounts' first digits, read against Nigrini's first-digit thresholds (0.006 close, 0.012 acceptable, 0.015 marginal, above that nonconformity).
+
+| Fixture | Kind | Swaps | Round share | Benford MAD | Conformity |
+|---|---|---|---|---|---|
+| `nexf_weth` | documented_wash | 2,186 | 0.14% | 0.0349 | nonconformity |
+| `univ2_usdc_weth` | clean | 2,259 | 16.42% | 0.0117 | acceptable |
+| `univ3_usdc_weth_005` | clean | 13,226 | 7.64% | 0.0043 | close |
+| `univ3_weth_usdt_005` | clean | 11,900 | 9.74% | 0.0050 | close |
+
+`nexf_weth`: 0.14% of its swaps have a round side, against 7.64%–16.42% in the clean pools, and its first digits are in Nigrini's nonconformity band. Four pools are evidence that the signal exists, not a measured error rate: it describes a pool, and a pool where wash trades are a small share of the volume will look ordinary.
 
 ## Parameter selection
 

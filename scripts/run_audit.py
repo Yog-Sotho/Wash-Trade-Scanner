@@ -16,6 +16,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
+from core.forensics import TradeSizeForensics, trade_size_forensics
 from core.reporting import classify_severity, compute_risk_metrics
 
 __all__ = ["AuditRunner", "classify_severity", "main"]
@@ -218,6 +219,10 @@ class AuditRunner:
         }
         trades = [trade for pool_trades in by_pool.values() for trade in pool_trades]
         risk_metrics = compute_risk_metrics(trades)
+        # Pool-level trade-size statistics (core/forensics.py): reported, never labels.
+        forensics = {
+            pool: trade_size_forensics(pool_trades) for pool, pool_trades in by_pool.items()
+        }
 
         duration = time.time() - start_time
 
@@ -247,6 +252,7 @@ class AuditRunner:
             detection_methods,
             duration,
             funding,
+            forensics[params.pool_address],
         )
 
         if export_format:
@@ -260,6 +266,7 @@ class AuditRunner:
                 export_format,
                 export_path,
                 flagged_trades=[t for t in trades if t.is_wash_trade],
+                forensics=forensics[params.pool_address],
             )
 
         # Counted once the audit has succeeded, export included.
@@ -282,12 +289,15 @@ class AuditRunner:
             "funding_clusters": funding.as_dict(),
             # Trades taken out as MEV before detection, by kind (core/mev.py).
             "excluded_as_mev": excluded_mev,
+            # Round amounts and Benford conformity of the audited pool's trade sizes.
+            "trade_size_forensics": forensics[params.pool_address].as_dict(),
             # Audited together with the pool, per token pair (cross-pool).
             "related_pools": params.related_pools,
             "pools": {
                 pool: {
                     "trades": len(pool_trades),
                     "wash_trades_detected": sum(1 for t in pool_trades if t.is_wash_trade),
+                    "trade_size_forensics": forensics[pool].as_dict(),
                 }
                 for pool, pool_trades in by_pool.items()
             },
@@ -303,6 +313,7 @@ class AuditRunner:
         detection_methods: list[str],
         duration: float,
         funding: FundingCoverage | None = None,
+        forensics: TradeSizeForensics | None = None,
     ) -> None:
         print("\n" + "=" * 60)
         print(f"Audit Results for Pool: {pool_address}")
@@ -329,6 +340,14 @@ class AuditRunner:
                 if funding.blocks_failed:
                     scope += f", {funding.blocks_failed} failed"
             print(f"Funding-link clustering: {funding.method}, coverage {scope}")
+        if forensics is not None:
+            if forensics.round_share is None or forensics.benford_mad is None:
+                print(f"Trade sizes: {forensics.benford_conformity} ({forensics.trades} trades)")
+            else:
+                print(
+                    f"Trade sizes: {forensics.round_share:.1%} round amounts, Benford MAD "
+                    f"{forensics.benford_mad:.4f} ({forensics.benford_conformity})"
+                )
         print(f"Duration: {duration:.2f} seconds")
         print("=" * 60)
 
@@ -343,6 +362,7 @@ class AuditRunner:
         export_format: str,
         export_path: str | None,
         flagged_trades: list[SwapTrade] | None = None,
+        forensics: TradeSizeForensics | None = None,
     ) -> None:
         results = {
             "chain_id": params.chain_id,
@@ -353,6 +373,7 @@ class AuditRunner:
             "detection_methods": detection_methods,
             "duration": duration,
             "timestamp": datetime.now(UTC).isoformat(),
+            "trade_size_forensics": forensics.as_dict() if forensics else None,
             # Every labelled trade with the evidence for its label (JSON only).
             "flagged_trades": [
                 SwapTradeResponse.model_validate(t).model_dump(mode="json")

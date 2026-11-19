@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased] - Borrowed from the open-source field
+
+Compared with flashbots/mev-inspect-py, SorellaLabs/brontes, Dune's spellbook
+and the published methods; what was taken and why the rest was not is in
+docs/comparison.md.
+
+### Added
+- Trade-size forensics per pool (Cong, Li, Tang and Yang, "Crypto Wash
+  Trading", 2023): every audit reports the share of swaps with a round side
+  and the first digits' deviation from Benford's law with its Nigrini band
+  (`trade_size_forensics`, also per pool in `pools`, in the CLI summary and
+  the JSON export). Reported, never used to label. On the recorded pools:
+  7.6-16.4% round and conforming in the clean pools, 0.14% and nonconforming
+  in the FBI's NexF market (docs/benchmarks.md).
+- Multi-front-run ("Big Mac") sandwiches, as brontes classifies them: a
+  back-run selling the total of several front-runs. 4 more sandwiches in the
+  recorded clean pools.
+- `SANDWICH_BOT_MAX_SENDERS`, `FUNDING_MAX_FANOUT`, `FUNDING_EXCLUDED_FUNDERS`.
+
+### Fixed
+- Funding-link clustering merged unrelated wallets: any value transfer joined
+  two addresses, transitively, so everyone funded by one exchange or refunded
+  by one router became one entity, and it clustered the swaps' senders
+  (mostly routers) instead of the traders. It now links each trader or
+  recipient to its first funder only, as Dune's `nft.wash_trades` does, and
+  funders that are contracts, fund more than `FUNDING_MAX_FANOUT` audited
+  addresses or are listed in `FUNDING_EXCLUDED_FUNDERS` link nobody.
+- A contract used by many accounts (a public router or aggregator) no longer
+  identifies a sandwich attacker: the one sandwich matched that way in the
+  recorded clean pools joined two unrelated users through an executor 278
+  accounts use (mev-inspect-py excludes the routers for the same reason).
+  Wash legs routed through an aggregator can no longer be excluded as MEV.
+
 ## [Unreleased] - Phase 6: beyond the state of the art
 
 ### Added

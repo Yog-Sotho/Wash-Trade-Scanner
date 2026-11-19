@@ -29,6 +29,10 @@ def _fmt(value: Any, pct: bool = False) -> str:
     return str(value)
 
 
+def _mad(value: float | None) -> str:
+    return "–" if value is None else f"{value:.4f}"
+
+
 def _headline_row(label: str, d: dict[str, Any], documented: list[str]) -> str:
     o = d["overall"]
     c = d["clean_pools"]["all"]
@@ -348,6 +352,51 @@ def render(
                 "largest open gap (see docs/project/roadmap_to_9.md)."
             )
             add("")
+
+    # ------------------------------------------------------------ forensics
+    forensics: dict[str, Any] = results.get("trade_size_forensics") or {}
+    if forensics:
+        add("## Trade-size forensics")
+        add("")
+        add(
+            'Pool-level statistics from Cong, Li, Tang and Yang, "Crypto Wash Trading" '
+            "(Management Science, 2023), reported with every audit and never used to "
+            "label a trade (`core/forensics.py`). People trade round amounts and their "
+            "trade sizes follow Benford's law; scripts manufacturing volume do neither. "
+            "Round share: swaps where either side has at most two significant digits. "
+            "Benford MAD: mean absolute deviation of the input amounts' first digits, "
+            "read against Nigrini's first-digit thresholds (0.006 close, 0.012 "
+            "acceptable, 0.015 marginal, above that nonconformity)."
+        )
+        add("")
+        add("| Fixture | Kind | Swaps | Round share | Benford MAD | Conformity |")
+        add("|---|---|---|---|---|---|")
+        for name, f in forensics.items():
+            add(
+                f"| `{name}` | {fixtures[name]['kind']} | {f['trades']:,} | "
+                f"{_fmt(f['round_share'], pct=True)} | {_mad(f['benford_mad'])} | "
+                f"{f['benford_conformity']} |"
+            )
+        add("")
+        clean_round = [forensics[n]["round_share"] for n in clean if n in forensics]
+        for n in documented:
+            f = forensics.get(n)
+            if (
+                f
+                and clean_round
+                and f["round_share"] is not None
+                and all(r is not None for r in clean_round)
+            ):
+                add(
+                    f"`{n}`: {_fmt(f['round_share'], pct=True)} of its swaps have a round "
+                    f"side, against {_fmt(min(clean_round), pct=True)}–"
+                    f"{_fmt(max(clean_round), pct=True)} in the clean pools, and its first "
+                    f"digits are in Nigrini's {f['benford_conformity']} band. Four pools "
+                    "are evidence that the signal exists, not a measured error rate: it "
+                    "describes a pool, and a pool where wash trades are a small share of "
+                    "the volume will look ordinary."
+                )
+                add("")
 
     # ------------------------------------------------------------ tuning
     if tuning:

@@ -196,3 +196,55 @@ def test_without_mev_takes_out_sandwiches_and_arbitrage_alike():
     kept, found = without_mev([front, victim, back, buy, sell])
     assert kept == [victim]
     assert (len(found.sandwiches), len(found.arbitrages)) == (1, 1)
+
+
+# ------------------------------------------------- public routers and Big Macs
+
+
+def test_a_contract_many_accounts_use_is_a_public_router_not_a_bot(monkeypatch):
+    """Two unrelated users routed through one aggregator, which swaps for
+    itself, used to be read as one attacker (seen in the clean pools: an
+    executor used by 278 accounts)."""
+    monkeypatch.setattr(settings, "SANDWICH_BOT_MAX_SENDERS", 5)
+    shared = "0x" + "5" * 40
+    users = ["0x" + f"{n:040x}" for n in range(1, 7)]
+    front = swap(users[0], 100, 0, USDC, 3000.0, 1.0, bot=shared)
+    victim = swap(VICTIM, 100, 1, USDC, 5000.0, 1.6)
+    back = swap(users[1], 100, 2, WETH, 1.0, 3010.0, bot=shared)
+    elsewhere = [swap(u, 200 + n, 0, USDC, 10.0, 0.01, bot=shared) for n, u in enumerate(users[2:])]
+
+    assert find_sandwiches([front, victim, back, *elsewhere[:3]]) != []  # 5 accounts: a bot
+    assert find_sandwiches([front, victim, back, *elsewhere]) == []  # 6: a public router
+
+
+def big_mac(back_amount: float = 1.0, with_victim: bool = True) -> list[SwapTrade]:
+    """The attacker buys twice (0.4 then 0.6 WETH) around victims and sells
+    the total back once."""
+    trades = [swap(ATTACKER, 100, 0, USDC, 1200.0, 0.4)]
+    if with_victim:
+        trades.append(swap(VICTIM, 100, 1, USDC, 5000.0, 1.6))
+    trades.append(swap(ATTACKER, 100, 2, USDC, 1800.0, 0.6))
+    if with_victim:
+        trades.append(swap("0x" + "e" * 39 + "1", 100, 3, USDC, 900.0, 0.3))
+    trades.append(swap(ATTACKER, 100, 4, WETH, back_amount, 3010.0))
+    return trades
+
+
+def test_several_front_runs_and_one_back_run_are_one_sandwich():
+    trades = big_mac()
+    (found,) = find_sandwiches(trades)
+    assert found.fronts == (trades[0], trades[2])
+    assert found.back is trades[-1]
+    assert {v.tx_from for v in found.victims} == {VICTIM, "0x" + "e" * 39 + "1"}
+    kept, _ = without_mev(trades)
+    assert all(t.tx_from != ATTACKER for t in kept)
+
+
+def test_a_big_mac_must_sell_back_the_total_and_have_a_victim():
+    assert find_sandwiches(big_mac(back_amount=0.7)) == []  # neither leg alone, nor both
+    assert find_sandwiches(big_mac(with_victim=False)) == []
+
+
+async def test_every_leg_of_a_big_mac_is_counted():
+    _, stats = await HeuristicDetector().run_detectors_on_trades(big_mac(), None)
+    assert stats[EXCLUDED_MEV] == 3

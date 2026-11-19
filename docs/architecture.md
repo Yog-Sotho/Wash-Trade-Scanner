@@ -54,9 +54,9 @@ The system follows a modular, async‑first design built around the following co
           └─────────┬───────────────────┘
                     ▼
           ┌──────────────────┐
-          │ Entity Clustering  │  Identifies addresses
-          │ (graph analysis)   │  controlled by same entity
-          └───────────────────┘
+          │ Entity Clustering  │  Links wallets to their first
+          │ (funding links)    │  funder; hubs (exchanges,
+          └───────────────────┘  contracts) link nobody
                     │
                     ▼
           ┌──────────────────┐

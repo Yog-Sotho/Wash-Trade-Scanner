@@ -1,12 +1,35 @@
 """
-Entity clustering based on funding links (ETH transfers).
-Uses node RPC tracing or fallback block scanning to identify addresses controlled by the same entity.
+Entity clustering from funding links: wallets of one operator are usually
+funded by that operator.
+
+Two audited addresses are linked when one first funded the other, or when the
+same address first funded both: the "first funded by" rule of Dune's
+`nft.wash_trades` filter. Only each address's first incoming value transfer in
+the window counts: later transfers between unrelated users (a payment, a
+refund) link nobody. For an address funded before the window, its first
+transfer within the window stands in for its first ever.
+
+A funder links nobody when it is a hub rather than an owner:
+
+- a contract (a router refunding ETH, a bridge, a mixer pool), checked with
+  eth_getCode;
+- an address that first funded more than FUNDING_MAX_FANOUT of the audited
+  addresses, as an exchange hot wallet does;
+- an address listed in FUNDING_EXCLUDED_FUNDERS (exchange hot wallets,
+  bridges, mixers: the labels Dune excludes).
+
+Without these, every wallet that ever withdrew from the same exchange, or
+received ETH from the same router, became one "entity".
+
+Uses the node's trace_filter, or an opt-in, capped block scan.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -30,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 # Default window searched for funding links: about a year of Ethereum blocks.
 FUNDING_WINDOW_BLOCKS = 2_000_000
+
+# (funder, funded, value in wei, (block, transaction position, index within it)):
+# a value transfer into an audited address, ordered so the first can be told.
+FundingEdge = tuple[str, str, int, tuple[int, int, int]]
 
 
 @dataclass
@@ -118,41 +145,38 @@ class EntityClusterer:
         addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> list[tuple[str, str | None, int]]:
-        """
-        Use trace_filter to find all ETH transfers (value > 0) involving any of the given addresses.
-        Returns list of (from, to, value_in_wei) tuples.
-        """
-        edges: list[tuple[str, str | None, int]] = []
-        # Convert addresses to checksum format
-        checksum_addresses = [Web3.to_checksum_address(addr) for addr in addresses]
+    ) -> list[FundingEdge]:
+        """Every value transfer (top-level or internal) into the given
+        addresses within the blocks, with its position in the chain so the
+        first one can be told. One trace_filter query per 20 addresses."""
+        edges: list[FundingEdge] = []
+        checksum_addresses = [Web3.to_checksum_address(addr) for addr in sorted(addresses)]
 
-        # trace_filter can be heavy; we split addresses into batches if many
         batch_size = 20
         for i in range(0, len(checksum_addresses), batch_size):
             batch = checksum_addresses[i : i + batch_size]
-            params = TraceFilterParams(
-                fromBlock=from_block,
-                toBlock=to_block,
-                fromAddress=batch,
-                toAddress=batch,
-            )
+            params = TraceFilterParams(fromBlock=from_block, toBlock=to_block, toAddress=batch)
             try:
                 traces = await self._request(web3, "trace_filter", [params])
                 if "error" in traces:
                     # Reading an error response as "no traces" would silently
                     # report zero funding links.
                     raise RPCError(f"trace_filter returned an error: {traces['error']}")
-                for trace in traces.get("result", []):
-                    action = trace.get("action", {})
-                    from_addr = action.get("from")
-                    to_addr = action.get("to")
-                    value = int(action.get("value", "0x0"), 16)
+                # Traces come in execution order: their index orders the
+                # transfers of one transaction.
+                for index, trace in enumerate(traces.get("result") or []):
+                    action = trace.get("action") or {}
+                    from_addr, to_addr = action.get("from"), action.get("to")
+                    value = int(action.get("value") or "0x0", 16)
                     if value > 0 and from_addr and to_addr:
-                        edges.append((from_addr.lower(), to_addr.lower(), value))
+                        order = (
+                            int(trace.get("blockNumber") or 0),
+                            int(trace.get("transactionPosition") or 0),
+                            index,
+                        )
+                        edges.append((from_addr.lower(), to_addr.lower(), value, order))
             except Exception as e:
                 logger.error(f"trace_filter failed for batch: {e}")
-                # If trace_filter fails entirely, fall back to block scanning
                 raise
         return edges
 
@@ -162,15 +186,16 @@ class EntityClusterer:
         addresses: set[str],
         from_block: int,
         to_block: int,
-    ) -> tuple[list[tuple[str, str | None, int]], int]:
+    ) -> tuple[list[FundingEdge], int]:
         """Fallback: fetch every block of the range with its transactions and
-        keep the value transfers touching `addresses`. One request per block,
-        RPC_CONCURRENCY at a time under the chain's rate limit.
+        keep the value transfers into `addresses` (top-level only: internal
+        transfers need traces). One request per block, RPC_CONCURRENCY at a
+        time under the chain's rate limit.
 
         Returns (edges, blocks that failed every attempt): a failed block is
         counted, not silently skipped.
         """
-        edges: list[tuple[str, str | None, int]] = []
+        edges: list[FundingEdge] = []
         addresses_lower = {addr.lower() for addr in addresses}
         slots = asyncio.Semaphore(settings.RPC_CONCURRENCY)
         failed = 0
@@ -196,17 +221,15 @@ class EntityClusterer:
             if block is None:
                 failed += 1
                 return
-            for tx in block.get("transactions") or []:
-                if not isinstance(tx, dict):
+            for position, tx in enumerate(block.get("transactions") or []):
+                if not isinstance(tx, dict) or not tx.get("to"):
                     continue
                 tx_from = str(tx.get("from") or "").lower()
-                tx_to = str(tx["to"]).lower() if tx.get("to") else None
+                tx_to = str(tx["to"]).lower()
                 value = tx.get("value") or 0
                 value = int(value, 16) if isinstance(value, str) else int(value)
-                if value > 0 and (
-                    tx_from in addresses_lower or (tx_to and tx_to in addresses_lower)
-                ):
-                    edges.append((tx_from, tx_to, value))
+                if value > 0 and tx_from and tx_to in addresses_lower:
+                    edges.append((tx_from, tx_to, value, (block_num, position, 0)))
 
         await asyncio.gather(*(scan(n) for n in range(from_block, to_block + 1)))
         if failed:
@@ -216,6 +239,38 @@ class EntityClusterer:
             )
         return edges, failed
 
+    async def _contracts(self, web3: AsyncWeb3, addresses: set[str]) -> set[str]:
+        """Which of `addresses` have code. An address whose code could not be
+        fetched counts as a contract: it then links nobody, the safe side."""
+        slots = asyncio.Semaphore(settings.RPC_CONCURRENCY)
+        contracts: set[str] = set()
+        failed = 0
+
+        async def check(address: str) -> None:
+            nonlocal failed
+            try:
+                async with slots:
+                    response = await self._request(
+                        web3, "eth_getCode", [Web3.to_checksum_address(address), "latest"]
+                    )
+                code = response.get("result")
+                if not isinstance(code, str):
+                    raise RPCError(str(response.get("error") or "no code returned"))
+            except CircuitBreakerOpenError:
+                raise
+            except Exception as e:
+                failed += 1
+                logger.debug(f"eth_getCode {address}: {e}")
+                contracts.add(address)
+                return
+            if code not in ("0x", "0x0", ""):
+                contracts.add(address)
+
+        await asyncio.gather(*(check(a) for a in sorted(addresses)))
+        if failed:
+            logger.warning(f"{failed} code lookups failed; those addresses link nobody")
+        return contracts
+
     async def _block_scan_fallback(
         self,
         web3: AsyncWeb3,
@@ -224,7 +279,7 @@ class EntityClusterer:
         to_block: int,
         chain_id: int,
         reason: str,
-    ) -> list[tuple[str, str | None, int]]:
+    ) -> list[FundingEdge]:
         """Scan blocks one RPC call each, bounded by ENTITY_SCAN_MAX_BLOCKS
         (at most 50,000: about a week of Ethereum blocks).
 
@@ -267,11 +322,12 @@ class EntityClusterer:
         session: AsyncSession,
         from_block_override: int | None = None,
         to_block_override: int | None = None,
+        eoas: Iterable[str] | None = None,
     ) -> nx.DiGraph[str]:
-        """
-        Build a directed graph where an edge A -> B exists if A sent ETH to B.
-        Uses the most efficient RPC method available.
-        """
+        """A directed graph with an edge F -> A when F first funded the
+        audited address A within the window and F is not a hub (see the
+        module docstring). `eoas` are addresses known to have no code (the
+        senders of transactions), spared a code lookup."""
         G: nx.DiGraph[str] = nx.DiGraph()
         addresses_set = {addr.lower() for addr in addresses}
         if not addresses_set:
@@ -325,15 +381,39 @@ class EntityClusterer:
                 reason="the node does not support trace_filter",
             )
 
-        # Add nodes and edges
-        for addr in addresses_set:
-            G.add_node(addr)
-        for from_addr, to_addr, value in edges:
-            if from_addr and to_addr:
-                G.add_edge(from_addr, to_addr, value=value)
+        # Each address's first funder in the window.
+        first: dict[str, FundingEdge] = {}
+        for edge in edges:
+            funder, funded, _value, order = edge
+            if funded not in addresses_set or funder == funded:
+                continue
+            if funded not in first or order < first[funded][3]:
+                first[funded] = edge
 
+        # Hubs link nobody: contracts (and audited addresses that are
+        # contracts are no one's wallet), listed funders, and funders of more
+        # than FUNDING_MAX_FANOUT of the audited addresses.
+        # Only addresses in a funding link can be in a cluster, so only they
+        # are looked up; known wallets are spared.
+        known_eoas = {a.lower() for a in eoas or ()}
+        unknown = (set(first) | {edge[0] for edge in first.values()}) - known_eoas
+        contracts = await self._contracts(web3, unknown) if unknown else set()
+        excluded = settings.funding_excluded_funder_set
+        fanout = Counter(edge[0] for funded, edge in first.items() if funded not in contracts)
+
+        for addr in addresses_set - contracts:
+            G.add_node(addr)
+        for funded, (funder, _, value, _order) in first.items():
+            if funded in contracts or funder in contracts or funder in excluded:
+                continue
+            if fanout[funder] > settings.FUNDING_MAX_FANOUT:
+                continue
+            G.add_edge(funder, funded, value=value)
+
+        hubs = sum(1 for f, n in fanout.items() if n > settings.FUNDING_MAX_FANOUT)
         logger.info(
-            f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges"
+            f"Built funding graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} "
+            f"first-funding links ({hubs} hub funders, {len(contracts)} contracts left out)"
         )
         return G
 
@@ -357,41 +437,29 @@ class EntityClusterer:
         """
         Cluster all addresses involved in a pool's trades based on funding relationships.
         """
-        # Get all unique addresses from trades in this pool
-        senders_stmt = (
-            select(SwapTrade.sender)
-            .where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
-                )
-            )
-            .distinct()
+        # The pool's traders (transaction senders: wallets, never contracts)
+        # and the recipients of their swaps (a trader's other wallets among
+        # them). Swap senders are mostly routers, so they are not used.
+        pool_trades = and_(SwapTrade.chain_id == chain_id, SwapTrade.pool_address == pool_address)
+        # A swap stored without its transaction's sender falls back to the
+        # swap's sender, which may be a contract: its code is checked.
+        traders_result = await session.execute(
+            select(SwapTrade.tx_from, SwapTrade.sender).where(pool_trades).distinct()
         )
-        senders_result = await session.execute(senders_stmt)
-        senders = [r[0] for r in senders_result.fetchall()]
-
-        recipients_stmt = (
-            select(SwapTrade.recipient)
-            .where(
-                and_(
-                    SwapTrade.chain_id == chain_id,
-                    SwapTrade.pool_address == pool_address,
-                )
-            )
-            .distinct()
+        traders: set[str] = set()
+        others: set[str] = set()
+        for tx_from, sender in traders_result.fetchall():
+            if tx_from:
+                traders.add(str(tx_from).lower())
+            elif sender:
+                others.add(str(sender).lower())
+        recipients_result = await session.execute(
+            select(SwapTrade.recipient).where(pool_trades).distinct()
         )
-        recipients_result = await session.execute(recipients_stmt)
-        recipients = [r[0] for r in recipients_result.fetchall()]
+        others |= {str(r[0]).lower() for r in recipients_result.fetchall() if r[0]}
 
-        all_addresses = list(set(senders + recipients))
-
-        # Build funding graph using the entire chain history relevant to these addresses
-        graph = await self.build_funding_graph(
-            chain_id,
-            all_addresses,
-            session,
-        )
+        all_addresses = sorted(traders | others)
+        graph = await self.build_funding_graph(chain_id, all_addresses, session, eoas=traders)
 
         # Find clusters
         components = await self.find_connected_components(graph)

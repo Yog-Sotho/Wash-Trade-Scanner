@@ -85,6 +85,7 @@ regression baseline match.
 | `COORDINATION_MIN_COVERAGE`         | Share of each member's trades that must be pairs with the group                       | `0.8` ‡      |
 | `COORDINATION_NET_MARGIN`           | Max net change of the group in every token, relative to the amount moved              | `0.1`        |
 | `SANDWICH_AMOUNT_TOLERANCE`         | Max relative difference between what a sandwich's front-run bought and its back-run sold | `0.1`     |
+| `SANDWICH_BOT_MAX_SENDERS`          | A contract that swaps for itself identifies a sandwich bot across its sending accounts only when at most this many accounts use it in the audited trades; more, and it is a public router or aggregator | `5`       |
 
 ‡ Searched by `python -m evaluation.tune`; the shipped values are not its pick,
 which costs 16 clean-pool false positives for 1.3 points of recall
@@ -111,6 +112,8 @@ the injected rings, wider adds false positives.
 | `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount of one token by a trader before flagging       | `5` †        |
 | `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3` †        |
 | `ENTITY_SCAN_MAX_BLOCKS`            | On nodes without `trace_filter`, max recent blocks to scan for funding links (one RPC call per block, at most 50,000: about a week of Ethereum, ~8 minutes at the default rate limit); `0` skips that clustering. Each audit reports what was examined in `funding_clusters` | `0` |
+| `FUNDING_MAX_FANOUT`                | Funding links join two audited addresses when one first funded the other or both have the same first funder. A funder that first funded more than this many of them is a hub (an exchange hot wallet) and links nobody; contracts never link | `50` |
+| `FUNDING_EXCLUDED_FUNDERS`          | Comma-separated addresses that never link wallets: exchange hot wallets, bridges, mixers | (none) |
 
 ### Machine learning
 

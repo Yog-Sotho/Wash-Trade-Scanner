@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.advanced_heuristics import trader_of
 from core.calibration import DetectorCalibration, fpr_upper_bound, override_calibration
+from core.forensics import trade_size_forensics
 from core.heuristics import HeuristicDetector
 from core.mev import without_mev
 from evaluation.dataset import Fixture, load_fixture, to_swap_trades
@@ -397,6 +398,10 @@ async def evaluate(
         "calibration": calibration,
         "detectors": {name: _summarise(result) for name, result in results.items()},
         "cross_pool": cross_pool,
+        # Pool-level trade-size statistics of each recorded pool, as an audit reports them.
+        "trade_size_forensics": {
+            f.name: trade_size_forensics(to_swap_trades(f.rows)).as_dict() for f in loaded
+        },
     }
 
 

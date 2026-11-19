@@ -110,6 +110,33 @@ async def _run_audit(storage: Storage) -> dict:
     return await runner.run_audit(params)
 
 
+async def test_funding_links_join_an_operators_wallets_and_not_a_routers_users(
+    pg_storage, chain, monkeypatch
+):
+    """First-funder clustering over a real audit: the operator who funded D
+    and E makes them one entity; the router that refunded ETH to A and F,
+    and the bot contract K, link nobody."""
+    monkeypatch.setattr(settings, "ENTITY_SCAN_MAX_BLOCKS", 1_000)
+    _add_scenario(chain)
+    operator = "0x" + "b" * 40
+    chain.add_transfer(105, operator, D, 10**17)
+    chain.add_transfer(106, operator, E, 10**17)
+    chain.add_transfer(107, ROUTER, F, 10**15)
+    chain.add_transfer(108, ROUTER, A, 10**15)
+    chain.add_transfer(109, A, F, 10**15)  # after F's first funding: a payment
+    chain.contracts |= {ROUTER, K}
+
+    result = await _run_audit(pg_storage)
+
+    assert result["funding_clusters"]["method"] == "block_scan"
+    assert result["funding_clusters"]["complete"] is True
+    clusters = await pg_storage.get_address_clusters(1)
+    assert [set(c.addresses) for c in clusters] == [{operator, D, E}]
+    # Wallets are known from their transactions, and K, a recipient nobody
+    # funded, is in no link: only the two funders needed a code lookup.
+    assert chain.rpc_methods.count("eth_getCode") == 2  # the router, the operator
+
+
 async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     _add_scenario(chain)
 
@@ -129,6 +156,13 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     assert result["excluded_as_mev"] == {"sandwich": 0, "arbitrage": 0}  # none here
     assert result["funding_clusters"]["method"] == "skipped"
     assert result["funding_clusters"]["complete"] is False
+    # Nine swaps are too few to read their sizes' statistics.
+    assert result["trade_size_forensics"] == {
+        "trades": 9,
+        "round_share": None,
+        "benford_mad": None,
+        "benford_conformity": "insufficient data",
+    }
 
     trades = await _stored_trades(pg_storage)
     assert len(trades) == 9
@@ -465,9 +499,11 @@ async def test_round_trips_split_over_two_pools_are_found_only_when_audited_toge
     )
     assert together["wash_trades_detected"] == 6
     assert together["related_pools"] == [POOL_2]
+    few = {"trades": 3, "round_share": None, "benford_mad": None}
+    few["benford_conformity"] = "insufficient data"
     assert together["pools"] == {
-        POOL: {"trades": 3, "wash_trades_detected": 3},
-        POOL_2: {"trades": 3, "wash_trades_detected": 3},
+        POOL: {"trades": 3, "wash_trades_detected": 3, "trade_size_forensics": few},
+        POOL_2: {"trades": 3, "wash_trades_detected": 3, "trade_size_forensics": few},
     }
     trades = await _stored_trades(pg_storage)
     assert all(t.is_wash_trade and t.detection_method == "round_trip" for t in trades)

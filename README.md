@@ -12,11 +12,13 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
   - **Round trips** (A‑A wash trading, after Chainalysis's heuristic 1): a trader buying and selling back the same value within 50 blocks
   - **Position neutrality** (Victor & Weintraud, WWW '21; Gan et al., ACM TOIT 2024) – a trader, or a funding‑linked group of traders, ending flat in every token while trading both sides
   - **Coordinated trading** (temporal motifs, after Chainalysis's heuristic 2) – wallets trading opposite sides of a pool within 3 blocks at matched values, repeatedly, as a closed group that ends flat: rings with no observable funding link
-  - **MEV is not wash** – sandwich attackers' legs and atomic arbitrage are recognised by structure and taken out before detection
+  - **MEV is not wash** – sandwich attackers' legs (multi‑front‑run sandwiches included) and atomic arbitrage are recognised by structure and taken out before detection; a public router or aggregator is never mistaken for an attacker's bot
   - **Cross‑pool** – `--related-pool` audits pools of one token pair together, so wash trading split over them is seen
   - **Evidence for every label** – each flagged trade says which detectors fired, what they saw (the partner leg, the window, the ring's members) and what each hit is worth; in the API, alerts and exports
   - **Calibrated scoring** – each detector's measured true/false‑positive rates turn a hit into P(wash), so noisy signals (repeated sizes, high frequency, volume outliers, closed clusters) inform the score but cannot label a trade on their own
-  - Entity clustering via on‑chain funding traces (uses `trace_filter` or an opt‑in, capped block scan); every audit reports what it examined (`funding_clusters`)
+  - Entity clustering by **first funder**, as Dune's wash‑trade filter does: wallets are linked to the address that first funded them, and exchanges, routers and other hubs link nobody (uses `trace_filter` or an opt‑in, capped block scan); every audit reports what it examined (`funding_clusters`)
+  - **Trade‑size forensics** (Cong et al., Management Science 2023) – each audit reports the pool's share of round‑amount trades and its Benford conformity: 7.6–16.4% round and conforming in the clean pools, 0.14% and nonconforming in the FBI's NexF market
+- **Compared with the field** – what this scanner takes from flashbots' mev‑inspect‑py, Sorella's brontes, Dune's spellbook and the literature, and what it does that they do not ([docs/comparison.md](docs/comparison.md)).
 - **Measured performance** – a full audit of 10,000 real trades in 41 s and a re‑audit in 3 s, one RPC request per block, streamed and resumable ([docs/performance.md](docs/performance.md)).
 - **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
 - **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
