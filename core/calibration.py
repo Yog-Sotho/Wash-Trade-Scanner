@@ -76,10 +76,15 @@ def override_calibration(calibration: dict[str, DetectorCalibration] | None) -> 
     _override = calibration
 
 
+def calibration_of(method: str) -> DetectorCalibration | None:
+    """The measured rates of `method`, or None if it is not calibrated."""
+    table = _override if _override is not None else load_calibration()
+    return table.get(method)
+
+
 def wash_probability(method: str, prior: float) -> float:
     """P(wash | `method` fired). Uncalibrated detectors cannot label a trade."""
-    table = _override if _override is not None else load_calibration()
-    calibration = table.get(method)
+    calibration = calibration_of(method)
     if calibration is None:
         logger.warning(f"No calibration for detector {method!r}; its hits are not scored")
         return 0.0

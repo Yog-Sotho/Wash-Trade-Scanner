@@ -42,6 +42,7 @@ import networkx as nx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
+from core.evidence import EvidenceLog, Finding
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class AdvancedHeuristicDetector:
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect address-level (A-A) round trips: Chainalysis heuristic 1.
 
@@ -141,24 +143,64 @@ class AdvancedHeuristicDetector:
                         break
                 if len(pairs) < settings.ROUND_TRIP_MIN_COUNT:
                     continue
-                for pair in pairs:
-                    for trade in pair:
+                for first, second in pairs:
+                    for trade in (first, second):
                         flag_trade(trade, 1.0, "round_trip")
                         wash_trades.append(trade)
+                    if evidence is not None:
+                        evidence.add(self._round_trip_finding(trader, first, second, len(pairs)))
 
         logger.info(f"Detected {len(wash_trades)} round-trip trades")
         return wash_trades
 
     @staticmethod
-    def _values_match(first: SwapTrade, second: SwapTrade, tolerance: float) -> bool:
+    def _value_gap(first: SwapTrade, second: SwapTrade) -> float | None:
+        """Relative difference of the two legs' USD values or, unpriced, of
+        the amount sold back and the amount bought; None if not comparable."""
         a, b = first.volume_usd, second.volume_usd
         if a and b:
-            return abs(a - b) / max(a, b) <= tolerance
-        # Unpriced: compare what was sold back with what was bought.
+            return abs(a - b) / max(a, b)
         bought, sold = first.amount_out or 0.0, second.amount_in or 0.0
         if bought <= 0 or sold <= 0:
-            return False
-        return abs(bought - sold) / max(bought, sold) <= tolerance
+            return None
+        return abs(bought - sold) / max(bought, sold)
+
+    @classmethod
+    def _values_match(cls, first: SwapTrade, second: SwapTrade, tolerance: float) -> bool:
+        gap = cls._value_gap(first, second)
+        return gap is not None and gap <= tolerance
+
+    @classmethod
+    def _round_trip_finding(
+        cls, trader: str, first: SwapTrade, second: SwapTrade, round_trips: int
+    ) -> Finding:
+        blocks = second.block_number - first.block_number
+        gap = cls._value_gap(first, second) or 0.0
+        priced = bool(first.volume_usd and second.volume_usd)
+        where = (
+            "in the same transaction"
+            if first.transaction_hash == second.transaction_hash
+            else f"{blocks} block{'s' if blocks != 1 else ''} later"
+        )
+        return Finding(
+            detector="round_trip",
+            trades=[first, second],
+            entity=trader,
+            summary=(
+                f"Bought and sold back {where}, the two legs' "
+                f"{'USD values' if priced else 'amounts'} {gap:.2%} apart; one of "
+                f"{round_trips} such round trips by this trader in this pool"
+            ),
+            details={
+                "blocks_apart": blocks,
+                "value_gap": round(gap, 6),
+                "compared": "usd" if priced else "amounts",
+                "same_transaction": first.transaction_hash == second.transaction_hash,
+                "round_trips_by_trader": round_trips,
+                "max_blocks": settings.ROUND_TRIP_MAX_BLOCKS,
+                "tolerance": settings.ROUND_TRIP_VALUE_TOLERANCE,
+            },
+        )
 
     @staticmethod
     def _is_sandwich(
@@ -178,6 +220,7 @@ class AdvancedHeuristicDetector:
         trades: list[SwapTrade],
         session: AsyncSession,
         clusters: list[AddressCluster] | None = None,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect entities whose net position stays ~zero while they trade.
 
@@ -194,7 +237,11 @@ class AdvancedHeuristicDetector:
         flagged: set[int] = set()
 
         entity_of: dict[str, str] = {}
+        members_of: dict[str, list[str]] = {}
         for cluster in clusters or []:
+            members_of[f"cluster:{cluster.cluster_id}"] = sorted(
+                a.lower() for a in cluster.addresses
+            )
             for address in cluster.addresses:
                 entity_of[address.lower()] = f"cluster:{cluster.cluster_id}"
 
@@ -208,7 +255,7 @@ class AdvancedHeuristicDetector:
                 trader = trader_of(trade)
                 by_entity[entity_of.get(trader, trader)].append(trade)
 
-            for entity_trades in by_entity.values():
+            for entity, entity_trades in by_entity.items():
                 if len(entity_trades) < settings.POSITION_NEUTRAL_MIN_TRADES:
                     continue
                 for window_hours in settings.POSITION_NEUTRAL_WINDOWS_HOURS:
@@ -225,6 +272,12 @@ class AdvancedHeuristicDetector:
                             continue  # one-sided flow is accumulation, not wash
                         if not self._is_position_neutral(bucket_trades):
                             continue
+                        if evidence is not None:
+                            evidence.add(
+                                self._neutral_finding(
+                                    entity, bucket_trades, window_hours, members_of.get(entity)
+                                )
+                            )
                         for t in bucket_trades:
                             if t.id in flagged:
                                 continue
@@ -236,9 +289,9 @@ class AdvancedHeuristicDetector:
         return wash_trades
 
     @staticmethod
-    def _is_position_neutral(trades: list[SwapTrade]) -> bool:
-        """True if the entity's net change in every token is within margin of
-        the gross amount of that token it moved."""
+    def _net_to_gross(trades: list[SwapTrade]) -> dict[str, float]:
+        """Per token: the entity's net change as a share of the gross amount
+        of it the entity moved (0: it ends where it started)."""
         net: dict[str, float] = defaultdict(float)
         gross: dict[str, float] = defaultdict(float)
 
@@ -250,14 +303,55 @@ class AdvancedHeuristicDetector:
             gross[token_in] += abs(amount_in)
             net[token_out] += amount_out
             gross[token_out] += abs(amount_out)
+        return {token: abs(net[token]) / volume for token, volume in gross.items() if volume > 0}
 
+    @classmethod
+    def _is_position_neutral(cls, trades: list[SwapTrade]) -> bool:
+        """True if the entity's net change in every token is within margin of
+        the gross amount of that token it moved."""
         margin = settings.POSITION_NEUTRAL_MARGIN
-        return all(abs(net[key]) <= margin * volume for key, volume in gross.items() if volume > 0)
+        return all(ratio <= margin for ratio in cls._net_to_gross(trades).values())
+
+    @classmethod
+    def _neutral_finding(
+        cls,
+        entity: str,
+        trades: list[SwapTrade],
+        window_hours: float,
+        members: list[str] | None,
+    ) -> Finding:
+        ordered = sorted(trades, key=lambda t: (t.block_number, t.log_index))
+        ratios = cls._net_to_gross(ordered)
+        who = f"Funding cluster of {len(members)} addresses" if members else "One trader"
+        details: dict[str, object] = {
+            "window_hours": window_hours,
+            "first_block": ordered[0].block_number,
+            "last_block": ordered[-1].block_number,
+            "trades_in_window": len(ordered),
+            "net_to_gross": {token: round(r, 6) for token, r in ratios.items()},
+            "margin": settings.POSITION_NEUTRAL_MARGIN,
+        }
+        if members:
+            details["members"] = members[:20]
+            details["members_total"] = len(members)
+        return Finding(
+            detector="position_neutral",
+            trades=ordered,
+            entity=entity,
+            summary=(
+                f"{who} made {len(ordered)} trades on both sides within a {window_hours:g} h "
+                f"window (blocks {ordered[0].block_number}-{ordered[-1].block_number}) and "
+                f"ended with a net change of at most {max(ratios.values()):.2%} of what it "
+                f"moved in each token (margin {settings.POSITION_NEUTRAL_MARGIN:.0%})"
+            ),
+            details=details,
+        )
 
     async def detect_closed_cluster(
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect approximately closed trading clusters.
 
@@ -338,6 +432,27 @@ class AdvancedHeuristicDetector:
                 for trade in internal_trades:
                     flag_trade(trade, 0.85, "closed_cluster")
                     wash_trades.append(trade)
+                if evidence is not None:
+                    ratio = internal_volume / total
+                    evidence.add(
+                        Finding(
+                            detector="closed_cluster",
+                            trades=internal_trades,
+                            entity=f"community of {len(members)} addresses",
+                            summary=(
+                                f"{len(internal_trades)} swaps among a community of "
+                                f"{len(members)} swap senders and recipients, {ratio:.1%} of "
+                                "whose volume stays inside it, each member's in- and outflow "
+                                "balanced"
+                            ),
+                            details={
+                                "members": sorted(members)[:20],
+                                "members_total": len(members),
+                                "internal_volume_ratio": round(ratio, 6),
+                                "internal_trades": len(internal_trades),
+                            },
+                        )
+                    )
 
         logger.info(f"Detected {len(wash_trades)} closed-cluster trades")
         return wash_trades
@@ -364,6 +479,7 @@ class AdvancedHeuristicDetector:
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect traders recycling the same trade size.
 
@@ -389,12 +505,32 @@ class AdvancedHeuristicDetector:
                 trade
             )
 
-        for group_trades in groups.values():
+        for (_pool, trader, token, amount), group_trades in groups.items():
             if len(group_trades) < settings.REPEATED_AMOUNT_MIN_COUNT:
                 continue
             for trade in group_trades:
                 flag_trade(trade, 0.75, "repeated_amounts")
                 wash_trades.append(trade)
+            if evidence is not None:
+                sig = settings.REPEATED_AMOUNT_SIG_FIGS
+                evidence.add(
+                    Finding(
+                        detector="repeated_amounts",
+                        trades=group_trades,
+                        entity=trader,
+                        summary=(
+                            f"Sold {amount:.{sig}g} raw units of {token} {len(group_trades)} "
+                            f"times (equal to {sig} significant digits)"
+                        ),
+                        details={
+                            "token": token,
+                            "amount": amount,
+                            "times": len(group_trades),
+                            "significant_digits": sig,
+                            "min_times": settings.REPEATED_AMOUNT_MIN_COUNT,
+                        },
+                    )
+                )
 
         logger.info(f"Detected {len(wash_trades)} repeated-amount trades")
         return wash_trades

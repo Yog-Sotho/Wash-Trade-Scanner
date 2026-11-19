@@ -107,6 +107,22 @@ async def deliver(sink, alert: AlertBatch, **kwargs) -> AlertDispatcher:
 # --------------------------------------------------------------- the batch
 
 
+def test_each_listed_trade_says_why_it_was_flagged():
+    explained = trade(1)
+    explained["wash_evidence"] = {
+        "detectors": [{"detector": "round_trip", "summary": "Bought and sold back 2 blocks later"}]
+    }
+    lines = AlertBatch(
+        chain_id=1,
+        chain_name="Ethereum",
+        pool_address=POOL,
+        trades=(explained, trade(2)),
+        detected_at=datetime(2026, 11, 19, 12, 0, tzinfo=UTC),
+    ).lines()
+    assert lines[3] == "  why: round_trip: Bought and sold back 2 blocks later"
+    assert not any(line.startswith("  why") for line in lines[4:])  # no evidence, no line
+
+
 def test_a_batch_summarises_and_lists_its_trades():
     one, many = batch(1), batch(12, volume=10.0)
     assert one.title() == f"1 wash trade flagged in Ethereum pool {POOL}"

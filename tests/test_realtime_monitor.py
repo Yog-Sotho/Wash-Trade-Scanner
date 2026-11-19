@@ -306,6 +306,7 @@ async def test_poll_once_keeps_a_stronger_existing_label():
     wash[0].is_wash_trade = True
     wash[0].wash_trade_score = 0.99
     wash[0].detection_method = "position_neutral"
+    wash[0].wash_evidence = {"decided_by": "position_neutral"}
     monitor, _ = _monitor_with_mocks(wash)
     monitor.last_block = 100
 
@@ -314,4 +315,6 @@ async def test_poll_once_keeps_a_stronger_existing_label():
 
     assert wash[0].detection_method == "position_neutral"
     assert wash[0].wash_trade_score == 0.99
+    assert wash[0].wash_evidence == {"decided_by": "position_neutral"}
     assert wash[1].detection_method == "round_trip"
+    assert wash[1].wash_evidence["decided_by"] == "round_trip"

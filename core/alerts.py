@@ -39,6 +39,7 @@ import aiohttp
 
 from config.settings import settings
 from core import metrics
+from core.evidence import evidence_summary
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,9 @@ class AlertBatch:
                 f"${trade.get('volume_usd') or 0.0:,.2f} "
                 f"{trade.get('detection_method')} (score {trade.get('wash_trade_score', 0.0):.3f})"
             )
+            why = evidence_summary(trade.get("wash_evidence"))
+            if why:
+                out.append(f"  why: {why}")
         if len(self.trades) > LISTED_TRADES:
             out.append(f"... and {len(self.trades) - LISTED_TRADES} more")
         return out

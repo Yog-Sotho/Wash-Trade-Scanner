@@ -150,6 +150,16 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     expected_score = wash_probability("round_trip", settings.WASH_PRIOR)
     assert expected_score >= settings.SUSPICIOUS_ACTIVITY_THRESHOLD
     assert all(t.wash_trade_score == pytest.approx(expected_score) for t in trades[:6])
+    # Every label is stored with its evidence: the round trip's two legs (the
+    # partner leg found on chain), their gap, and what the hit is worth.
+    for trade in trades[:6]:
+        entry = trade.wash_evidence["detectors"][0]
+        assert trade.wash_evidence["decided_by"] == "round_trip"
+        assert entry["probability"] == pytest.approx(expected_score, rel=1e-5)
+        assert trade.transaction_hash in [leg["tx"] for leg in entry["trades"]]
+        assert entry["details"]["round_trips_by_trader"] == 3
+        assert all(leg["trader"] == A for leg in entry["trades"])
+    assert all(t.wash_evidence is None for t in trades[6:])
 
     metrics = result["risk_metrics"]
     assert metrics["total_volume_usd"] == pytest.approx(8985.0)
@@ -195,7 +205,17 @@ async def test_reaudit_clears_labels_the_current_detectors_do_not_give(pg_storag
     await _run_audit(pg_storage)
     trades = await _stored_trades(pg_storage)
     bot_swap = next(t for t in trades if t.tx_from == E)
-    await pg_storage.update_trade_labels([bot_swap.id], True, 1.0, "self_trading")
+    await pg_storage.save_trade_labels(
+        [
+            {
+                "id": bot_swap.id,
+                "is_wash_trade": True,
+                "wash_trade_score": 1.0,
+                "detection_method": "self_trading",
+                "wash_evidence": {"decided_by": "self_trading", "detectors": []},
+            }
+        ]
+    )
 
     result = await _run_audit(pg_storage)
 
@@ -203,6 +223,7 @@ async def test_reaudit_clears_labels_the_current_detectors_do_not_give(pg_storag
     relabelled = next(t for t in await _stored_trades(pg_storage) if t.tx_from == E)
     assert relabelled.is_wash_trade is False
     assert relabelled.detection_method is None
+    assert relabelled.wash_evidence is None  # stale evidence goes with the stale label
 
 
 async def test_api_serves_audited_pool(pg_storage, chain):
@@ -383,3 +404,24 @@ async def test_realtime_monitor_ingests_new_swaps_and_alerts(pg_storage, chain, 
 
     again, _ = await monitor.poll_once()  # no new blocks
     assert again == []
+
+
+async def test_the_json_export_lists_each_flagged_trade_with_its_evidence(
+    pg_storage, chain, tmp_path
+):
+    import json
+
+    _add_scenario(chain)
+    runner = AuditRunner()
+    runner.storage = pg_storage
+    params = AuditParameters(
+        chain_id=1, pool_address=POOL_CHECKSUMMED, start_block=100, end_block=130, use_ml=False
+    )
+    path = tmp_path / "audit.json"
+    await runner.run_audit(params, export_format="json", export_path=str(path))
+
+    exported = json.loads(path.read_text())
+    flagged = exported["flagged_trades"]
+    assert len(flagged) == exported["wash_trades_detected"] == 6
+    assert [t["block_number"] for t in flagged] == sorted(t["block_number"] for t in flagged)
+    assert all(t["wash_evidence"]["decided_by"] == "round_trip" for t in flagged)

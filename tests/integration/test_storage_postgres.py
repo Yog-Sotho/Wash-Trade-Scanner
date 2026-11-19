@@ -263,6 +263,7 @@ async def test_initialize_adopts_a_database_created_before_migrations(pg_storage
         await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_to"))
         await conn.execute(text("DROP TABLE alembic_version"))
         await conn.execute(text("DROP TABLE audit_tasks"))  # added after the baseline (0002)
+        await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN wash_evidence"))  # 0003
 
     await pg_storage.initialize()
 
@@ -283,7 +284,7 @@ async def test_initialize_adopts_a_database_created_before_migrations(pg_storage
             )
         }
         version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-    assert {"tx_from", "tx_to"} <= columns
+    assert {"tx_from", "tx_to", "wash_evidence"} <= columns
     assert "ix_swap_trades_tx_from" in indexes
     assert version == _head_revision()
     trades = await pg_storage.get_pool_trades(1, POOL)

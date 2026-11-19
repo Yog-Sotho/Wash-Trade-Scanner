@@ -290,13 +290,13 @@ async def test_composite_scores_hits_by_measured_rates(detector, calibration):
     calibration["volume_anomaly"] = DetectorCalibration(tpr=0.5, fpr_upper=0.5)
     calibration["round_trip"] = DetectorCalibration(tpr=0.95, fpr_upper=0.0001)
 
-    async def noisy(ts, _session):
+    async def noisy(ts, _session, **_kwargs):
         return [ts[0], ts[1]]
 
-    async def precise(ts, _session):
+    async def precise(ts, _session, **_kwargs):
         return [ts[1]]
 
-    async def none(*_args):
+    async def none(*_args, **_kwargs):
         return []
 
     detector.detect_volume_anomaly = noisy
@@ -314,6 +314,14 @@ async def test_composite_scores_hits_by_measured_rates(detector, calibration):
     assert trades[0].wash_trade_score == pytest.approx(0.01)  # 0.5*0.01/(0.5*0.01+0.5*0.99)
     assert trades[0].detection_method == "volume_anomaly"
     assert stats["volume_anomaly"] == 2 and stats["round_trip"] == 1
+    # The label's evidence: both detectors that fired, the deciding one first,
+    # its probability the trade's score. An unlabelled trade has none.
+    bundle = trades[1].wash_evidence
+    assert bundle["decided_by"] == "round_trip"
+    assert bundle["probability"] == pytest.approx(trades[1].wash_trade_score)
+    assert [d["detector"] for d in bundle["detectors"]] == ["round_trip", "volume_anomaly"]
+    assert bundle["detectors"][0]["tpr"] == 0.95
+    assert trades[0].wash_evidence is None
 
 
 @pytest.mark.asyncio

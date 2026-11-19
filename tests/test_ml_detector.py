@@ -133,6 +133,13 @@ async def test_detect_wash_trades_flags_high_probability(detector):
     # Scored like a heuristic hit: P(wash | flagged) from the measured rates.
     expected = 0.9 * 0.01 / (0.9 * 0.01 + 0.0001 * 0.99)
     assert all(t.wash_trade_score == pytest.approx(expected) for t in result)
+    # And explained: the model's probability, its threshold and its rates.
+    entry = result[0].wash_evidence["detectors"][0]
+    assert result[0].wash_evidence["decided_by"] == "ml_isolation_forest"
+    assert entry["probability"] == pytest.approx(expected, rel=1e-5)
+    assert entry["details"]["threshold"] == 0.0
+    assert (entry["tpr"], entry["fpr_upper"]) == (0.9, 0.0001)
+    assert entry["trades"][0]["tx"] == result[0].transaction_hash
 
 
 @pytest.mark.asyncio

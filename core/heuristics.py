@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.settings import settings
 from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade, trader_of
 from core.calibration import wash_probability
+from core.evidence import EvidenceLog, Finding
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ class HeuristicDetector:
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect circular trading via strongly connected components."""
         wash_trades = []
@@ -132,9 +134,11 @@ class HeuristicDetector:
             # looked up in each pair's sorted times: O(n log n), where scanning
             # every trade for each candidate was O(n^2).
             component: dict[str, int] = {}
+            sizes: dict[int, int] = {}
             for index, scc in enumerate(nx.strongly_connected_components(G)):
                 if len(scc) >= 2:
                     component.update(dict.fromkeys(scc, index))
+                    sizes[index] = len(scc)
             candidates: dict[int, list[SwapTrade]] = defaultdict(list)
             for trade in pool_trades:
                 index = component.get(trade.sender, -1)
@@ -143,21 +147,43 @@ class HeuristicDetector:
             if not candidates:
                 continue
 
-            pair_times: dict[tuple[str, str], list[datetime]] = defaultdict(list)
+            by_pair: dict[tuple[str, str], list[SwapTrade]] = defaultdict(list)
             for trade in pool_trades:
-                pair_times[(trade.sender, trade.recipient)].append(trade.block_timestamp)
-            for times in pair_times.values():
-                times.sort()
+                by_pair[(trade.sender, trade.recipient)].append(trade)
+            pair_times: dict[tuple[str, str], list[datetime]] = {}
+            for pair, pair_trades in by_pair.items():
+                pair_trades.sort(key=lambda t: t.block_timestamp)
+                pair_times[pair] = [t.block_timestamp for t in pair_trades]
             window = timedelta(minutes=settings.WASH_TRADE_TIME_WINDOW_MINUTES)
             # Component by component, each in trade order: the order the
             # per-component scan produced.
             for index in sorted(candidates):
                 for trade in candidates[index]:
-                    reverse = pair_times.get((trade.recipient, trade.sender), [])
+                    reverse_pair = (trade.recipient, trade.sender)
+                    reverse = pair_times.get(reverse_pair, [])
                     first = bisect_left(reverse, trade.block_timestamp - window)
                     if first < bisect_right(reverse, trade.block_timestamp + window):
                         flag_trade(trade, 0.9, "circular_trading")
                         wash_trades.append(trade)
+                        if evidence is not None:
+                            partner = by_pair[reverse_pair][first]
+                            evidence.add(
+                                Finding(
+                                    detector="circular_trading",
+                                    trades=[trade, partner],
+                                    entity=f"{trade.sender}->{trade.recipient}",
+                                    summary=(
+                                        f"Swap from {trade.sender} to {trade.recipient}, both in "
+                                        f"one cycle of {sizes[index]} swap senders and "
+                                        f"recipients, reversed within "
+                                        f"{settings.WASH_TRADE_TIME_WINDOW_MINUTES} minutes"
+                                    ),
+                                    details={
+                                        "cycle_size": sizes[index],
+                                        "window_minutes": settings.WASH_TRADE_TIME_WINDOW_MINUTES,
+                                    },
+                                )
+                            )
 
         logger.info(f"Detected {len(wash_trades)} circular trades")
         return wash_trades
@@ -166,6 +192,7 @@ class HeuristicDetector:
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect high-frequency bot patterns with configurable thresholds."""
         wash_trades = []
@@ -211,6 +238,24 @@ class HeuristicDetector:
                 for trade in sender_trades:
                     flag_trade(trade, 0.8, "high_frequency_bot")
                     wash_trades.append(trade)
+                if evidence is not None:
+                    evidence.add(
+                        Finding(
+                            detector="high_frequency_bot",
+                            trades=list(sender_trades),
+                            entity=trader,
+                            summary=(
+                                f"{len(sender_trades)} trades on average {avg_time:.0f} s apart "
+                                f"(threshold {time_threshold} s), volumes varying by a "
+                                f"coefficient of {volume_cv:.2f} (threshold {cv_threshold})"
+                            ),
+                            details={
+                                "trades": len(sender_trades),
+                                "mean_interval_seconds": round(avg_time, 3),
+                                "volume_cv": round(volume_cv, 6),
+                            },
+                        )
+                    )
 
         logger.info(f"Detected {len(wash_trades)} bot trades")
         return wash_trades
@@ -219,6 +264,7 @@ class HeuristicDetector:
         self,
         trades: list[SwapTrade],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect volume anomalies using MAD instead of z-score."""
         wash_trades: list[SwapTrade] = []
@@ -260,6 +306,26 @@ class HeuristicDetector:
                 if detector.is_anomaly(vol, threshold):
                     flag_trade(trade, min(0.7 + (score - threshold) * 0.05, 1.0), "volume_anomaly")
                     wash_trades.append(trade)
+                    if evidence is not None:
+                        evidence.add(
+                            Finding(
+                                detector="volume_anomaly",
+                                trades=[trade],
+                                entity=trader_of(trade),
+                                summary=(
+                                    f"Volume ${vol:,.2f} scores {score:.1f} "
+                                    f"({settings.VOLUME_ANOMALY_METHOD}) among the "
+                                    f"{len(bucket_trades)} trades of its {bucket_minutes}-minute "
+                                    f"bucket, over the threshold {threshold}"
+                                ),
+                                details={
+                                    "score": round(float(score), 6),
+                                    "threshold": threshold,
+                                    "bucket_minutes": bucket_minutes,
+                                    "bucket_trades": len(bucket_trades),
+                                },
+                            )
+                        )
 
         logger.info(f"Detected {len(wash_trades)} volume anomalies")
         return wash_trades
@@ -269,6 +335,7 @@ class HeuristicDetector:
         trades: list[SwapTrade],
         address_clusters: list[AddressCluster],
         session: AsyncSession,
+        evidence: EvidenceLog | None = None,
     ) -> list[SwapTrade]:
         """Detect swaps whose output a trader sends to another address of its
         own funding cluster: value moved between one entity's wallets through
@@ -291,6 +358,19 @@ class HeuristicDetector:
             if trader_cluster and recipient_cluster and trader_cluster == recipient_cluster:
                 flag_trade(trade, 0.95, "wash_cluster")
                 wash_trades.append(trade)
+                if evidence is not None:
+                    evidence.add(
+                        Finding(
+                            detector="wash_cluster",
+                            trades=[trade],
+                            entity=f"cluster:{trader_cluster}",
+                            summary=(
+                                f"The swap's output went to {recipient}, linked by funding to "
+                                f"the trader {trader} (cluster {trader_cluster})"
+                            ),
+                            details={"recipient": recipient, "cluster_id": trader_cluster},
+                        )
+                    )
 
         logger.info(f"Detected {len(wash_trades)} wash cluster trades")
         return wash_trades
@@ -319,6 +399,7 @@ class HeuristicDetector:
 
         stats: dict[str, int] = {}
         hits: dict[int, list[str]] = defaultdict(list)
+        evidence = EvidenceLog()
 
         detectors = [
             ("round_trip", self.advanced.detect_round_trips),
@@ -330,18 +411,20 @@ class HeuristicDetector:
         ]
 
         for name, detector in detectors:
-            detected = await detector(trades, session)
+            detected = await detector(trades, session, evidence=evidence)
             for trade in {t.id: t for t in detected}.values():
                 hits[trade.id].append(name)
             stats[name] = len({t.id for t in detected})
 
-        neutral = await self.advanced.detect_position_neutral(trades, session, clusters)
+        neutral = await self.advanced.detect_position_neutral(
+            trades, session, clusters, evidence=evidence
+        )
         for trade in {t.id: t for t in neutral}.values():
             hits[trade.id].append("position_neutral")
         stats["position_neutral"] = len({t.id for t in neutral})
 
         if clusters:
-            detected = await self.detect_wash_clusters(trades, clusters, session)
+            detected = await self.detect_wash_clusters(trades, clusters, session, evidence=evidence)
             for trade in {t.id: t for t in detected}.values():
                 hits[trade.id].append("wash_cluster")
             stats["wash_cluster"] = len({t.id for t in detected})
@@ -352,6 +435,7 @@ class HeuristicDetector:
             trade.is_wash_trade = False
             trade.wash_trade_score = 0.0
             trade.detection_method = None
+            trade.wash_evidence = None
             methods = hits.get(trade.id)
             if not methods:
                 continue
@@ -360,6 +444,11 @@ class HeuristicDetector:
             trade.detection_method = method
             if score >= self.confidence_threshold:
                 trade.is_wash_trade = True
+                # Why, for every labelled trade: each detector that fired on it,
+                # what it saw and what its hit is worth (core/evidence.py).
+                trade.wash_evidence = evidence.bundle(
+                    trade, methods, prior, self.confidence_threshold
+                )
                 wash_trades.append(trade)
         return wash_trades, stats
 

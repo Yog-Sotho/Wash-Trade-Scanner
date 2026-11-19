@@ -48,6 +48,11 @@ class SwapTrade(Base):
     is_wash_trade: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     wash_trade_score: Mapped[float] = mapped_column(Float, default=0.0)
     detection_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Why the trade is labelled wash: each detector that fired, what it saw and
+    # what its hit is worth (core/evidence.py). NULL for unlabelled trades.
+    wash_evidence: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
 
     __table_args__ = (
         Index("ix_swap_trades_pool_timestamp", "pool_address", "block_timestamp"),
@@ -174,6 +179,7 @@ class SwapTradeResponse(BaseModel):
     is_wash_trade: bool = False
     wash_trade_score: float = 0.0
     detection_method: str | None = None
+    wash_evidence: dict[str, Any] | None = None
 
 
 class TokenRiskProfileResponse(BaseModel):

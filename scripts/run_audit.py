@@ -12,7 +12,7 @@ import logging
 import signal
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,6 +34,7 @@ from core.ml_detector import MLDetector
 from core.redaction import redact
 from core.storage import Storage
 from core.validators import AuditParameters
+from models.schemas import SwapTrade, SwapTradeResponse
 
 logger = logging.getLogger(__name__)
 _tracer = trace.get_tracer(__name__)
@@ -169,21 +170,20 @@ class AuditRunner:
                     params.chain_id, params.pool_address, session
                 )
                 if heuristics_wash_trades:
-                    # Persist each trade's real detector score and method instead
-                    # of flattening everything to one label.
-                    by_label: dict[tuple[str, float], list[int]] = defaultdict(list)
-                    for t in heuristics_wash_trades:
-                        method = t.detection_method or "heuristic"
-                        score = t.wash_trade_score or 0.8
-                        by_label[(method, score)].append(t.id)
-                        flagged_trade_ids.add(t.id)
-                    for (method, score), trade_ids in by_label.items():
-                        await self.storage.update_trade_labels(
-                            trade_ids,
-                            is_wash_trade=True,
-                            wash_trade_score=score,
-                            detection_method=method,
-                        )
+                    # Each trade's own score, deciding method and evidence.
+                    await self.storage.save_trade_labels(
+                        [
+                            {
+                                "id": t.id,
+                                "is_wash_trade": True,
+                                "wash_trade_score": t.wash_trade_score or 0.0,
+                                "detection_method": t.detection_method or "heuristic",
+                                "wash_evidence": t.wash_evidence,
+                            }
+                            for t in heuristics_wash_trades
+                        ]
+                    )
+                    flagged_trade_ids.update(t.id for t in heuristics_wash_trades)
                     detection_methods.extend(stats.keys())
                 detector_hits.update(stats)
 
@@ -247,6 +247,7 @@ class AuditRunner:
                 duration,
                 export_format,
                 export_path,
+                flagged_trades=[t for t in trades if t.is_wash_trade],
             )
 
         # Counted once the audit has succeeded, export included.
@@ -318,6 +319,7 @@ class AuditRunner:
         duration: float,
         export_format: str,
         export_path: str | None,
+        flagged_trades: list[SwapTrade] | None = None,
     ) -> None:
         results = {
             "chain_id": params.chain_id,
@@ -328,6 +330,11 @@ class AuditRunner:
             "detection_methods": detection_methods,
             "duration": duration,
             "timestamp": datetime.now(UTC).isoformat(),
+            # Every labelled trade with the evidence for its label (JSON only).
+            "flagged_trades": [
+                SwapTradeResponse.model_validate(t).model_dump(mode="json")
+                for t in sorted(flagged_trades or [], key=lambda t: (t.block_number, t.log_index))
+            ],
         }
 
         if export_format == "json":
