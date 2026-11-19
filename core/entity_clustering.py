@@ -393,8 +393,10 @@ class EntityClusterer:
         # Hubs link nobody: contracts (and audited addresses that are
         # contracts are no one's wallet), listed funders, and funders of more
         # than FUNDING_MAX_FANOUT of the audited addresses.
+        # Only addresses in a funding link can be in a cluster, so only they
+        # are looked up; known wallets are spared.
         known_eoas = {a.lower() for a in eoas or ()}
-        unknown = (addresses_set | {edge[0] for edge in first.values()}) - known_eoas
+        unknown = (set(first) | {edge[0] for edge in first.values()}) - known_eoas
         contracts = await self._contracts(web3, unknown) if unknown else set()
         excluded = settings.funding_excluded_funder_set
         fanout = Counter(edge[0] for funded, edge in first.items() if funded not in contracts)

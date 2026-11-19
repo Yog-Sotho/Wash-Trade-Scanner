@@ -555,11 +555,13 @@ async def test_only_the_first_funding_links(clusterer):
 
 async def test_audited_contracts_are_no_ones_wallet(clusterer):
     """A recipient that is a contract (a router unwrapping WETH) is left out,
-    and only addresses not known to be wallets cost a code lookup."""
+    and only addresses in a link and not known to be wallets cost a code
+    lookup: the bot contract nobody funded costs none."""
     trader = _addr(0x501)
     edges = [(trader, ROUTER, 1, (1, 0, 0))]  # the trader was the router's first funder
+    bot = _addr(0x5B0)
     graph, lookups = await _graph(
-        clusterer, edges, [trader, ROUTER], contracts=[ROUTER], eoas=[trader]
+        clusterer, edges, [trader, ROUTER, bot], contracts=[ROUTER, bot], eoas=[trader]
     )
     assert ROUTER not in graph and _clusters_of(graph) == []
     assert [call.args[1][0].lower() for call in lookups.await_args_list] == [ROUTER]
@@ -615,3 +617,13 @@ def test_excluded_funders_setting_is_validated():
     assert listed.funding_excluded_funder_set == {EXCHANGE, ROUTER}
     with pytest.raises(ValidationError):
         Settings(FUNDING_EXCLUDED_FUNDERS="binance")
+
+
+async def test_transfers_into_addresses_not_audited_link_nothing(clusterer):
+    """A node returning more than was asked for (transfers into other
+    addresses) must not add strangers to a cluster or count them as funded."""
+    a, b, stranger = _addr(0x701), _addr(0x702), _addr(0x7FF)
+    edges = [(OPERATOR, stranger, 1, (1, 0, 0)), (OPERATOR, a, 1, (2, 0, 0))]
+    graph, _ = await _graph(clusterer, edges, [a, b], eoas=[a, b])
+    assert stranger not in graph
+    assert _clusters_of(graph) == [{OPERATOR, a}]

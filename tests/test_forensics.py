@@ -124,3 +124,14 @@ def test_the_documented_wash_market_stands_out_from_every_clean_pool():
         assert all(f.round_share < c.round_share / 10 for c in clean)
     for c in clean:
         assert c.benford_conformity in ("close", "acceptable")
+
+
+def test_benford_needs_enough_input_amounts_not_just_enough_swaps():
+    """Swaps recorded with only an output amount count for the round share
+    but give no input digit."""
+    rng = random.Random(5)
+    amounts = benford_amounts(MIN_TRADES, rng)
+    trades = [swap(a, a) for a in amounts[:10]] + [swap(0.0, a) for a in amounts[10:]]
+    result = trade_size_forensics(trades)
+    assert result.round_share is not None
+    assert (result.benford_mad, result.benford_conformity) == (None, "insufficient data")

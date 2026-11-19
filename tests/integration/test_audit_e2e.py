@@ -132,9 +132,9 @@ async def test_funding_links_join_an_operators_wallets_and_not_a_routers_users(
     assert result["funding_clusters"]["complete"] is True
     clusters = await pg_storage.get_address_clusters(1)
     assert [set(c.addresses) for c in clusters] == [{operator, D, E}]
-    # Wallets are known from their transactions; only K, a recipient, and
-    # the funders needed a code lookup.
-    assert chain.rpc_methods.count("eth_getCode") == 3  # K, the router, the operator
+    # Wallets are known from their transactions, and K, a recipient nobody
+    # funded, is in no link: only the two funders needed a code lookup.
+    assert chain.rpc_methods.count("eth_getCode") == 2  # the router, the operator
 
 
 async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
