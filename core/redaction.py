@@ -1,11 +1,12 @@
 """
-Keep RPC endpoint URLs out of logs and error messages.
+Keep secret-bearing URLs out of logs and error messages.
 
 Hosted node endpoints carry their API key in the URL
-(https://mainnet.infura.io/v3/<key>), and aiohttp puts the full request URL
-in its error messages ("401, message='Unauthorized', url='https://...'"),
-which reach logs and API responses. redact() replaces every configured RPC
-URL with its scheme and host.
+(https://mainnet.infura.io/v3/<key>), a Slack incoming webhook URL is itself
+the credential, and aiohttp puts the full request URL in its error messages
+("401, message='Unauthorized', url='https://...'"), which reach logs and API
+responses. redact() replaces every configured RPC and alert-webhook URL with
+its scheme and host.
 """
 
 from __future__ import annotations
@@ -42,8 +43,11 @@ def _replacements(urls: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
 
 
 def redact(text: str) -> str:
-    """`text` with every configured RPC URL replaced by scheme://host/<redacted>."""
-    urls = tuple(u for u in settings.rpc_urls.values() if u)
+    """`text` with every configured RPC or alert-webhook URL replaced by
+    scheme://host/<redacted>."""
+    configured = [*settings.rpc_urls.values()]
+    configured += [settings.ALERT_WEBHOOK_URL, settings.ALERT_SLACK_WEBHOOK_URL]
+    urls = tuple(u for u in configured if u)
     for secret, replacement in _replacements(urls):
         if secret in text:
             text = text.replace(secret, replacement)

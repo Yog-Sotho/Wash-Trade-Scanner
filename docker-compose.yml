@@ -44,6 +44,18 @@ services:
       # Required by the server here (it refuses to start without keys and says
       # so in its log); optional for compose, so the audit service still runs.
       API_KEY_HASHES: ${API_KEY_HASHES:-}
+      # Pools watched around the clock and where alerts go (docs/alerting.md).
+      MONITOR_POOLS: ${MONITOR_POOLS:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-}
+      ALERT_SLACK_WEBHOOK_URL: ${ALERT_SLACK_WEBHOOK_URL:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:-}
+      ALERT_SMTP_PORT: ${ALERT_SMTP_PORT:-587}
+      ALERT_SMTP_USERNAME: ${ALERT_SMTP_USERNAME:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      ALERT_SMTP_TLS: ${ALERT_SMTP_TLS:-starttls}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

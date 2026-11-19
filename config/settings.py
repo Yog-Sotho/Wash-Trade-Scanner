@@ -183,6 +183,30 @@ class Settings(BaseSettings):
     # Real-time Monitor
     MONITOR_POLL_INTERVAL_SECONDS: float = Field(12.0, ge=1.0, le=3600.0)
     MONITOR_WINDOW_MINUTES: int = Field(60, ge=1, le=10080)
+    # Pools the API server watches continuously, alerting the sinks below
+    # (docs/alerting.md): comma-separated chain_id:pool_address pairs.
+    MONITOR_POOLS: str = Field(
+        "", pattern=r"^\s*(\d+:0x[0-9a-fA-F]{40}\s*(,\s*\d+:0x[0-9a-fA-F]{40}\s*)*)?$"
+    )
+
+    # Alert sinks (docs/alerting.md); each is on when its address is set.
+    # Webhook: a JSON POST, signed with HMAC-SHA256 when the secret is set.
+    ALERT_WEBHOOK_URL: str = Field("", pattern=r"^(https?://\S+)?$")
+    ALERT_WEBHOOK_SECRET: str = Field("")
+    # Slack incoming webhook.
+    ALERT_SLACK_WEBHOOK_URL: str = Field("", pattern=r"^(https://\S+)?$")
+    # Email over SMTP: comma-separated recipients.
+    ALERT_EMAIL_TO: str = Field("")
+    ALERT_EMAIL_FROM: str = Field("")
+    ALERT_SMTP_HOST: str = Field("")
+    ALERT_SMTP_PORT: int = Field(587, ge=1, le=65535)
+    ALERT_SMTP_USERNAME: str = Field("")
+    ALERT_SMTP_PASSWORD: str = Field("")
+    ALERT_SMTP_TLS: str = Field("starttls", pattern="^(starttls|ssl|none)$")
+    # Each delivery attempt's time limit, and attempts per alert before it is
+    # dropped (with exponential backoff, or the receiver's Retry-After).
+    ALERT_TIMEOUT_SECONDS: float = Field(10.0, gt=0.0, le=120.0)
+    ALERT_MAX_ATTEMPTS: int = Field(3, ge=1, le=10)
 
     # Logging
     LOG_LEVEL: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
@@ -251,6 +275,20 @@ class Settings(BaseSettings):
         """Chain ids whose RPC endpoint readiness requires, in order, deduplicated."""
         ids = [int(part) for part in self.HEALTH_RPC_CHAIN_IDS.split(",") if part.strip()]
         return list(dict.fromkeys(ids))
+
+    @property
+    def monitor_pool_list(self) -> list[tuple[int, str]]:
+        """(chain id, lowercase pool address) pairs, in order, deduplicated."""
+        pairs = []
+        for item in self.MONITOR_POOLS.split(","):
+            if item.strip():
+                chain, pool = item.strip().split(":")
+                pairs.append((int(chain), pool.lower()))
+        return list(dict.fromkeys(pairs))
+
+    @property
+    def alert_email_recipients(self) -> list[str]:
+        return [a.strip() for a in self.ALERT_EMAIL_TO.split(",") if a.strip()]
 
     @property
     def cors_origins_list(self) -> list[str]:

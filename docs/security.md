@@ -36,6 +36,9 @@ Every step below is a gate: a finding fails the pipeline.
   (which carry provider API keys) are redacted from every log line and from
   error messages the API returns, and never recorded in metrics or spans
 - `/metrics` requires the API key whenever authentication is on
+- Alert webhooks can be signed (HMAC-SHA256 over timestamp and body, see
+  [alerting.md](alerting.md)); alert webhook URLs, which are credentials, are
+  redacted from logs like the RPC URLs
 - Circuit breaker prevents retry storms
 - Input validation fails fast (no partial processing)
 

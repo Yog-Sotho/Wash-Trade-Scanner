@@ -162,6 +162,7 @@ Audit reports quantify wash activity, not just count it: wash volume in USD, was
 - [Architecture Overview](docs/architecture.md)
 - [Security Guide](docs/security.md)
 - [Observability](docs/observability.md): logs, request ids, metrics, traces
+- [Alerting](docs/alerting.md): watched pools, webhook / Slack / email alerts
 
 ## Testing
 
@@ -199,6 +200,10 @@ pool inspection, live monitoring and audit management in the browser.
 Stream live detections for a pool over websocket:
 
     /api/v1/ws/monitor/{chain_id}/{pool_address}
+
+Or have the server watch pools around the clock and alert a webhook, Slack or
+email, no browser needed: set `MONITOR_POOLS` and a sink
+([docs/alerting.md](docs/alerting.md)).
 
 To expose the API beyond localhost you must enable authentication — generate
 a key with `wash-genkey`, set `API_AUTH_ENABLED=true` and `API_KEY_HASHES`;

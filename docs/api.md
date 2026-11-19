@@ -155,7 +155,11 @@ On connect, the server anchors at the current chain head and then:
    protected),
 3. re-runs the full detector stack over a rolling
    `MONITOR_WINDOW_MINUTES` window (default 60),
-4. pushes one event per **newly** flagged trade (de-duplicated across polls).
+4. pushes one event per trade **newly** labelled wash: a trade already
+   labelled (by an audit, or earlier) is not announced again.
+
+To be alerted without a browser open (webhook, Slack, email), set
+`MONITOR_POOLS` and a sink: see [alerting.md](alerting.md).
 
 Event frames:
 

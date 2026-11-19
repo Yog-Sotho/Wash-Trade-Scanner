@@ -294,6 +294,28 @@ defects, all caught).
 Pluggable sink (webhook/Slack/email) so the real-time monitor can notify something other
 than an open browser tab.
 
+### Phase 4.3 — status: done (2026-11-19)
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| Pluggable sinks | Webhook (HMAC-signed), Slack, email; any combination | Tests against real local HTTP receivers and an SMTP server |
+| Notify something other than a browser tab | The server watches `MONITOR_POOLS` itself and alerts the sinks | Real `wash-api` against the fake chain: six round trips became one signed webhook and one email; Slack (deliberately unreachable over TLS) retried 1 s, 2 s, then gave up without affecting the others; clean shutdown on SIGTERM |
+
+Beyond the plan:
+
+- **Background monitors.** A sink fed by the websocket monitor fires only while
+  someone has the panel open, which is the limitation 4.3 exists to remove.
+  So the server runs supervised monitors for configured pools.
+- **One alert per pass, never repeated.** Each pass's new detections are one
+  notification. A trade is announced when first labelled wash, and the label
+  in the database is the record, so restarts and earlier audits do not cause
+  repeats (the integration test restarts the watcher to show it).
+- **Delivery that cannot hurt monitoring.** Queued per sink, retried with
+  backoff or `Retry-After`, bounded queue, permanent refusals not retried.
+
+Each behaviour has a test that fails when it is removed (14 reintroduced
+defects, all caught).
+
 ### 4.4 Security hardening
 Login-specific throttle with backoff (currently ~172k guesses/day/IP are permitted);
 Redis-backed distributed rate limiting; bounded + DB-persisted audit tasks with TTL.

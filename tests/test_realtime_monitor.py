@@ -136,6 +136,42 @@ async def test_poll_once_emits_alerts_for_flagged_trades():
 
 
 @pytest.mark.asyncio
+async def test_only_trades_newly_labelled_wash_are_alerted():
+    """A trade already labelled wash (by an audit, or by a monitor before a
+    restart) is not announced again; the rest of the round trips are."""
+    wash = _round_trips()
+    for already in wash[:2]:
+        already.is_wash_trade = True
+        already.wash_trade_score = 1.0
+        already.detection_method = "round_trip"
+    monitor, _ = _monitor_with_mocks(wash)
+    monitor.last_block = 100
+
+    with (
+        patch("core.realtime_monitor.get_chain_config", return_value={"dexes": [{"n": 1}]}),
+        patch.object(monitor, "_latest_block", AsyncMock(return_value=105)),
+    ):
+        alerts, _ = await monitor.poll_once()
+
+    assert sorted(a["id"] for a in alerts) == [t.id for t in wash[2:]]
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_yields_each_poll_and_its_errors():
+    monitor, _ = _monitor_with_mocks()
+    outcomes = [([{"id": 1}], {"round_trip": 1}), RuntimeError("rpc down"), ([], {})]
+    with patch.object(monitor, "poll_once", AsyncMock(side_effect=outcomes)):
+        passes = []
+        async for result in monitor.stream_passes():
+            passes.append(result)
+            if len(passes) == 3:
+                monitor.stop()
+    assert passes[0].alerts == [{"id": 1}] and passes[0].error is None
+    assert passes[1].error == {"reason": "rpc down", "recoverable": True}
+    assert passes[2].alerts == [] and passes[2].error is None
+
+
+@pytest.mark.asyncio
 async def test_poll_once_deduplicates_alerts_across_polls():
     monitor, _ = _monitor_with_mocks(_round_trips())
     monitor.last_block = 100
