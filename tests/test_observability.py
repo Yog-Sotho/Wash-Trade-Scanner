@@ -36,6 +36,7 @@ from core.storage import Storage
 from core.validators import AuditParameters
 from models.schemas import SwapTrade
 from scripts.run_audit import AuditRunner
+from tests.fake_audit_store import FakeAuditStore
 
 POOL = "0x" + "b" * 40
 TRADES_ROUTE = "/api/v1/pools/{chain_id}/{pool_address}/trades"
@@ -66,7 +67,7 @@ def storage():
     mock = AsyncMock()
     mock.health_check.return_value = True
     mock.get_pool_trades.return_value = []
-    return mock
+    return FakeAuditStore().install(mock)
 
 
 @pytest.fixture

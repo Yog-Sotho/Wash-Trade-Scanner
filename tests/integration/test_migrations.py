@@ -7,6 +7,7 @@ the migrations build exactly the schema the models describe, from empty, and
 can be reversed.
 """
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -116,3 +117,20 @@ async def test_alembic_cli_upgrades_an_empty_database():
         assert version == _head()
     finally:
         await storage.close()
+
+
+async def test_instances_starting_together_migrate_one_at_a_time():
+    """Regression: two API instances starting on an empty database both
+    created alembic_version, and one failed to start."""
+    await drop_everything()
+    storages = [Storage() for _ in range(4)]
+    try:
+        # Bounded: without the migration lock the race can also deadlock.
+        await asyncio.wait_for(asyncio.gather(*(s.initialize() for s in storages)), 60)
+        assert storages[0].engine is not None
+        async with storages[0].engine.connect() as conn:
+            version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+        assert version == _head()
+    finally:
+        for storage in storages:
+            await storage.close()

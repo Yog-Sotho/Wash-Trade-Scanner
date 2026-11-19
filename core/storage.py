@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import (
 from config.settings import settings
 from models.schemas import (
     AddressCluster,
+    AuditTask,
     DetectionAuditLog,
     SwapTrade,
     TokenRiskProfile,
@@ -79,8 +80,20 @@ def _adopt_pre_migration_schema(conn: Connection) -> None:
     logger.info(f"Adopted a pre-migration database at revision {BASELINE_REVISION}")
 
 
+# Held while migrating, so that instances starting together migrate one at a
+# time: the first upgrades, the others then find the schema at head. Without
+# it, two instances on an empty database both create alembic_version and one
+# fails to start. (An arbitrary 64-bit key.)
+_MIGRATION_LOCK = 0x776173686D696772  # "washmigr"
+
+
 def _migrate(conn: Connection) -> None:
-    """Upgrade the schema to the latest migration (creating it if empty)."""
+    """Upgrade the schema to the latest migration (creating it if empty).
+
+    Runs inside the caller's transaction; the advisory lock is released when
+    it commits.
+    """
+    conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK})
     tables = set(inspect(conn).get_table_names())
     if "alembic_version" not in tables and "swap_trades" in tables:
         _adopt_pre_migration_schema(conn)
@@ -480,6 +493,106 @@ class Storage:
             )
             result = await session.execute(stmt)
             return list(result.scalars().all())
+
+    # ------------------------------------------------------------ audit tasks
+
+    # Serialises audit-task creation across every instance sharing the
+    # database, so the concurrency limit is exact (an arbitrary 64-bit key).
+    _AUDIT_TASK_LOCK = 0x7761736861756474  # "washaudt"
+
+    async def create_audit_task(
+        self,
+        task_id: str,
+        chain_id: int,
+        pool_address: str,
+        parameters: dict[str, Any],
+        request_id: str | None,
+        max_running: int,
+    ) -> tuple[str, str | None]:
+        """Insert a running task unless one for the pool is already running
+        or `max_running` are. Returns ("created", task_id),
+        ("duplicate", the running task's id) or ("busy", None)."""
+        async with await self.get_session() as session, session.begin():
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": self._AUDIT_TASK_LOCK}
+            )
+            running = AuditTask.status == "running"
+            existing = await session.scalar(
+                select(AuditTask.id).where(
+                    running,
+                    AuditTask.chain_id == chain_id,
+                    AuditTask.pool_address == pool_address,
+                )
+            )
+            if existing is not None:
+                return "duplicate", existing
+            count = await session.scalar(select(func.count()).where(running))
+            if (count or 0) >= max_running:
+                return "busy", None
+            session.add(
+                AuditTask(
+                    id=task_id,
+                    status="running",
+                    chain_id=chain_id,
+                    pool_address=pool_address,
+                    parameters=parameters,
+                    request_id=request_id,
+                )
+            )
+        return "created", task_id
+
+    async def heartbeat_audit_task(self, task_id: str) -> None:
+        async with await self.get_session() as session, session.begin():
+            await session.execute(
+                update(AuditTask)
+                .where(AuditTask.id == task_id, AuditTask.status == "running")
+                .values(heartbeat_at=func.now())
+            )
+
+    async def finish_audit_task(
+        self,
+        task_id: str,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        async with await self.get_session() as session, session.begin():
+            await session.execute(
+                update(AuditTask)
+                .where(AuditTask.id == task_id)
+                .values(status=status, result=result, error=error, finished_at=func.now())
+            )
+
+    async def get_audit_task(self, task_id: str) -> AuditTask | None:
+        async with await self.get_session() as session:
+            return await session.get(AuditTask, task_id)
+
+    async def reap_audit_tasks(
+        self, stale_after_seconds: float, ttl_hours: float
+    ) -> tuple[int, int]:
+        """Mark running tasks whose heartbeat stopped as interrupted, and
+        delete finished tasks older than the TTL. Returns (interrupted, deleted)."""
+        stale = func.now() - timedelta(seconds=stale_after_seconds)
+        expired = func.now() - timedelta(hours=ttl_hours)
+        async with await self.get_session() as session, session.begin():
+            interrupted = await session.execute(
+                update(AuditTask)
+                .where(AuditTask.status == "running", AuditTask.heartbeat_at < stale)
+                .values(
+                    status="interrupted",
+                    error="The server running this audit stopped before it finished",
+                    finished_at=func.now(),
+                )
+            )
+            deleted = await session.execute(
+                delete(AuditTask).where(
+                    AuditTask.finished_at.is_not(None), AuditTask.finished_at < expired
+                )
+            )
+        return (
+            cast("CursorResult[Any]", interrupted).rowcount,
+            cast("CursorResult[Any]", deleted).rowcount,
+        )
 
     async def get_address_clusters(self, chain_id: int) -> list[AddressCluster]:
         """Retrieve address clusters for a chain."""

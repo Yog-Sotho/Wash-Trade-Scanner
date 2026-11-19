@@ -228,6 +228,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+      redis:
+        # The shared rate-limit store (RATE_LIMIT_REDIS_URL). Pinned by digest
+        # (multi-arch index of redis:7.4, 2026-11-19).
+        image: redis:7.4@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -244,9 +255,10 @@ jobs:
           pip install --no-deps -e .
 
       - name: run integration tests
-        # Real PostgreSQL (service above); the chain and price API are served by
-        # a fake over local HTTP, so no external network access is needed. With
-        # --integration an unreachable database is an error, never a skip.
+        # Real PostgreSQL and Redis (services above); the chain and price API
+        # are served by a fake over local HTTP, so no external network access is
+        # needed. With --integration an unreachable database is an error, never
+        # a skip.
         env:
           DATABASE_HOST: localhost
           DATABASE_PORT: "5432"
@@ -255,6 +267,7 @@ jobs:
           DATABASE_PASSWORD: test-password-not-a-secret
           DATABASE_SSL_MODE: disable
           ETH_RPC_URL: http://localhost:8545
+          REDIS_URL: redis://localhost:6379/15
         run: |
           # Acceptance for the schema migrations: the documented command builds
           # the schema from an empty database...

@@ -13,6 +13,7 @@ from api.server import _is_loopback, create_app
 from config.settings import settings
 from core.realtime_monitor import MonitorEvent
 from models.schemas import SwapTrade
+from tests.fake_audit_store import FakeAuditStore
 
 POOL = "0x" + "b" * 40
 
@@ -45,7 +46,7 @@ def storage():
     mock = AsyncMock()
     mock.health_check.return_value = True
     mock.get_pool_trades.return_value = []
-    return mock
+    return FakeAuditStore().install(mock)
 
 
 @pytest.fixture
@@ -424,3 +425,44 @@ def test_stats_overview_endpoint(client, storage):
     assert body["top_wash_pools"][0]["pool_address"] == POOL
     assert body["recent_audits"][0]["wash_trades_detected"] == 3
     assert body["recent_audits"][0]["created_at"] == "2024-01-01T12:00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_running_audit_keeps_its_heartbeat_and_records_its_end():
+    import asyncio
+
+    from api.audits import AuditTasks
+    from core.validators import AuditParameters
+    from tests.fake_audit_store import FakeAuditStore
+
+    store = FakeAuditStore()
+    storage = store.install(AsyncMock())
+    beats = []
+    original = store.heartbeat_audit_task
+
+    async def beat(task_id):
+        beats.append(task_id)
+        await original(task_id)
+
+    storage.heartbeat_audit_task = beat
+    release = asyncio.Event()
+
+    async def audit(_params):
+        await release.wait()
+        return {"trades_processed": 1}
+
+    tasks = AuditTasks(lambda: storage, audit, heartbeat_seconds=0.01)
+    outcome, task_id = await tasks.start(AuditParameters(chain_id=1, pool_address=POOL))
+    assert outcome == "created"
+
+    async def until(predicate):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(until(lambda: len(beats) >= 3), 5)  # fails, never hangs
+    release.set()
+    await asyncio.wait_for(until(lambda: store.tasks[task_id].status != "running"), 5)
+    assert store.tasks[task_id].status == "completed"
+    count = len(beats)
+    await asyncio.sleep(0.05)
+    assert len(beats) == count  # the heartbeat stops with the audit

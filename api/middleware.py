@@ -5,8 +5,8 @@ per-client rate limiting and security headers.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import math
 import re
 import time
 import uuid
@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from api.limits import Limits, client_ip
 from config.settings import settings
 from core import metrics
 from core.log_config import request_id_var
@@ -109,41 +110,23 @@ class RequestContextMiddleware:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Sliding-window per-client-IP rate limiter (in-memory).
+    """Sliding-window per-client-IP rate limit (API_RATE_LIMIT_PER_MINUTE),
+    counted in the app's limit store (api/limits.py): per process, or shared
+    by every instance through Redis.
 
-    Suitable for a single-process deployment, which is the supported topology
-    for this service; put a reverse proxy with its own limiter in front when
-    scaling out.
+    The client IP is the connection's peer, or the X-Forwarded-For client
+    when uvicorn trusts the proxy (FORWARDED_ALLOW_IPS, loopback by default).
     """
 
-    def __init__(self, app, requests_per_minute: int | None = None) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(app)
-        self.requests_per_minute = requests_per_minute or settings.API_RATE_LIMIT_PER_MINUTE
-        self._hits: dict[str, list[float]] = {}
-        self._lock = asyncio.Lock()
-
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        client_ip = request.client.host if request.client else "unknown"
-        now = time.monotonic()
-
-        async with self._lock:
-            window = [t for t in self._hits.get(client_ip, []) if t > now - 60.0]
-            if len(window) >= self.requests_per_minute:
-                self._hits[client_ip] = window
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "Rate limit exceeded"},
-                    headers={"Retry-After": "60"},
-                )
-            window.append(now)
-            self._hits[client_ip] = window
-            # Bound memory: drop idle clients once the table grows large.
-            if len(self._hits) > 10_000:
-                cutoff = now - 60.0
-                self._hits = {
-                    ip: hits for ip, hits in self._hits.items() if hits and hits[-1] > cutoff
-                }
-
+        limits: Limits = request.app.state.limits
+        wait = await limits.rate_limit(client_ip(request))
+        if wait:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded"},
+                headers={"Retry-After": str(max(1, math.ceil(wait)))},
+            )
         return await call_next(request)
 
 

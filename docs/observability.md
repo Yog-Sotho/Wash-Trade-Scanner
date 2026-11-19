@@ -85,6 +85,10 @@ audits you want to see in the metrics run through the API
 | `wash_audit_detector_hits_total` | counter | `detector` | Trades each detector fired on, in completed audits (`ml` included). A hit is not a verdict |
 | `wash_audit_flagged_trades_total` | counter | `method` | Trades completed audits labelled wash, by the deciding method |
 | `wash_monitor_alerts_total` | counter | `method` | Alerts the real-time monitor raised (each flagged trade once) |
+| `wash_rate_limited_total` | counter | | Requests refused by the per-client rate limit |
+| `wash_auth_failures_total` | counter | | Wrong API keys presented (routes, panel login, websockets) |
+| `wash_auth_lockouts_total` | counter | | Client lockouts started by repeated wrong keys |
+| `wash_limit_store_errors_total` | counter | `operation` | Redis limit-store operations that failed (the request was let through) |
 | `wash_alert_deliveries_total` | counter | `sink`, `outcome` | Alerts handed to a sink ([alerting.md](alerting.md)): `sent`, `failed` (attempts exhausted or refused), `dropped` (queue full) |
 | `wash_http_requests_total` | counter | `method`, `route`, `status` | HTTP requests. `route` is the route template (`/api/v1/pools/{chain_id}/{pool_address}/trades`), `unmatched` for unknown paths |
 | `wash_http_request_duration_seconds` | histogram | `method`, `route` | Their latency |

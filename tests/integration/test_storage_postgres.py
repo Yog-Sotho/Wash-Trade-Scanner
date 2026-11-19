@@ -228,6 +228,7 @@ async def test_initialize_adopts_a_database_created_before_migrations(pg_storage
         await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_from"))
         await conn.execute(text("ALTER TABLE swap_trades DROP COLUMN tx_to"))
         await conn.execute(text("DROP TABLE alembic_version"))
+        await conn.execute(text("DROP TABLE audit_tasks"))  # added after the baseline (0002)
 
     await pg_storage.initialize()
 

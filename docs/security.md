@@ -40,6 +40,13 @@ Every step below is a gate: a finding fails the pipeline.
   [alerting.md](alerting.md)); alert webhook URLs, which are credentials, are
   redacted from logs like the RPC URLs
 - Circuit breaker prevents retry storms
+- Wrong API keys lock the client out with a doubling backoff on every route,
+  the panel login and websockets (even the right key is refused while locked
+  out); per-IP rate limiting. Both can be shared by all instances through
+  Redis (`RATE_LIMIT_REDIS_URL`), whose URL is redacted from logs like the
+  others
+- Background audits are bounded (`AUDIT_MAX_CONCURRENT`, one per pool),
+  persisted, and expire (`AUDIT_TASK_TTL_HOURS`)
 - Input validation fails fast (no partial processing)
 
 ## Responsible Disclosure

@@ -320,6 +320,35 @@ defects, all caught).
 Login-specific throttle with backoff (currently ~172k guesses/day/IP are permitted);
 Redis-backed distributed rate limiting; bounded + DB-persisted audit tasks with TTL.
 
+### Phase 4.4 — status: done (2026-11-19)
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| Throttle with backoff | Wrong keys lock the client out, 60 s doubling to 1 h by default, on every route, the panel login and websockets, not only the login | Live, two instances: three guesses spread over both locked the client out of both (429, `Retry-After: 5`); the right key worked again after the lockout |
+| Redis-backed distributed limits | `RATE_LIMIT_REDIS_URL`; per process when empty; fail open with a metric | One contract suite run against both stores (real Redis 7.0 locally, 7.4 in CI) |
+| Bounded, persisted audit tasks with TTL | PostgreSQL table, `AUDIT_MAX_CONCURRENT`, one per pool, TTL, heartbeat | Live: an instance killed with SIGKILL mid-audit; the other marked its task interrupted after 2 minutes and accepted the pool again |
+
+Beyond the plan:
+
+- **Every guess counts, not only logins.** Any route accepts an `X-API-Key`,
+  so throttling only `/panel/login` would leave guessing open everywhere else.
+- **Redis is optional.** Distributed limits matter only with several
+  instances; a single instance needs no new infrastructure.
+- **Exact bound across instances.** Audit-task creation takes a PostgreSQL
+  advisory lock: ten simultaneous starts with a limit of two create exactly two.
+- **A startup race fixed.** Running two instances (the point of shared limits)
+  exposed that both ran the migrations at once on an empty database, and one
+  failed to start. Migrations now take an advisory lock.
+- **Sessions across instances.** `PANEL_SESSION_SECRET` lets every instance
+  accept the same panel session (the per-process secret remains the default).
+
+Each behaviour has a test that fails when it is removed (20 reintroduced
+defects, all caught, including the startup race and the shared session secret).
+
+### Phase 4 — status: done (2026-11-19)
+
+All four items are done; see each item's status above.
+
 ---
 
 ## Phase 5 — Performance and scale

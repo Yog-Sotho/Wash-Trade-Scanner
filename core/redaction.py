@@ -33,8 +33,9 @@ def _replacements(urls: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
     pairs: dict[str, str] = {}
     for url in urls:
         parts = urlsplit(url)
-        # Only a URL with something after the host can hold a key.
-        if not parts.scheme or not (parts.path.strip("/") or parts.query or parts.username):
+        # Only a URL with a path, query or credentials can hold a key.
+        secret_parts = (parts.path.strip("/"), parts.query, parts.username, parts.password)
+        if not parts.scheme or not any(secret_parts):
             continue
         for form in (url, url.rstrip("/")):
             pairs[form] = redact_url(url)
@@ -47,6 +48,7 @@ def redact(text: str) -> str:
     scheme://host/<redacted>."""
     configured = [*settings.rpc_urls.values()]
     configured += [settings.ALERT_WEBHOOK_URL, settings.ALERT_SLACK_WEBHOOK_URL]
+    configured.append(settings.RATE_LIMIT_REDIS_URL)  # may hold a password
     urls = tuple(u for u in configured if u)
     for secret, replacement in _replacements(urls):
         if secret in text:

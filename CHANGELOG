@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased] - Phase 4.4: security hardening
+
+### Added
+- Wrong-key lockout: every wrong API key (any route, the panel login, a
+  websocket) counts against the client IP; from the `AUTH_MAX_FAILURES`-th on
+  the client is locked out for `AUTH_LOCKOUT_SECONDS`, doubling per further
+  failure up to `AUTH_LOCKOUT_MAX_SECONDS`, and refused (429, websocket 4429)
+  even with the right key. A success resets it.
+- `RATE_LIMIT_REDIS_URL`: rate limits and lockouts shared by every instance
+  through Redis (atomic Lua scripts on Redis's clock), checked by
+  `/health/ready`; per process when empty. If Redis is unreachable, requests
+  are let through and counted in `wash_limit_store_errors_total`.
+- Audit tasks persisted in PostgreSQL (migration 0002): visible from every
+  instance, at most `AUDIT_MAX_CONCURRENT` running (429) and one per pool
+  (409), deleted `AUDIT_TASK_TTL_HOURS` after they end, kept alive by a
+  heartbeat and marked `interrupted` when their server stops or dies.
+- `PANEL_SESSION_SECRET`: one session-signing secret for every instance.
+- Metrics `wash_rate_limited_total`, `wash_auth_failures_total`,
+  `wash_auth_lockouts_total`, `wash_limit_store_errors_total`.
+
+### Fixed
+- Two instances starting together on an empty database both ran the
+  migrations; one failed to start (or they deadlocked). Startup migrations now
+  take a PostgreSQL advisory lock.
+
 ## [Unreleased] - Phase 4.3: alerting
 
 ### Added
