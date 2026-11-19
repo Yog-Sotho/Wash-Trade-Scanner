@@ -1,0 +1,649 @@
+{
+  "setup": {
+    "fixture": "univ3_usdc_weth_005",
+    "trades": 10000,
+    "blocks": [
+      26300001,
+      26304335
+    ],
+    "blocks_with_swaps": 3122,
+    "transactions": 9344,
+    "rpc_latency_ms": 20.0,
+    "rpc_rate_limit": 100,
+    "filler_transactions_per_block": 160,
+    "filler_kb_per_full_block": 211.3
+  },
+  "versions": {
+    "before": "main at 3b360ec (Phase 4) with only the chunked INSERT applied: unpatched, the audit fails (PostgreSQL bind-parameter limit)",
+    "after": "Phase 5, INGEST_FULL_BLOCKS=true (default)",
+    "after_hashes_only": "Phase 5, INGEST_FULL_BLOCKS=false"
+  },
+  "before": {
+    "audit": {
+      "wall_seconds": 135.404,
+      "sql_statements": 23,
+      "rpc_requests": 12482,
+      "rpc_mb": 65.51,
+      "rpc_by_method": {
+        "coingecko:market_chart_range": 1,
+        "eth_blockNumber": 2,
+        "eth_call": 3,
+        "eth_chainId": 3,
+        "eth_getBlockByNumber": 3122,
+        "eth_getLogs": 5,
+        "eth_getTransactionByHash": 9344,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 133.487,
+          "calls": 1,
+          "sql_statements": 10,
+          "rpc_requests": 12478,
+          "rpc_mb": 65.51,
+          "rpc_by_method": {
+            "coingecko:market_chart_range": 1,
+            "eth_call": 3,
+            "eth_chainId": 3,
+            "eth_getBlockByNumber": 3122,
+            "eth_getLogs": 5,
+            "eth_getTransactionByHash": 9344
+          }
+        },
+        "load_trades": {
+          "seconds": 0.24,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.005,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.078,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 3,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 2,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.771,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.012,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.735,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.006,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.071,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 417.8
+    },
+    "re_audit": {
+      "wall_seconds": 134.556,
+      "sql_statements": 23,
+      "rpc_requests": 12482,
+      "rpc_mb": 65.51,
+      "rpc_by_method": {
+        "coingecko:market_chart_range": 1,
+        "eth_blockNumber": 2,
+        "eth_call": 3,
+        "eth_chainId": 3,
+        "eth_getBlockByNumber": 3122,
+        "eth_getLogs": 5,
+        "eth_getTransactionByHash": 9344,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 132.853,
+          "calls": 1,
+          "sql_statements": 10,
+          "rpc_requests": 12478,
+          "rpc_mb": 65.51,
+          "rpc_by_method": {
+            "coingecko:market_chart_range": 1,
+            "eth_call": 3,
+            "eth_chainId": 3,
+            "eth_getBlockByNumber": 3122,
+            "eth_getLogs": 5,
+            "eth_getTransactionByHash": 9344
+          }
+        },
+        "load_trades": {
+          "seconds": 0.117,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.004,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.075,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 3,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 2,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.73,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.006,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.698,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.004,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.071,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 425.2
+    }
+  },
+  "after": {
+    "audit": {
+      "wall_seconds": 41.402,
+      "sql_statements": 28,
+      "rpc_requests": 3137,
+      "rpc_mb": 689.58,
+      "rpc_by_method": {
+        "coingecko:market_chart_range": 1,
+        "eth_blockNumber": 1,
+        "eth_call": 3,
+        "eth_chainId": 3,
+        "eth_getBlockByNumber": 3122,
+        "eth_getLogs": 5,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 39.758,
+          "calls": 1,
+          "sql_statements": 17,
+          "rpc_requests": 3134,
+          "rpc_mb": 689.58,
+          "rpc_by_method": {
+            "coingecko:market_chart_range": 1,
+            "eth_call": 3,
+            "eth_chainId": 3,
+            "eth_getBlockByNumber": 3122,
+            "eth_getLogs": 5
+          }
+        },
+        "load_trades": {
+          "seconds": 0.067,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.007,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.059,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 2,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 1,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.772,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.013,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.644,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.008,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.076,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 428.7
+    },
+    "re_audit": {
+      "wall_seconds": 2.841,
+      "sql_statements": 16,
+      "rpc_requests": 10,
+      "rpc_mb": 8.81,
+      "rpc_by_method": {
+        "eth_blockNumber": 1,
+        "eth_call": 1,
+        "eth_chainId": 1,
+        "eth_getLogs": 5,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 1.296,
+          "calls": 1,
+          "sql_statements": 5,
+          "rpc_requests": 7,
+          "rpc_mb": 8.81,
+          "rpc_by_method": {
+            "eth_call": 1,
+            "eth_chainId": 1,
+            "eth_getLogs": 5
+          }
+        },
+        "load_trades": {
+          "seconds": 0.18,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.01,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.058,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 2,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 1,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.719,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.006,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.499,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.004,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.069,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 428.9
+    }
+  },
+  "after_hashes_only": {
+    "audit": {
+      "wall_seconds": 133.039,
+      "sql_statements": 28,
+      "rpc_requests": 12481,
+      "rpc_mb": 65.51,
+      "rpc_by_method": {
+        "coingecko:market_chart_range": 1,
+        "eth_blockNumber": 1,
+        "eth_call": 3,
+        "eth_chainId": 3,
+        "eth_getBlockByNumber": 3122,
+        "eth_getLogs": 5,
+        "eth_getTransactionByHash": 9344,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 131.479,
+          "calls": 1,
+          "sql_statements": 17,
+          "rpc_requests": 12478,
+          "rpc_mb": 65.51,
+          "rpc_by_method": {
+            "coingecko:market_chart_range": 1,
+            "eth_call": 3,
+            "eth_chainId": 3,
+            "eth_getBlockByNumber": 3122,
+            "eth_getLogs": 5,
+            "eth_getTransactionByHash": 9344
+          }
+        },
+        "load_trades": {
+          "seconds": 0.067,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.003,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.054,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 2,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 1,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.727,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.013,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.601,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.008,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.085,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 429.6
+    },
+    "re_audit": {
+      "wall_seconds": 2.662,
+      "sql_statements": 16,
+      "rpc_requests": 10,
+      "rpc_mb": 8.81,
+      "rpc_by_method": {
+        "eth_blockNumber": 1,
+        "eth_call": 1,
+        "eth_chainId": 1,
+        "eth_getLogs": 5,
+        "trace_filter": 1,
+        "web3_clientVersion": 1
+      },
+      "stages": {
+        "ingest": {
+          "seconds": 1.225,
+          "calls": 1,
+          "sql_statements": 5,
+          "rpc_requests": 7,
+          "rpc_mb": 8.81,
+          "rpc_by_method": {
+            "eth_call": 1,
+            "eth_chainId": 1,
+            "eth_getLogs": 5
+          }
+        },
+        "load_trades": {
+          "seconds": 0.171,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clear_labels": {
+          "seconds": 0.003,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "clustering": {
+          "seconds": 0.051,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 2,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "eth_blockNumber": 1,
+            "trace_filter": 1
+          }
+        },
+        "heuristics": {
+          "seconds": 0.688,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "write_labels": {
+          "seconds": 0.005,
+          "calls": 2,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "ml": {
+          "seconds": 0.438,
+          "calls": 1,
+          "sql_statements": 1,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "audit_log": {
+          "seconds": 0.004,
+          "calls": 1,
+          "sql_statements": 2,
+          "rpc_requests": 0,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {}
+        },
+        "other": {
+          "seconds": 0.075,
+          "calls": 0,
+          "sql_statements": 0,
+          "rpc_requests": 1,
+          "rpc_mb": 0.0,
+          "rpc_by_method": {
+            "web3_clientVersion": 1
+          }
+        }
+      },
+      "trades_processed": 10000,
+      "wash_trades_detected": 10,
+      "peak_rss_mb": 430.0
+    }
+  }
+}

@@ -55,3 +55,13 @@ class InsufficientDataError(WashTradeError):
     """Raised when insufficient data for detection."""
 
     pass
+
+
+class IngestionError(RPCError):
+    """Raised when part of a block range could not be ingested (its logs,
+    blocks or a JSON-RPC answer), after every retry. Batches before it were
+    saved; nothing after it was."""
+
+
+class AuditCancelledError(WashTradeError):
+    """Raised when an audit stops early because shutdown was requested."""

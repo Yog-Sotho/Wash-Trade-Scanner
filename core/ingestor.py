@@ -3,29 +3,72 @@ Multi-chain swap event ingestor with circuit breaker protection.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
-from collections.abc import Iterable
+from collections import defaultdict, deque
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from web3 import AsyncWeb3, Web3
 from web3.middleware import async_geth_poa_middleware  # type: ignore[attr-defined]
-from web3.types import EventData, LogReceipt
+from web3.types import EventData, FilterParams, LogReceipt, RPCEndpoint
 
 from config.chains import get_chain_config
 from config.settings import settings
 from core.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, shared_breaker
-from core.exceptions import CircuitBreakerOpenError, RPCError
+from core.exceptions import AuditCancelledError, CircuitBreakerOpenError, IngestionError, RPCError
 from core.pricing import PriceOracle
 from core.rpc import InstrumentedHTTPProvider
 from core.storage import Storage
 
 logger = logging.getLogger(__name__)
 
-# Concurrent per-block / per-transaction RPC calls in a sync; the rate limiter
-# still bounds the request rate.
-_RPC_FETCH_CONCURRENCY = 8
+T = TypeVar("T")
+
+# Blocks per eth_getLogs request: hosted nodes cap a request's block range or
+# result size, and 1,000 blocks of one pool's swaps stays under both.
+LOG_BATCH_BLOCKS = 1000
+# eth_getLogs requests fetched ahead of the batch being processed.
+LOG_PREFETCH_BATCHES = 4
+# First retry delay; it doubles with each further retry.
+RETRY_BACKOFF_SECONDS = 1.0
+
+# A transaction's (from, to, gas price in gwei).
+TxInfo = tuple[str, str | None, float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _Block:
+    timestamp: datetime  # naive UTC, as stored
+    transactions: dict[str, TxInfo]  # only the ones asked for, by hash
+
+
+def _quantity(value: Any) -> int:
+    """A JSON-RPC quantity ("0x1a") as an int."""
+    return int(value, 16) if isinstance(value, str) else int(value)
+
+
+async def _gather_or_cancel(awaitables: Iterable[Awaitable[T]]) -> list[T]:
+    """Await all; on the first failure cancel the others and raise it."""
+    tasks = [asyncio.ensure_future(aw) for aw in awaitables]
+    try:
+        return list(await asyncio.gather(*tasks))
+    finally:
+        pending = [task for task in tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for task in tasks:  # retrieved, so none is reported "never retrieved"
+            if not task.cancelled():
+                task.exception()
+
+
+def _check_stop(stop: asyncio.Event | None, what: str) -> None:
+    if stop is not None and stop.is_set():
+        raise AuditCancelledError(f"Shutdown requested; stopped before {what}")
 
 
 def _hex_str(value: Any) -> str:
@@ -41,23 +84,52 @@ def _hex_str(value: Any) -> str:
 
 
 class RateLimiter:
-    """Token bucket rate limiter for RPC calls."""
+    """At most `max_calls_per_second` calls start in any one-second window.
+
+    acquire() reserves the earliest slot the window allows, then sleeps until
+    it. Reserving is synchronous, so concurrent callers need no lock (none is
+    held while one sleeps) and the limiter is tied to no event loop: one
+    instance serves every audit and monitor in the process (chain_rate_limiter).
+    """
 
     def __init__(self, max_calls_per_second: int):
         self.max_calls = max_calls_per_second
-        self.calls: list[float] = []
-        self.lock = asyncio.Lock()
+        # The latest `max_calls` reserved slots (some may be in the future).
+        self.calls: deque[float] = deque(maxlen=max_calls_per_second)
+
+    def _reserve(self) -> float:
+        now = time.monotonic()
+        slot = now
+        if len(self.calls) == self.max_calls:
+            slot = max(now, self.calls[0] + 1.0)
+        self.calls.append(slot)
+        return slot - now
 
     async def acquire(self) -> None:
-        async with self.lock:
-            now = time.time()
-            self.calls = [t for t in self.calls if t > now - 1.0]
-            if len(self.calls) >= self.max_calls:
-                sleep_time = 1.0 - (now - self.calls[0])
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                self.calls = self.calls[1:]
-            self.calls.append(time.time())
+        wait = self._reserve()
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+
+_rate_limiters: dict[int, RateLimiter] = {}
+
+
+def chain_rate_limiter(chain_id: int) -> RateLimiter:
+    """The process-wide limiter for a chain's RPC endpoint (RPC_RATE_LIMIT).
+
+    RPC_RATE_LIMIT is the endpoint's budget, so it is shared: two audits and a
+    monitor of one chain together stay under it, rather than each using all of
+    it.
+    """
+    limiter = _rate_limiters.get(chain_id)
+    if limiter is None:
+        limiter = _rate_limiters[chain_id] = RateLimiter(settings.RPC_RATE_LIMIT)
+    return limiter
+
+
+def reset_rate_limiters() -> None:
+    """Forget every shared limiter (tests)."""
+    _rate_limiters.clear()
 
 
 def chain_breaker(chain_id: int) -> CircuitBreaker:
@@ -88,8 +160,11 @@ class ChainIngestor:
         self.storage = storage
         self.price_oracle = price_oracle or PriceOracle.from_settings()
         self.web3: AsyncWeb3 | None = None
-        self.rate_limiter = RateLimiter(settings.RPC_RATE_LIMIT)
+        self.rate_limiter = chain_rate_limiter(chain_config["chain_id"])
         self.circuit_breaker = chain_breaker(chain_config["chain_id"])
+        # Requests this ingestor has in flight at once; the rate limiter caps
+        # their rate.
+        self._rpc_slots = asyncio.Semaphore(settings.RPC_CONCURRENCY)
         self.is_running = False
         self.latest_block = 0
         self.contracts: dict[str, Any] = {}
@@ -165,58 +240,90 @@ class ChainIngestor:
 
         return token0, token1
 
-    async def _get_logs_batch(
-        self,
-        address: str,
-        topics: list[str],
-        from_block: int,
-        to_block: int,
-        max_retries: int | None = None,
-    ) -> list[LogReceipt]:
-        """Fetch logs with retry and circuit breaker protection.
+    async def _with_retries(self, what: str, call: Callable[[], Awaitable[T]]) -> T:
+        """`call()` through the concurrency cap, the rate limiter and the
+        breaker, with RPC_RETRIES retries after 1, 2, 4... seconds
+        (RETRY_BACKOFF_SECONDS doubling). An open
+        breaker is not retried. Raises IngestionError once every attempt failed.
+        """
+        attempts = settings.RPC_RETRIES + 1
+        error: Exception | None = None
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1))
+            try:
+                async with self._rpc_slots:
+                    await self.rate_limiter.acquire()
+                    result: T = await self.circuit_breaker.call(call)
+                    return result
+            except CircuitBreakerOpenError:
+                raise
+            except Exception as exc:
+                error = exc
+                logger.warning(f"Fetching {what} failed (attempt {attempt + 1}/{attempts}): {exc}")
+        raise IngestionError(
+            f"Could not fetch {what} after {attempts} attempt(s): {error}"
+        ) from error
 
-        Each batch gets one attempt plus RPC_RETRIES retries, unless
-        `max_retries` (total attempts) is given.
+    async def _request(self, method: str, params: list[Any]) -> Any:
+        """A raw JSON-RPC call: the result as the node sent it, without web3's
+        result formatting (for a block of a few hundred transactions, that
+        formatting costs more CPU than the request)."""
+        assert self.web3 is not None
+        response = await self.web3.provider.make_request(RPCEndpoint(method), params)
+        error = response.get("error")
+        if error:
+            message = error.get("message") if isinstance(error, dict) else error
+            raise RPCError(f"{method}: {message}")
+        return response.get("result")
+
+    async def _get_logs_batch(
+        self, address: str, topics: list[str], from_block: int, to_block: int
+    ) -> list[LogReceipt]:
+        """One eth_getLogs request (at most LOG_BATCH_BLOCKS blocks), retried.
+
+        Raises IngestionError when every attempt fails: a range whose logs are
+        missing must fail the sync, not leave a silent gap in the trades.
         """
         assert self.web3 is not None
-        if max_retries is None:
-            max_retries = settings.RPC_RETRIES + 1
-        batch_size = 1000
-        all_logs: list[LogReceipt] = []
+        web3 = self.web3
+        log_filter = cast(
+            FilterParams,
+            {"address": address, "topics": topics, "fromBlock": from_block, "toBlock": to_block},
+        )
+        logs = await self._with_retries(
+            f"logs of blocks {from_block}-{to_block}", lambda: web3.eth.get_logs(log_filter)
+        )
+        logger.debug(f"Fetched {len(logs)} logs from {from_block} to {to_block}")
+        return list(logs)
 
-        for batch_start in range(from_block, to_block + 1, batch_size):
-            batch_end = min(batch_start + batch_size - 1, to_block)
+    async def _log_batches(
+        self, address: str, topics: list[str], from_block: int, to_block: int
+    ) -> AsyncGenerator[tuple[int, int, list[LogReceipt]], None]:
+        """(first block, last block, logs) per LOG_BATCH_BLOCKS-block batch, in
+        order, with up to LOG_PREFETCH_BATCHES requests fetched ahead."""
+        starts = iter(range(from_block, to_block + 1, LOG_BATCH_BLOCKS))
+        pending: deque[tuple[int, int, asyncio.Future[list[LogReceipt]]]] = deque()
 
-            for attempt in range(max_retries):
-                try:
-                    await self.rate_limiter.acquire()
-                    logs = await self.circuit_breaker.call(
-                        self.web3.eth.get_logs,
-                        {
-                            "address": address,
-                            "topics": topics,
-                            "fromBlock": batch_start,
-                            "toBlock": batch_end,
-                        },
-                    )
-                    all_logs.extend(logs)
-                    logger.debug(f"Fetched {len(logs)} logs from {batch_start} to {batch_end}")
-                    break
-                except CircuitBreakerOpenError:
-                    logger.error("Circuit breaker open, aborting log fetch")
-                    raise
-                except Exception as exc:
-                    logger.error(
-                        f"Error fetching logs {batch_start}-{batch_end}: {exc}. "
-                        f"Attempt {attempt + 1}/{max_retries}"
-                    )
-                    await asyncio.sleep(2**attempt)
-            else:
-                logger.error(
-                    f"Failed to fetch logs for blocks {batch_start}-{batch_end} after {max_retries} attempts"
-                )
+        def fetch_next() -> None:
+            start = next(starts, None)
+            if start is not None:
+                end = min(start + LOG_BATCH_BLOCKS - 1, to_block)
+                task = asyncio.ensure_future(self._get_logs_batch(address, topics, start, end))
+                pending.append((start, end, task))
 
-        return all_logs
+        for _ in range(LOG_PREFETCH_BATCHES):
+            fetch_next()
+        try:
+            while pending:
+                start, end, task = pending.popleft()
+                logs = await task
+                fetch_next()
+                yield start, end, logs
+        finally:
+            for *_, task in pending:
+                task.cancel()
+            await asyncio.gather(*(task for *_, task in pending), return_exceptions=True)
 
     async def _process_swap_event(
         self,
@@ -330,47 +437,67 @@ class ChainIngestor:
             logger.error(f"Error processing swap event: {exc}")
             return None
 
-    async def _fetch_block_timestamps(self, block_numbers: set[int]) -> dict[int, datetime]:
-        """Fetch block timestamps concurrently (bounded; the rate limiter still
-        caps the request rate). A block that cannot be fetched is stamped with
-        the current time, as before."""
-        assert self.web3 is not None
-        web3 = self.web3
-        semaphore = asyncio.Semaphore(_RPC_FETCH_CONCURRENCY)
-        timestamps: dict[int, datetime] = {}
+    async def _fetch_block(self, number: int, tx_hashes: set[str]) -> _Block:
+        """A block's timestamp and the given transactions' (from, to, gas
+        price), in one request: eth_getBlockByNumber with full transaction
+        objects. Fetching each transaction instead costs one more request per
+        transaction, three in four of an audit's requests. With
+        INGEST_FULL_BLOCKS off the block lists only hashes, and the
+        transactions are fetched one by one (_fetch_transactions)."""
 
-        async def fetch(block_number: int) -> None:
-            async with semaphore:
-                try:
-                    await self.rate_limiter.acquire()
-                    block = await self.circuit_breaker.call(web3.eth.get_block, block_number)
-                    timestamps[block_number] = datetime.fromtimestamp(
-                        block["timestamp"], tz=UTC
-                    ).replace(tzinfo=None)
-                except Exception as exc:
-                    logger.error(f"Failed to fetch block {block_number}: {exc}")
-                    timestamps[block_number] = datetime.now(UTC).replace(tzinfo=None)
+        full = settings.INGEST_FULL_BLOCKS
 
-        await asyncio.gather(*(fetch(bn) for bn in sorted(block_numbers)))
-        return timestamps
+        async def get() -> dict[str, Any]:
+            block = await self._request("eth_getBlockByNumber", [hex(number), full])
+            if not isinstance(block, dict):
+                raise RPCError(f"block {number} not found")
+            return block
 
-    async def _fetch_transactions(
-        self, tx_hashes: set[str]
-    ) -> dict[str, tuple[str, str | None, float | None]]:
-        """Fetch (from, to, gas price in gwei) for each transaction.
+        block = await self._with_retries(f"block {number}", get)
+        transactions: dict[str, TxInfo] = {}
+        for tx in block.get("transactions") or []:
+            # A node that ignores the flag lists bare hashes; those transactions
+            # are then fetched one by one (_fetch_transactions).
+            if not isinstance(tx, dict) or not tx.get("from"):
+                continue
+            tx_hash = str(tx.get("hash", "")).lower()
+            if tx_hash in tx_hashes:
+                to, gas_price = tx.get("to"), tx.get("gasPrice")
+                transactions[tx_hash] = (
+                    str(tx["from"]).lower(),
+                    str(to).lower() if to else None,
+                    _quantity(gas_price) / 1e9 if gas_price is not None else None,
+                )
+        timestamp = datetime.fromtimestamp(_quantity(block["timestamp"]), tz=UTC)
+        return _Block(timestamp.replace(tzinfo=None), transactions)
+
+    async def _fetch_blocks(self, wanted: dict[int, set[str]]) -> dict[int, _Block]:
+        """_fetch_block for each block number -> transaction hashes in `wanted`,
+        concurrently (RPC_CONCURRENCY at a time). A block that cannot be
+        fetched fails the batch: its swaps would have no time."""
+        blocks: dict[int, _Block] = {}
+
+        async def fetch(number: int) -> None:
+            blocks[number] = await self._fetch_block(number, wanted[number])
+
+        await _gather_or_cancel(fetch(number) for number in sorted(wanted))
+        return blocks
+
+    async def _fetch_transactions(self, tx_hashes: set[str]) -> dict[str, TxInfo]:
+        """Fetch (from, to, gas price in gwei) for each transaction, one request
+        each: the fallback for transactions their block did not include.
 
         Swap events name the router or bot contract that called the pool, not
         the account that traded; only the transaction carries that. A
         transaction that cannot be fetched is left out (its swaps keep a NULL
-        tx_from) rather than failing the whole sync.
+        tx_from, which the next audit fills in) rather than failing the sync.
         """
         assert self.web3 is not None
         web3 = self.web3
-        semaphore = asyncio.Semaphore(_RPC_FETCH_CONCURRENCY)
-        results: dict[str, tuple[str, str | None, float | None]] = {}
+        results: dict[str, TxInfo] = {}
 
         async def fetch(tx_hash: str) -> None:
-            async with semaphore:
+            async with self._rpc_slots:
                 try:
                     await self.rate_limiter.acquire()
                     tx = await self.circuit_breaker.call(web3.eth.get_transaction, tx_hash)
@@ -399,71 +526,113 @@ class ChainIngestor:
         from_block: int,
         to_block: int,
         pool_address: str | None = None,
+        stop: asyncio.Event | None = None,
     ) -> int:
-        """Sync historical swap events."""
-        logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
+        """Ingest a DEX's swaps in [from_block, to_block]; returns how many the
+        range holds (already stored ones included).
 
-        event_signature_hash = Web3.keccak(text=dex["event_sig"]).hex()
-        topics = [event_signature_hash]
+        The range is processed LOG_BATCH_BLOCKS blocks at a time, each batch
+        saved before the next starts, so memory stays bounded and an audit
+        that stops early (shutdown via `stop`, or a range that cannot be
+        fetched) keeps what it saved: the next audit skips it.
+        """
+        logger.info(f"Syncing historical swaps for {dex['name']} on {self.chain_config['name']}")
+        assert self.web3 is not None
+        topics = [Web3.keccak(text=dex["event_sig"]).hex()]
         # web3 rejects non-checksummed addresses in eth_getLogs filters, while
         # storage and callers use lowercase.
         address = Web3.to_checksum_address(pool_address) if pool_address else dex["router"]
+        web3 = self.web3
+        event: Any = None
 
-        try:
-            raw_logs = await self._get_logs_batch(address, topics, from_block, to_block)
-        except CircuitBreakerOpenError:
-            logger.error("Circuit breaker open, aborting sync")
-            return 0
+        def decoder() -> Callable[[LogReceipt], EventData]:
+            # eth_getLogs returns raw, undecoded logs (no `args`): each is
+            # decoded against the DEX's event ABI. Built on first use.
+            nonlocal event
+            if event is None:
+                decode_contract = web3.eth.contract(abi=dex["abi"])
+                event = getattr(decode_contract.events, dex["abi"][0]["name"])()
+            process_log: Callable[[LogReceipt], EventData] = event.process_log
+            return process_log
 
+        found = 0
+        batches = self._log_batches(address, topics, from_block, to_block)
+        async with contextlib.aclosing(batches):
+            async for start, end, raw_logs in batches:
+                _check_stop(stop, f"block {start} ({found} swaps up to there are saved)")
+                found += await self._ingest_logs(dex, raw_logs, decoder)
+                logger.debug(f"{dex['name']}: blocks {start}-{end} done, {found} swaps so far")
+
+        logger.info(f"Synced {found} historical swaps for {dex['name']}")
+        return found
+
+    async def _ingest_logs(
+        self,
+        dex: dict[str, Any],
+        raw_logs: list[LogReceipt],
+        decoder: Callable[[], Callable[[LogReceipt], EventData]],
+    ) -> int:
+        """Store one batch's swaps; returns how many it holds.
+
+        Swaps already stored with their transaction's sender are skipped
+        before anything else, decoding included: saving them again would
+        change nothing (save_trades_batch only fills in a missing tx_from), and
+        fetching their blocks is most of an audit's RPC work, so a re-audit
+        costs one eth_getLogs per batch.
+        """
+        raw_logs = [log for log in raw_logs if log.get("blockNumber")]
         if not raw_logs:
             return 0
+        keys = [
+            (_hex_str(log.get("transactionHash", "")), int(log.get("logIndex", 0)))
+            for log in raw_logs
+        ]
+        stored = await self.storage.stored_trade_keys(keys)
+        pending = [
+            (raw_log, key[0])
+            for raw_log, key in zip(raw_logs, keys, strict=True)
+            if key not in stored
+        ]
+        new: list[tuple[EventData, str]] = []
+        if pending:
+            decode = decoder()
+            for raw_log, tx_hash in pending:
+                try:
+                    new.append((decode(raw_log), tx_hash))
+                except Exception as exc:
+                    logger.error(
+                        f"Failed to decode log at block {raw_log.get('blockNumber')}: {exc}"
+                    )
+        if not new:
+            return sum(key in stored for key in keys)
 
-        # eth_getLogs returns raw, undecoded logs (no `args`). Decode each one against
-        # the DEX's event ABI so downstream code can read sender/recipient/amounts.
-        assert self.web3 is not None
-        event_name = dex["abi"][0]["name"]
-        decode_contract = self.web3.eth.contract(abi=dex["abi"])
-        event = getattr(decode_contract.events, event_name)()
-        logs: list[EventData] = []
-        for raw_log in raw_logs:
-            try:
-                logs.append(event.process_log(raw_log))
-            except Exception as exc:
-                logger.error(f"Failed to decode log at block {raw_log.get('blockNumber')}: {exc}")
+        wanted: dict[int, set[str]] = defaultdict(set)
+        for log, tx_hash in new:
+            wanted[log["blockNumber"]].add(tx_hash)
+        blocks = await self._fetch_blocks(wanted)
 
-        if not logs:
-            return 0
+        trades: list[dict[str, Any]] = []
+        for log, _ in new:
+            trade = await self._process_swap_event(dex, log, blocks[log["blockNumber"]].timestamp)
+            if trade:
+                trades.append(trade)
 
-        block_numbers = set()
-        for log in logs:
-            bn = log.get("blockNumber")
-            if bn:
-                block_numbers.add(bn)
-
-        block_timestamps = await self._fetch_block_timestamps(block_numbers)
-
-        trades_data = []
-        for log in logs:
-            bn = log.get("blockNumber")
-            ts = block_timestamps.get(bn, datetime.now(UTC).replace(tzinfo=None))
-            trade_data = await self._process_swap_event(dex, log, ts)
-            if trade_data:
-                trades_data.append(trade_data)
-
-        transactions = await self._fetch_transactions(
-            {trade["transaction_hash"] for trade in trades_data}
-        )
-        for trade in trades_data:
-            tx = transactions.get(trade["transaction_hash"])
+        missing = {
+            t["transaction_hash"]
+            for t in trades
+            if t["transaction_hash"] not in blocks[t["block_number"]].transactions
+        }
+        fallback = await self._fetch_transactions(missing) if missing else {}
+        for trade in trades:
+            tx_hash = trade["transaction_hash"]
+            tx = blocks[trade["block_number"]].transactions.get(tx_hash) or fallback.get(tx_hash)
             if tx is not None:
                 trade["tx_from"], trade["tx_to"], trade["gas_price"] = tx
 
-        if trades_data:
-            await self.price_oracle.price_trades(self.chain_config["chain_id"], trades_data)
-            await self.storage.save_trades_batch(trades_data)
-
-        logger.info(f"Synced {len(trades_data)} historical swaps for {dex['name']}")
-        return len(trades_data)
+        if trades:
+            await self.price_oracle.price_trades(self.chain_config["chain_id"], trades)
+            await self.storage.save_trades_batch(trades)
+        return sum(key in stored for key in keys) + len(trades)
 
     async def resolve_pool_dexes(self, pool_address: str) -> list[dict[str, Any]]:
         """The configured DEX(es) whose events this pool emits.
@@ -521,14 +690,23 @@ class ChainIngestor:
             unique.setdefault(dex["event_sig"], dex)
         return list(unique.values()), answered
 
-    async def sync_pool(self, pool_address: str, from_block: int, to_block: int) -> int:
-        """Sync one pool's swaps from the DEX that actually created it."""
-        total = 0
-        for dex in await self.resolve_pool_dexes(pool_address):
-            total += await self.sync_historical_swaps(
-                dex, from_block, to_block, pool_address=pool_address
+    async def sync_pool(
+        self,
+        pool_address: str,
+        from_block: int,
+        to_block: int,
+        stop: asyncio.Event | None = None,
+    ) -> int:
+        """Sync one pool's swaps from the DEX that actually created it (from
+        each candidate DEX concurrently, when the factory is unknown)."""
+        dexes = await self.resolve_pool_dexes(pool_address)
+        counts = await _gather_or_cancel(
+            self.sync_historical_swaps(
+                dex, from_block, to_block, pool_address=pool_address, stop=stop
             )
-        return total
+            for dex in dexes
+        )
+        return sum(counts)
 
     async def stop(self) -> None:
         self.is_running = False
@@ -579,8 +757,10 @@ class MultiChainIngestor:
         pool_address: str,
         start_block: int | None = None,
         end_block: int | None = None,
+        stop: asyncio.Event | None = None,
     ) -> int:
-        """Sync trades for a specific pool."""
+        """Sync trades for a specific pool; `stop`, once set, ends the sync
+        before its next batch (AuditCancelledError)."""
         ingestor = await self.get_ingestor(chain_id)
         assert ingestor.web3 is not None, "ingestor.connect() must be called first"
 
@@ -600,5 +780,5 @@ class MultiChainIngestor:
             except CircuitBreakerOpenError as exc:
                 raise ValueError("Cannot get latest block: circuit breaker open") from exc
 
-        total_swaps = await ingestor.sync_pool(pool_address, start_block, end_block)
+        total_swaps = await ingestor.sync_pool(pool_address, start_block, end_block, stop=stop)
         return total_swaps

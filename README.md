@@ -12,7 +12,8 @@ Supports **20+ blockchains** and **major DEXes** (Uniswap V2/V3, PancakeSwap, Su
   - **Round trips** (A‑A wash trading, after Chainalysis's heuristic 1): a trader buying and selling back the same value within 50 blocks
   - **Position neutrality** (Victor & Weintraud, WWW '21; Gan et al., ACM TOIT 2024) – a trader, or a funding‑linked group of traders, ending flat in every token while trading both sides
   - **Calibrated scoring** – each detector's measured true/false‑positive rates turn a hit into P(wash), so noisy signals (repeated sizes, high frequency, volume outliers, closed clusters) inform the score but cannot label a trade on their own
-  - Entity clustering via on‑chain funding traces (uses `trace_filter` or block scanning)
+  - Entity clustering via on‑chain funding traces (uses `trace_filter` or an opt‑in, capped block scan); every audit reports what it examined (`funding_clusters`)
+- **Measured performance** – a full audit of 10,000 real trades in 41 s and a re‑audit in 3 s, one RPC request per block, streamed and resumable ([docs/performance.md](docs/performance.md)).
 - **Machine Learning** – Isolation Forest on 21 features incl. Benford's‑law deviation, amount roundness and hour‑of‑day entropy, with per‑pool contamination control and feature explainability.
 - **Quantified Reporting** – wash volume in USD, per‑method breakdown, severity grading (`MINIMAL` → `CRITICAL`).
 - **Web Panel** – built‑in dashboard at `/panel`: global statistics, per‑method wash‑volume charts, pool inspector, live monitor feed and audit controls; session‑cookie login backed by the API‑key system, dark/light theme, zero external assets.

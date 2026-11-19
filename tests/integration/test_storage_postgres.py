@@ -54,6 +54,40 @@ async def test_save_trades_batch_is_idempotent(pg_storage: Storage):
     assert len(await pg_storage.get_pool_trades(1, POOL)) == 2
 
 
+async def test_a_batch_larger_than_one_statement_allows_is_saved(pg_storage: Storage):
+    """Regression: one INSERT of every trade bound 22 parameters per trade, so
+    a range of 1,490 or more swaps exceeded PostgreSQL's 32,767-parameter
+    limit and the audit failed after all its RPC work."""
+    batch = [_trade(i) for i in range(2_500)]
+    assert await pg_storage.save_trades_batch(batch) == 2_500
+    assert len(await pg_storage.get_pool_trades(1, POOL, limit=3_000)) == 2_500
+
+
+async def test_stored_trade_keys_names_the_trades_stored_with_their_sender(pg_storage: Storage):
+    await pg_storage.save_trades_batch(
+        [
+            _trade(0, tx_from="0x" + "5" * 40),
+            _trade(1, tx_from=None),
+            _trade(2, tx_from="0x" + "6" * 40),
+        ]
+    )
+    keys = [
+        ("0x" + f"{0:064x}", 0),  # stored with its sender
+        ("0x" + f"{1:064x}", 1),  # stored without: still to be completed
+        ("0x" + f"{2:064x}", 7),  # same transaction, another log
+        ("0x" + f"{9:064x}", 9),  # not stored
+    ]
+    assert await pg_storage.stored_trade_keys(keys) == {("0x" + f"{0:064x}", 0)}
+    assert await pg_storage.stored_trade_keys([]) == set()
+
+
+async def test_stored_trade_keys_takes_any_number_of_keys(pg_storage: Storage):
+    """The hashes go as one array parameter, so 40,000 keys are one query."""
+    await pg_storage.save_trades_batch([_trade(i, tx_from="0x" + "5" * 40) for i in range(3)])
+    keys = [("0x" + f"{i:064x}", i) for i in range(40_000)]
+    assert len(await pg_storage.stored_trade_keys(keys)) == 3
+
+
 async def test_get_pool_trades_newest_first_with_pagination(pg_storage: Storage):
     await pg_storage.save_trades_batch([_trade(i) for i in range(5)])
 

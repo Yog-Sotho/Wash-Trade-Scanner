@@ -146,32 +146,69 @@ async def test_fetch_funding_edges_trace_filter_raises_on_failure(clusterer):
 @pytest.mark.asyncio
 async def test_fetch_funding_edges_block_scan(clusterer):
     web3 = AsyncMock()
-    web3.eth.get_block = AsyncMock(
+    web3.provider.make_request = AsyncMock(
         return_value={
-            "transactions": [
-                {"from": "0xAlice", "to": "0xBob", "value": 500},
-                {"from": "0xStranger", "to": "0xNobody", "value": 999},  # unrelated, skipped
-                "0xnot-a-dict-should-be-skipped",
-            ]
+            "result": {
+                "transactions": [
+                    {"from": "0xAlice", "to": "0xBob", "value": hex(500)},
+                    {"from": "0xStranger", "to": "0xNobody", "value": "0x3e7"},  # unrelated
+                    "0xnot-a-dict-should-be-skipped",
+                ]
+            }
         }
     )
 
-    edges = await clusterer._fetch_funding_edges_block_scan(
+    edges, failed = await clusterer._fetch_funding_edges_block_scan(
         web3, {"0xalice", "0xbob"}, from_block=1, to_block=1
     )
 
     assert edges == [("0xalice", "0xbob", 500)]
+    assert failed == 0
+    method, params = web3.provider.make_request.await_args.args
+    assert (method, params) == ("eth_getBlockByNumber", ["0x1", True])
 
 
 @pytest.mark.asyncio
-async def test_fetch_funding_edges_block_scan_handles_block_error(clusterer):
-    web3 = AsyncMock()
-    web3.eth.get_block = AsyncMock(side_effect=RuntimeError("boom"))
+async def test_fetch_funding_edges_block_scan_counts_failed_blocks(clusterer, monkeypatch):
+    """A block that cannot be fetched used to be skipped silently."""
+    from config.settings import settings
 
-    edges = await clusterer._fetch_funding_edges_block_scan(
-        web3, {"0xalice"}, from_block=1, to_block=1
+    monkeypatch.setattr(settings, "RPC_RETRIES", 1)
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(side_effect=RuntimeError("boom"))
+
+    edges, failed = await clusterer._fetch_funding_edges_block_scan(
+        web3, {"0xalice"}, from_block=1, to_block=3
     )
     assert edges == []
+    assert failed == 3
+    assert web3.provider.make_request.await_count == 6  # RPC_RETRIES + 1 attempts each
+
+
+@pytest.mark.asyncio
+async def test_block_scan_runs_concurrently_within_the_cap(clusterer, monkeypatch):
+    import asyncio
+
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "RPC_CONCURRENCY", 4)
+    in_flight = peak = 0
+
+    async def make_request(_method, _params):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.005)
+        in_flight -= 1
+        return {"result": {"transactions": []}}
+
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(side_effect=make_request)
+    _, failed = await clusterer._fetch_funding_edges_block_scan(web3, {"0xa"}, 1, 40)
+
+    assert failed == 0
+    assert web3.provider.make_request.await_count == 40
+    assert peak == 4  # concurrent, and never more than RPC_CONCURRENCY
 
 
 @pytest.mark.asyncio
@@ -228,7 +265,7 @@ async def test_build_funding_graph_falls_back_to_block_scan(clusterer, monkeypat
             patch.object(
                 clusterer,
                 "_fetch_funding_edges_block_scan",
-                AsyncMock(return_value=[("0xalice", "0xbob", 50)]),
+                AsyncMock(return_value=([("0xalice", "0xbob", 50)], 0)),
             ),
         ):
             graph = await clusterer.build_funding_graph(
@@ -240,6 +277,9 @@ async def test_build_funding_graph_falls_back_to_block_scan(clusterer, monkeypat
             )
 
     assert graph.has_edge("0xalice", "0xbob")
+    assert clusterer.coverage.method == "block_scan"
+    assert clusterer.coverage.reason == "trace_filter failed (RuntimeError)"
+    assert clusterer.coverage.complete  # the 2-block window, within the cap
 
 
 @pytest.mark.asyncio
@@ -263,8 +303,8 @@ async def test_fetch_funding_edges_trace_filter_raises_on_error_response(cluster
         await clusterer._fetch_funding_edges_trace_filter(web3, {ALICE}, 1, 100)
 
 
-async def _graph_without_trace_support(clusterer, from_block, to_block):
-    scan = AsyncMock(return_value=[])
+async def _graph_without_trace_support(clusterer, from_block, to_block, failed=0):
+    scan = AsyncMock(return_value=([], failed))
     with (
         patch("core.entity_clustering.AsyncWeb3") as MockWeb3,
         patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=False)),
@@ -291,6 +331,15 @@ async def test_block_scan_fallback_is_off_by_default(clusterer, caplog):
     assert graph.number_of_edges() == 0
     assert graph.number_of_nodes() == 2
     assert "ENTITY_SCAN_MAX_BLOCKS" in caplog.text
+    # Reported with the audit, not only logged.
+    assert clusterer.coverage.as_dict() == {
+        "method": "skipped",
+        "window": (0, 2_000_000),
+        "scanned": None,
+        "blocks_failed": 0,
+        "reason": "the node does not support trace_filter; ENTITY_SCAN_MAX_BLOCKS is 0",
+        "complete": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -305,6 +354,9 @@ async def test_block_scan_fallback_covers_only_latest_blocks_up_to_cap(
     _, _, from_block, to_block = scan.call_args.args
     assert (from_block, to_block) == (901, 1_000)
     assert "coverage is partial" in caplog.text
+    assert clusterer.coverage.window == (0, 1_000)
+    assert clusterer.coverage.scanned == (901, 1_000)
+    assert not clusterer.coverage.complete
 
 
 @pytest.mark.asyncio
@@ -316,3 +368,80 @@ async def test_block_scan_fallback_scans_whole_window_within_cap(clusterer, monk
 
     _, _, from_block, to_block = scan.call_args.args
     assert (from_block, to_block) == (950, 1_000)
+
+
+@pytest.mark.asyncio
+async def test_failed_blocks_make_the_coverage_partial(clusterer, monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "ENTITY_SCAN_MAX_BLOCKS", 100)
+    await _graph_without_trace_support(clusterer, 950, 1_000, failed=2)
+
+    assert clusterer.coverage.scanned == (950, 1_000)
+    assert clusterer.coverage.blocks_failed == 2
+    assert not clusterer.coverage.complete
+
+
+@pytest.mark.asyncio
+async def test_trace_filter_coverage_is_the_whole_window(clusterer):
+    with (
+        patch("core.entity_clustering.AsyncWeb3"),
+        patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+        patch.object(clusterer, "_fetch_funding_edges_trace_filter", AsyncMock(return_value=[])),
+    ):
+        await clusterer.build_funding_graph(
+            1, ["0xalice"], AsyncMock(), from_block_override=10, to_block_override=20
+        )
+
+    assert clusterer.coverage.as_dict()["complete"] is True
+    assert clusterer.coverage.window == clusterer.coverage.scanned == (10, 20)
+
+
+def test_the_block_scan_is_hard_capped():
+    """The scan is one request per block: 50,000 blocks is ~8 minutes at the
+    default rate limit; the old 2,000,000 cap allowed ~6 hours."""
+    from pydantic import ValidationError
+
+    from config.settings import Settings
+
+    assert Settings(ENTITY_SCAN_MAX_BLOCKS=50_000).ENTITY_SCAN_MAX_BLOCKS == 50_000
+    with pytest.raises(ValidationError):
+        Settings(ENTITY_SCAN_MAX_BLOCKS=50_001)
+
+
+@pytest.mark.asyncio
+async def test_stored_clusters_are_looked_up_in_one_query(clusterer):
+    # senders, recipients, then a single lookup for all three components.
+    session = _mock_session_with_scalars([["0xa", "0xc", "0xe"], ["0xb", "0xd", "0xf"], []])
+    graph: nx.DiGraph[str] = nx.DiGraph()
+    graph.add_edges_from([("0xa", "0xb"), ("0xc", "0xd"), ("0xe", "0xf")])
+
+    with patch.object(clusterer, "build_funding_graph", AsyncMock(return_value=graph)):
+        clusters = await clusterer.cluster_addresses(1, "0xpool", session)
+
+    assert len(clusters) == 3
+    assert session.execute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_clustering_shares_the_chains_rate_limit_and_breaker(clusterer):
+    from core.ingestor import chain_breaker, chain_rate_limiter
+
+    with (
+        patch("core.entity_clustering.AsyncWeb3"),
+        patch.object(clusterer, "_node_supports_trace_filter", AsyncMock(return_value=True)),
+        patch.object(clusterer, "_fetch_funding_edges_trace_filter", AsyncMock(return_value=[])),
+    ):
+        await clusterer.build_funding_graph(
+            1, ["0xalice"], AsyncMock(), from_block_override=1, to_block_override=2
+        )
+    assert clusterer._limiter is chain_rate_limiter(1)
+    assert clusterer._breaker is chain_breaker(1)
+
+    limiter = MagicMock()
+    limiter.acquire = AsyncMock()
+    clusterer._limiter, clusterer._breaker = limiter, None
+    web3 = AsyncMock()
+    web3.provider.make_request = AsyncMock(return_value={"result": {}})
+    await clusterer._request(web3, "eth_getBlockByNumber", ["0x1", True])
+    limiter.acquire.assert_awaited_once()

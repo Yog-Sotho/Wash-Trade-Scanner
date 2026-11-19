@@ -53,8 +53,17 @@ class Settings(BaseSettings):
     # RPC Configuration
     RPC_RATE_LIMIT: int = Field(100, ge=1, le=10000)
     RPC_TIMEOUT: int = Field(30, ge=1, le=300)
-    # Retries after a failed eth_getLogs batch (so RPC_RETRIES + 1 attempts).
+    # Retries after a failed eth_getLogs or eth_getBlockByNumber request during
+    # ingestion (so RPC_RETRIES + 1 attempts).
     RPC_RETRIES: int = Field(3, ge=0, le=10)
+    # Requests one chain's ingestor keeps in flight at once (RPC_RATE_LIMIT,
+    # shared by everything in the process using that chain, caps their rate).
+    RPC_CONCURRENCY: int = Field(8, ge=1, le=64)
+    # Ingest each block with its full transactions: one request per block, but
+    # each carries every transaction of the block. False asks for the block's
+    # hashes and then each swap's transaction: ~4x the requests, ~1/10 the bytes
+    # (docs/performance.md).
+    INGEST_FULL_BLOCKS: bool = True
     RPC_MAX_FAILURES: int = Field(5, ge=1, le=100)
     RPC_RECOVERY_TIMEOUT: float = Field(30.0, ge=1.0, le=600.0)
 
@@ -119,8 +128,9 @@ class Settings(BaseSettings):
     # Entity Clustering — when the node lacks trace_filter, funding links can only
     # be found by fetching blocks one at a time. 0 disables that fallback (an
     # unbounded scan of the default window is ~2M RPC calls); a positive value
-    # scans at most that many of the most recent blocks.
-    ENTITY_SCAN_MAX_BLOCKS: int = Field(0, ge=0, le=2_000_000)
+    # scans at most that many of the most recent blocks, hard-capped at 50,000
+    # (about a week of Ethereum blocks: ~8 minutes at RPC_RATE_LIMIT=100).
+    ENTITY_SCAN_MAX_BLOCKS: int = Field(0, ge=0, le=50_000)
 
     # Repeated-Amount Fingerprinting
     REPEATED_AMOUNT_MIN_COUNT: int = Field(5, ge=2, le=1000)

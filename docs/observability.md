@@ -142,7 +142,7 @@ POST /api/v1/audits                      (FastAPI server span)
       │                                  wash.trades_processed, wash.wash_trades_detected
       ├─ eth_getLogs                     client span per JSON-RPC request:
       ├─ eth_getBlockByNumber            rpc.system=jsonrpc, rpc.method, wash.chain_id,
-      ├─ eth_getTransactionByHash        rpc.jsonrpc.error_code on a JSON-RPC error
+      ├─ eth_getBlockByNumber            rpc.jsonrpc.error_code on a JSON-RPC error
       └─ ...
 ```
 

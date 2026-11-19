@@ -9,9 +9,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.exceptions import RPCError
+from core.exceptions import IngestionError, RPCError
 from core.ingestor import ChainIngestor, MultiChainIngestor, RateLimiter
 from core.storage import Storage
+
+
+def _node(timestamp: int = 1_700_000_000, transactions=(), fail_blocks=()):
+    """A web3 provider's make_request answering eth_getBlockByNumber with full
+    transaction objects."""
+
+    async def make_request(method, params):
+        assert method == "eth_getBlockByNumber"
+        assert params[1] is True  # full transaction objects
+        if int(params[0], 16) in fail_blocks:
+            return {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "busy"}}
+        block = {
+            "number": params[0],
+            "timestamp": hex(timestamp),
+            "transactions": list(transactions),
+        }
+        return {"jsonrpc": "2.0", "id": 1, "result": block}
+
+    return AsyncMock(side_effect=make_request)
 
 
 @pytest.fixture
@@ -381,7 +400,7 @@ async def test_sync_historical_swaps_decodes_and_saves(mock_chain_config):
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage)
     ingestor.web3 = MagicMock()
-    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    ingestor.web3.provider.make_request = _node()
 
     swap_event_abi = [{"name": "Swap", "type": "event", "inputs": []}]
     mock_chain_config["dexes"][0]["abi"] = swap_event_abi
@@ -433,7 +452,7 @@ async def test_sync_historical_swaps_prices_trades_before_saving(mock_chain_conf
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
     ingestor.web3 = MagicMock()
-    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    ingestor.web3.provider.make_request = _node()
     mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
 
     event = MagicMock()
@@ -479,7 +498,7 @@ async def test_pool_address_is_checksummed_for_rpc_and_lowercased_for_storage(
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
     ingestor.web3 = MagicMock()
-    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    ingestor.web3.provider.make_request = _node()
     mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
     event = MagicMock()
     event.process_log.return_value = {
@@ -541,7 +560,7 @@ async def _sync_with_transactions(mock_chain_config, logs, get_transaction):
     storage = AsyncMock(spec=Storage)
     ingestor = ChainIngestor(mock_chain_config, storage, price_oracle=PriceOracle(None))
     ingestor.web3 = MagicMock()
-    ingestor.web3.eth.get_block = AsyncMock(return_value={"timestamp": 1700000000})
+    ingestor.web3.provider.make_request = _node()
     ingestor.web3.eth.get_transaction = get_transaction
     mock_chain_config["dexes"][0]["abi"] = [{"name": "Swap", "type": "event", "inputs": []}]
     event = MagicMock()
@@ -701,7 +720,9 @@ async def test_log_fetch_attempts_follow_rpc_retries(
     ingestor.web3 = MagicMock()
     ingestor.web3.eth.get_logs = AsyncMock(side_effect=RPCError("boom"))
 
-    logs = await ingestor._get_logs_batch("0x" + "a" * 40, ["0x1"], 1, 10)
+    # A range whose logs cannot be fetched fails: it used to be skipped
+    # silently, leaving a gap in the audited trades.
+    with pytest.raises(IngestionError, match="logs of blocks 1-10"):
+        await ingestor._get_logs_batch("0x" + "a" * 40, ["0x1"], 1, 10)
 
-    assert logs == []
     assert ingestor.web3.eth.get_logs.await_count == attempts

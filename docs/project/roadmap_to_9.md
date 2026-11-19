@@ -366,6 +366,44 @@ All four items are done; see each item's status above.
 **Acceptance:** a published benchmark on a 10k-trade pool showing query count and wall time
 before/after.
 
+### Phase 5 — status: done (2026-11-19)
+
+Published in [docs/performance.md](../performance.md): a full audit of 10,000 real trades
+against PostgreSQL and a replaying node (20 ms round trip, default rate limit).
+
+| | Before | After |
+|---|---|---|
+| First audit | 135.4 s, 12,482 RPC requests, 23 SQL statements | **41.4 s, 3,137 RPC requests**, 28 SQL statements |
+| Re-audit | 134.6 s, 12,482 RPC requests | **2.8 s, 10 RPC requests** |
+
+"Before" is `main` with one fix applied: unpatched, it could not audit this pool at all.
+
+| Item | Delivered | Evidence |
+|---|---|---|
+| Fix the N+1 | The N+1 was RPC, not SQL (Phase 2 had already brought the audit to 23 statements): one request per transaction on top of one per block. Now one full-block request per block, and stored swaps are skipped before decoding | The benchmark above; e2e test: one `eth_getBlockByNumber` per block, no `eth_getTransactionByHash`, and none at all on a re-audit |
+| Vectorize the O(n²) circular-trade ratio | The ML feature was already O(n log n) (Phase 2). The heuristic detector was the O(n²) one; it now looks reverse legs up in per-pair sorted times | Identical output to the old implementation on 40 random pools; 10,000 trades among three addresses: 45.8 s → 0.063 s |
+| Cap the clustering fallback | `ENTITY_SCAN_MAX_BLOCKS` capped at 50,000 (was 2,000,000), still off by default; `funding_clusters` in every audit result says what was examined and whether coverage is complete | Tests per coverage case; the e2e audit reports `skipped` on a node without `trace_filter` |
+| Bound concurrency | Audits: `AUDIT_MAX_CONCURRENT` (Phase 4.4). Ingestion: `RPC_CONCURRENCY` requests in flight per chain, `RPC_RATE_LIMIT` shared process-wide per chain, log batches fetched ahead, candidate DEXes in parallel | Tests that the cap holds and that a failing DEX cancels the others |
+| Honor shutdown | Checked before every 1,000-block batch; finished batches stay saved and are skipped next time | Test: SIGTERM during a batch keeps it, stops before the next |
+
+Beyond the plan:
+
+- **Audits of 1,490+ swaps failed.** Building the benchmark exposed it: one
+  INSERT of every trade passed PostgreSQL's 32,767 bind-parameter limit after
+  all the RPC work was done. Trades are now saved 1,000 per statement.
+- **Silent data loss removed.** A range whose logs could not be fetched was
+  skipped, and a block that could not be fetched got the current time; the
+  real-time monitor then moved past those blocks for good. All of them now fail
+  and are retried.
+- **Streaming.** Memory no longer grows with the block range; an interrupted
+  audit resumes where it stopped.
+- **A bandwidth switch.** One request per block downloads all of the block's
+  transactions (10.5× the bytes). `INGEST_FULL_BLOCKS=false` trades that back,
+  measured: 4.0× the requests, 0.095× the bytes.
+
+Each behaviour has a test that fails when it is removed (31 reintroduced
+defects, all caught; one more mutant was provably equivalent).
+
 ---
 
 ## Phase 6 — Reach beyond current SOTA (optional, 9 → 9.5+)

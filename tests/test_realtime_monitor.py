@@ -116,6 +116,29 @@ async def test_poll_once_no_new_swaps_advances_head():
 
 
 @pytest.mark.asyncio
+async def test_a_failed_ingestion_does_not_skip_its_blocks():
+    """A lost eth_getLogs batch used to be skipped inside the sync, and the
+    monitor moved past its blocks for good; now the pass fails and the next
+    one starts from the same block."""
+    from core.exceptions import IngestionError
+
+    monitor, _ = _monitor_with_mocks()
+    monitor.last_block = 100
+    monitor.ingestor.sync_pool = AsyncMock(side_effect=IngestionError("logs of blocks 101-110"))
+    with (
+        patch.object(monitor, "_latest_block", AsyncMock(return_value=110)),
+        pytest.raises(IngestionError),
+    ):
+        await monitor.poll_once()
+    assert monitor.last_block == 100
+
+    monitor.ingestor.sync_pool = AsyncMock(return_value=0)
+    with patch.object(monitor, "_latest_block", AsyncMock(return_value=110)):
+        await monitor.poll_once()
+    assert monitor.ingestor.sync_pool.await_args.args[1:] == (101, 110)
+
+
+@pytest.mark.asyncio
 async def test_poll_once_emits_alerts_for_flagged_trades():
     # Three round trips by one trader in the window, plus an unrelated swap.
     wash = _round_trips()

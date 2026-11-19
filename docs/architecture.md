@@ -11,7 +11,10 @@ The system follows a modular, async‑first design built around the following co
 │  ChainIngestor       │  Fetches a pool's swap events from the DEX
 │  (per chain)         │  that created it (pool.factory()), plus each
 │                     │  swap's transaction sender (tx_from) and USD
-│                     │  value. Rate limiting, retries, circuit breaker.
+│                     │  value: 1,000 blocks at a time, one full-block
+│                     │  request per block, skipping swaps already
+│                     │  stored. Shared per-chain rate limit and
+│                     │  circuit breaker, retries; stops on shutdown.
 └─────────┬───────────┘
           │ stores trades
           ▼
