@@ -267,7 +267,8 @@ async def test_detectors_see_the_same_trades_with_or_without_the_orm():
 
 def test_shipped_defaults_are_the_selected_parameters():
     """config/settings.py defaults must be what python -m evaluation.tune chose
-    (evaluation/tuning.json), so the benchmark describes the shipped detectors."""
+    (evaluation/tuning.json), or the setting shipped instead with its reason,
+    so the benchmark describes the shipped detectors."""
     from importlib import resources
 
     from config.settings import Settings
@@ -275,7 +276,10 @@ def test_shipped_defaults_are_the_selected_parameters():
     tuning = json.loads((resources.files("evaluation") / "tuning.json").read_text())
     defaults = {name: field.default for name, field in Settings.model_fields.items()}
     for detector, outcome in tuning["detectors"].items():
-        for name, value in outcome["best"]["params"].items():
+        if outcome.get("shipped"):
+            assert outcome.get("reason"), f"{detector}: an override needs its reason"
+        chosen = outcome.get("shipped") or outcome["best"]
+        for name, value in chosen["params"].items():
             assert defaults[name] == value, f"{detector}: {name}"
 
 

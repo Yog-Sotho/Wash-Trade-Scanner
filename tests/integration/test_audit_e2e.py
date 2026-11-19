@@ -126,6 +126,7 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
     assert result["wash_trades_detected"] == 6
     # The fake node, like most hosted ones, has no trace_filter: the audit says
     # its funding links were not looked for.
+    assert result["excluded_as_mev"] == 0  # no sandwich in this scenario
     assert result["funding_clusters"]["method"] == "skipped"
     assert result["funding_clusters"]["complete"] is False
 

@@ -328,8 +328,12 @@ def render(
         add("")
         add("| Detector | Chosen parameters | Dev recall | Clean FP | P(wash \\| hit) | Decisive |")
         add("|---|---|---|---|---|---|")
+        overridden: list[tuple[str, dict[str, Any]]] = []
         for name, outcome in tuning.items():
-            best = outcome["best"]
+            # "shipped": the setting shipped when it is not the rule's pick.
+            best = outcome.get("shipped") or outcome["best"]
+            if outcome.get("shipped"):
+                overridden.append((name, outcome))
             params = ", ".join(f"{k}={v}" for k, v in best["params"].items())
             add(
                 f"| `{name}` | {params} | {_fmt(best['tpr'])} | {best['clean_fp']:,} / "
@@ -337,4 +341,13 @@ def render(
                 f"| {'yes' if outcome['decisive'] else 'no'} |"
             )
         add("")
+        for name, outcome in overridden:
+            pick = outcome["best"]
+            params = ", ".join(f"{k}={v}" for k, v in pick["params"].items())
+            add(
+                f"`{name}`: the rule's pick ({params}: dev recall {_fmt(pick['tpr'])}, "
+                f"{pick['clean_fp']:,} clean false positives) is not shipped. "
+                f"{outcome['reason']}"
+            )
+            add("")
     return "\n".join(lines) + "\n"

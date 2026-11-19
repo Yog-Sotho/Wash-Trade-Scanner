@@ -42,6 +42,11 @@ GRIDS: dict[str, dict[str, list[Any]]] = {
         "POSITION_NEUTRAL_MIN_TRADES": [4, 6, 8],
         "POSITION_NEUTRAL_WINDOWS_HOURS": [[1], [1, 24], [1, 24, 168]],
     },
+    "coordinated_trading": {
+        "COORDINATION_MAX_BLOCKS": [2, 3, 5],
+        "COORDINATION_MIN_PAIRS": [2, 3, 4],
+        "COORDINATION_MIN_COVERAGE": [0.7, 0.8, 0.9],
+    },
     "repeated_amounts": {
         "REPEATED_AMOUNT_MIN_COUNT": [5, 8, 12],
         "REPEATED_AMOUNT_SIG_FIGS": [3, 4, 6],

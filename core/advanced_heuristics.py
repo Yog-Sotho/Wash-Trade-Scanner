@@ -83,8 +83,25 @@ def flag_trade(trade: SwapTrade, score: float, method: str) -> None:
         trade.detection_method = method
 
 
+def market_of(trade: SwapTrade, cross_pool: bool) -> str:
+    """The market a trade is judged in: its pool or, across pools, its chain
+    and token pair, so that a trader buying in one USDC/WETH pool and selling
+    in another is seen trading both sides of one market."""
+    if not cross_pool:
+        return trade.pool_address
+    a, b = sorted(((trade.token_in or "").lower(), (trade.token_out or "").lower()))
+    return f"{trade.chain_id}:{a}:{b}"
+
+
 class AdvancedHeuristicDetector:
-    """Graph- and statistics-based wash trade detection."""
+    """Graph- and statistics-based wash trade detection.
+
+    With `cross_pool`, round trips, position neutrality and coordination are
+    judged per token pair across the given pools instead of per pool (roadmap
+    Phase 6, cross-pool correlation)."""
+
+    def __init__(self, cross_pool: bool = False) -> None:
+        self.cross_pool = cross_pool
 
     async def detect_round_trips(
         self,
@@ -111,7 +128,7 @@ class AdvancedHeuristicDetector:
 
         pool_groups: dict[str, list[SwapTrade]] = defaultdict(list)
         for trade in trades:
-            pool_groups[trade.pool_address].append(trade)
+            pool_groups[market_of(trade, self.cross_pool)].append(trade)
 
         for pool_trades in pool_groups.values():
             ordered = sorted(pool_trades, key=lambda t: (t.block_number, t.log_index))
@@ -247,7 +264,7 @@ class AdvancedHeuristicDetector:
 
         pool_groups: dict[str, list[SwapTrade]] = defaultdict(list)
         for trade in trades:
-            pool_groups[trade.pool_address].append(trade)
+            pool_groups[market_of(trade, self.cross_pool)].append(trade)
 
         for pool_trades in pool_groups.values():
             by_entity: dict[str, list[SwapTrade]] = defaultdict(list)
@@ -345,6 +362,206 @@ class AdvancedHeuristicDetector:
                 f"moved in each token (margin {settings.POSITION_NEUTRAL_MARGIN:.0%})"
             ),
             details=details,
+        )
+
+    async def detect_coordinated_trading(
+        self,
+        trades: list[SwapTrade],
+        session: AsyncSession,
+        clusters: list[AddressCluster] | None = None,
+        evidence: EvidenceLog | None = None,
+    ) -> list[SwapTrade]:
+        """Detect wallets that wash-trade with each other: temporal motifs.
+
+        On an AMM no swap names a counterparty, so a ring of wallets trading
+        "with each other" shows only in time: one wallet sells what another
+        buys a moment later, for the same value (Chainalysis's wash-trading
+        heuristic 2; Gan et al., TOIT 2024: colluding wallets trade almost
+        simultaneously and keep their holdings constant). Such a matched pair
+        is a two-node delta-temporal motif (Paranjape et al., WSDM '17): two
+        swaps by different traders, in opposite directions, at most
+        COORDINATION_MAX_BLOCKS apart, values within
+        COORDINATION_VALUE_TOLERANCE.
+
+        One pair proves nothing on a busy pool; it happens by chance. A group
+        is flagged when its wallets are linked by such pairs (or by funding,
+        when clusters are given) into COORDINATION_MIN_PAIRS pairs or more,
+        when nearly everything each of them trades is in a pair
+        (COORDINATION_MIN_COVERAGE: busy traders, matched by chance, are not),
+        and when the group as a whole ends flat (COORDINATION_NET_MARGIN).
+        The snapshot SCC detector (detect_circular_trading) looks for cycles
+        among swap senders and recipients, which on an AMM are routers; this
+        is its temporal counterpart on traders.
+        """
+        wash_trades: list[SwapTrade] = []
+        max_blocks = settings.COORDINATION_MAX_BLOCKS
+        tolerance = settings.COORDINATION_VALUE_TOLERANCE
+
+        cluster_of: dict[str, str] = {}
+        for cluster in clusters or []:
+            for address in cluster.addresses:
+                cluster_of[address.lower()] = cluster.cluster_id
+
+        pool_groups: dict[str, list[SwapTrade]] = defaultdict(list)
+        for trade in trades:
+            pool_groups[market_of(trade, self.cross_pool)].append(trade)
+
+        for pool_trades in pool_groups.values():
+            # Matching is in block time: a trade without a block cannot be placed.
+            ordered = sorted(
+                (t for t in pool_trades if t.block_number is not None),
+                key=lambda t: (t.block_number, t.log_index or 0),
+            )
+            by_trader: dict[str, list[SwapTrade]] = defaultdict(list)
+            for trade in ordered:
+                by_trader[trader_of(trade)].append(trade)
+
+            # Matched pairs: each swap against the later opposite swaps by other
+            # traders within the block window.
+            pairs: list[tuple[SwapTrade, SwapTrade]] = []
+            for i, first in enumerate(ordered):
+                direction = _direction(first)
+                trader = trader_of(first)
+                for second in ordered[i + 1 :]:
+                    if second.block_number - first.block_number > max_blocks:
+                        break
+                    if _direction(second) != direction[::-1] or trader_of(second) == trader:
+                        continue
+                    gap = self._pair_gap(first, second)
+                    if gap is not None and gap <= tolerance:
+                        pairs.append((first, second))
+            if not pairs:
+                continue
+
+            for group, group_pairs in self._coordinated_groups(pairs, by_trader, cluster_of):
+                if len(group_pairs) < settings.COORDINATION_MIN_PAIRS:
+                    continue
+                group_trades = [t for member in group for t in by_trader[member]]
+                ratios = self._net_to_gross(group_trades)
+                if not ratios or max(ratios.values()) > settings.COORDINATION_NET_MARGIN:
+                    continue
+                legs = {id(t): t for pair in group_pairs for t in pair}
+                flagged = sorted(legs.values(), key=lambda t: (t.block_number, t.log_index))
+                for trade in flagged:
+                    flag_trade(trade, 0.9, "coordinated_trading")
+                    wash_trades.append(trade)
+                if evidence is not None:
+                    evidence.add(
+                        self._coordination_finding(group, group_pairs, flagged, by_trader, ratios)
+                    )
+
+        logger.info(f"Detected {len(wash_trades)} coordinated trades")
+        return wash_trades
+
+    @staticmethod
+    def _coordinated_groups(
+        pairs: list[tuple[SwapTrade, SwapTrade]],
+        by_trader: dict[str, list[SwapTrade]],
+        cluster_of: dict[str, str],
+    ) -> list[tuple[set[str], list[tuple[SwapTrade, SwapTrade]]]]:
+        """Groups of traders linked by matched pairs (and funding), pruned
+        until at least COORDINATION_MIN_COVERAGE of each member's trades are
+        in pairs with the group's other members. Pruning one member can drop
+        another below the bar, so it repeats until nothing changes: a busy
+        trader matched by chance with a few others is cut away, with the
+        pairs it alone held together."""
+        members = {trader_of(t) for pair in pairs for t in pair}
+        while True:
+            graph: nx.Graph[str] = nx.Graph()
+            graph.add_nodes_from(members)
+            for first, second in pairs:
+                a, b = trader_of(first), trader_of(second)
+                if a in members and b in members:
+                    graph.add_edge(a, b)
+            by_cluster: dict[str, list[str]] = defaultdict(list)
+            for trader in members:
+                if trader in cluster_of:
+                    by_cluster[cluster_of[trader]].append(trader)
+            for linked in by_cluster.values():
+                nx.add_path(graph, linked)  # a funding cluster is one entity
+            component_of = {
+                str(node): index
+                for index, component in enumerate(nx.connected_components(graph))
+                for node in component
+            }
+            in_group: dict[str, set[int]] = defaultdict(set)
+            group_pairs: dict[int, list[tuple[SwapTrade, SwapTrade]]] = defaultdict(list)
+            for first, second in pairs:
+                a, b = trader_of(first), trader_of(second)
+                if a in members and b in members and component_of[a] == component_of[b]:
+                    in_group[a].add(id(first))
+                    in_group[b].add(id(second))
+                    group_pairs[component_of[a]].append((first, second))
+            keep = {
+                trader
+                for trader in members
+                if len(in_group[trader]) / len(by_trader[trader])
+                >= settings.COORDINATION_MIN_COVERAGE
+            }
+            if keep == members:
+                break
+            members = keep
+        groups: dict[int, set[str]] = defaultdict(set)
+        for trader in members:
+            groups[component_of[trader]].add(trader)
+        return [(group, group_pairs[index]) for index, group in groups.items()]
+
+    @staticmethod
+    def _pair_gap(first: SwapTrade, second: SwapTrade) -> float | None:
+        """Relative difference of two opposite swaps' values: USD when both
+        are priced, else what the first sold against what the second bought."""
+        a, b = first.volume_usd, second.volume_usd
+        if a and b:
+            return abs(a - b) / max(a, b)
+        sold, bought = first.amount_in or 0.0, second.amount_out or 0.0
+        if sold <= 0 or bought <= 0:
+            return None
+        return abs(sold - bought) / max(sold, bought)
+
+    @classmethod
+    def _coordination_finding(
+        cls,
+        group: set[str],
+        group_pairs: list[tuple[SwapTrade, SwapTrade]],
+        flagged: list[SwapTrade],
+        by_trader: dict[str, list[SwapTrade]],
+        ratios: dict[str, float],
+    ) -> Finding:
+        members = sorted(group)
+        legs = {id(t) for pair in group_pairs for t in pair}
+        coverage = {
+            m: round(sum(1 for t in by_trader[m] if id(t) in legs) / len(by_trader[m]), 4)
+            for m in members
+        }
+        listed = sorted(group_pairs, key=lambda p: (p[0].block_number, p[0].log_index))[:10]
+        return Finding(
+            detector="coordinated_trading",
+            trades=flagged,
+            entity=",".join(members[:20]),
+            summary=(
+                f"{len(members)} wallets made {len(group_pairs)} pairs of opposite trades, each "
+                f"pair at most {settings.COORDINATION_MAX_BLOCKS} blocks and "
+                f"{settings.COORDINATION_VALUE_TOLERANCE:.0%} in value apart; at least "
+                f"{min(coverage.values()):.0%} of each wallet's trades are in such pairs, and "
+                f"the group ended with a net change of at most {max(ratios.values()):.1%} of "
+                "what it moved"
+            ),
+            details={
+                "members": members[:20],
+                "members_total": len(members),
+                "pairs": len(group_pairs),
+                "coverage": {m: coverage[m] for m in members[:20]},
+                "net_to_gross": {token: round(r, 6) for token, r in ratios.items()},
+                "pair_examples": [
+                    {
+                        "first": first.transaction_hash,
+                        "second": second.transaction_hash,
+                        "blocks_apart": second.block_number - first.block_number,
+                        "value_gap": round(cls._pair_gap(first, second) or 0.0, 6),
+                    }
+                    for first, second in listed
+                ],
+            },
         )
 
     async def detect_closed_cluster(

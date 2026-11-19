@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.advanced_heuristics import trader_of
 from core.calibration import DetectorCalibration, fpr_upper_bound, override_calibration
 from core.heuristics import HeuristicDetector
+from core.mev import without_sandwiches
 from evaluation.dataset import Fixture, load_fixture, to_swap_trades
 from evaluation.inject import PATTERNS, Campaign, Market, inject
 from evaluation.metrics import Counts, average_precision
@@ -60,23 +61,36 @@ def detector_suite() -> dict[str, DetectorFn]:
     (all detectors, calibrated scoring, SUSPICIOUS_ACTIVITY_THRESHOLD)."""
     h = HeuristicDetector()
 
+    # Each detector sees what it sees in an audit: the trades without the
+    # sandwich attackers' legs (core/mev.py), so its measured rates are the
+    # rates the composite scores with.
+    def candidates(trades: list[SwapTrade]) -> list[SwapTrade]:
+        return without_sandwiches(trades)[0]
+
     def plain(
         method: Callable[[list[SwapTrade], AsyncSession], Awaitable[list[SwapTrade]]],
     ) -> DetectorFn:
         async def run(trades: list[SwapTrade], _clusters: list[AddressCluster]) -> list[SwapTrade]:
-            return await method(trades, _NO_SESSION)
+            return await method(candidates(trades), _NO_SESSION)
 
         return run
 
     async def position_neutral(
         trades: list[SwapTrade], clusters: list[AddressCluster]
     ) -> list[SwapTrade]:
-        return await h.advanced.detect_position_neutral(trades, _NO_SESSION, clusters)
+        return await h.advanced.detect_position_neutral(candidates(trades), _NO_SESSION, clusters)
+
+    async def coordinated_trading(
+        trades: list[SwapTrade], clusters: list[AddressCluster]
+    ) -> list[SwapTrade]:
+        return await h.advanced.detect_coordinated_trading(
+            candidates(trades), _NO_SESSION, clusters
+        )
 
     async def wash_cluster(
         trades: list[SwapTrade], clusters: list[AddressCluster]
     ) -> list[SwapTrade]:
-        return await h.detect_wash_clusters(trades, clusters, _NO_SESSION)
+        return await h.detect_wash_clusters(candidates(trades), clusters, _NO_SESSION)
 
     async def composite(trades: list[SwapTrade], clusters: list[AddressCluster]) -> list[SwapTrade]:
         flagged, _ = await h.run_detectors_on_trades(trades, _NO_SESSION, clusters)
@@ -85,6 +99,7 @@ def detector_suite() -> dict[str, DetectorFn]:
     return {
         "round_trip": plain(h.advanced.detect_round_trips),
         "position_neutral": position_neutral,
+        "coordinated_trading": coordinated_trading,
         "circular_trading": plain(h.detect_circular_trading),
         "closed_cluster": plain(h.advanced.detect_closed_cluster),
         "repeated_amounts": plain(h.advanced.detect_repeated_amounts),

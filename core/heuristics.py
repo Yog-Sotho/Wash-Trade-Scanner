@@ -19,9 +19,14 @@ from config.settings import settings
 from core.advanced_heuristics import AdvancedHeuristicDetector, flag_trade, trader_of
 from core.calibration import wash_probability
 from core.evidence import EvidenceLog, Finding
+from core.mev import without_sandwiches
 from models.schemas import AddressCluster, SwapTrade
 
 logger = logging.getLogger(__name__)
+
+# The stats key counting trades taken out as MEV before detection: not a
+# detector's hits.
+EXCLUDED_MEV = "excluded_mev_sandwich"
 
 
 def _load_allowlist() -> set[str]:
@@ -101,12 +106,16 @@ class RobustAnomalyDetector:
 
 
 class HeuristicDetector:
-    """Wash trade detection using configurable heuristics."""
+    """Wash trade detection using configurable heuristics.
 
-    def __init__(self) -> None:
+    `cross_pool`: judge the entity- and time-based detectors per token pair
+    across the pools given, not per pool (AdvancedHeuristicDetector)."""
+
+    def __init__(self, cross_pool: bool = False) -> None:
+        self.cross_pool = cross_pool
         self.confidence_threshold = settings.SUSPICIOUS_ACTIVITY_THRESHOLD
         self.bot_allowlist = _load_allowlist()
-        self.advanced = AdvancedHeuristicDetector()
+        self.advanced = AdvancedHeuristicDetector(cross_pool=cross_pool)
 
     async def detect_circular_trading(
         self,
@@ -400,6 +409,11 @@ class HeuristicDetector:
         stats: dict[str, int] = {}
         hits: dict[int, list[str]] = defaultdict(list)
         evidence = EvidenceLog()
+        all_trades = trades
+        # Sandwich attackers' legs are MEV, not wash: no detector sees them
+        # (core/mev.py). They are counted, and never labelled.
+        trades, sandwiches = without_sandwiches(trades)
+        stats[EXCLUDED_MEV] = 2 * len(sandwiches)
 
         detectors = [
             ("round_trip", self.advanced.detect_round_trips),
@@ -416,12 +430,14 @@ class HeuristicDetector:
                 hits[trade.id].append(name)
             stats[name] = len({t.id for t in detected})
 
-        neutral = await self.advanced.detect_position_neutral(
-            trades, session, clusters, evidence=evidence
-        )
-        for trade in {t.id: t for t in neutral}.values():
-            hits[trade.id].append("position_neutral")
-        stats["position_neutral"] = len({t.id for t in neutral})
+        for name, entity_detector in (
+            ("position_neutral", self.advanced.detect_position_neutral),
+            ("coordinated_trading", self.advanced.detect_coordinated_trading),
+        ):
+            detected = await entity_detector(trades, session, clusters, evidence=evidence)
+            for trade in {t.id: t for t in detected}.values():
+                hits[trade.id].append(name)
+            stats[name] = len({t.id for t in detected})
 
         if clusters:
             detected = await self.detect_wash_clusters(trades, clusters, session, evidence=evidence)
@@ -431,7 +447,7 @@ class HeuristicDetector:
 
         prior = settings.WASH_PRIOR
         wash_trades: list[SwapTrade] = []
-        for trade in trades:
+        for trade in all_trades:
             trade.is_wash_trade = False
             trade.wash_trade_score = 0.0
             trade.detection_method = None

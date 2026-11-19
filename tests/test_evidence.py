@@ -167,12 +167,16 @@ async def test_every_detector_explains_every_trade_it_flags():
             for trade in await fn(trades, None, evidence=log):
                 fired.add(name)
                 assert any(f.detector == name for f in log.findings(trade)), (name, trade.id)
-        log = EvidenceLog()
-        for trade in await h.advanced.detect_position_neutral(trades, None, clusters, evidence=log):
-            fired.add("position_neutral")
-            assert any(f.detector == "position_neutral" for f in log.findings(trade))
+        for name, entity_detector in (
+            ("position_neutral", h.advanced.detect_position_neutral),
+            ("coordinated_trading", h.advanced.detect_coordinated_trading),
+        ):
+            log = EvidenceLog()
+            for trade in await entity_detector(trades, None, clusters, evidence=log):
+                fired.add(name)
+                assert any(f.detector == name for f in log.findings(trade)), (name, trade.id)
     # position_neutral is covered by the funding-cluster test above.
-    assert {"round_trip", "repeated_amounts", "volume_anomaly"} <= fired
+    assert {"round_trip", "repeated_amounts", "volume_anomaly", "coordinated_trading"} <= fired
 
 
 def test_the_bundle_lists_the_most_probative_first_and_one_entry_per_detector():

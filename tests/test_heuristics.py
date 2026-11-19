@@ -257,10 +257,12 @@ async def test_run_all_heuristics_combines_detectors(detector, sample_trades):
         "round_trip",
         "circular_trading",
         "position_neutral",
+        "coordinated_trading",
         "closed_cluster",
         "repeated_amounts",
         "high_frequency_bot",
         "volume_anomaly",
+        "excluded_mev_sandwich",  # trades taken out before detection, not hits
     }
     assert stats["circular_trading"] == 2  # Dave<->Eve round trip
     assert {t.id for t in wash} == {3, 4}

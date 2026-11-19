@@ -27,7 +27,7 @@ from core import metrics
 from core.entity_clustering import EntityClusterer, FundingCoverage
 from core.exceptions import AuditCancelledError, WashTradeError
 from core.feature_engineer import FeatureEngineer
-from core.heuristics import HeuristicDetector
+from core.heuristics import EXCLUDED_MEV, HeuristicDetector
 from core.ingestor import MultiChainIngestor
 from core.log_config import configure_logging
 from core.ml_detector import MLDetector
@@ -151,6 +151,7 @@ class AuditRunner:
         await self.storage.clear_pool_labels(params.chain_id, params.pool_address)
 
         funding = FundingCoverage("not_run", reason="heuristics are off")
+        excluded_mev = 0
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
                 logger.info("Clustering addresses by funding links...")
@@ -185,6 +186,7 @@ class AuditRunner:
                     )
                     flagged_trade_ids.update(t.id for t in heuristics_wash_trades)
                     detection_methods.extend(stats.keys())
+                excluded_mev = stats.pop(EXCLUDED_MEV, 0)
                 detector_hits.update(stats)
 
             if use_ml:
@@ -268,6 +270,8 @@ class AuditRunner:
             # What funding-link clustering examined: no clusters means no
             # links only when this is complete.
             "funding_clusters": funding.as_dict(),
+            # Sandwich attackers' legs, taken out before detection (core/mev.py).
+            "excluded_as_mev": excluded_mev,
         }
 
     def _print_results(
