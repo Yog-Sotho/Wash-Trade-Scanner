@@ -129,8 +129,8 @@ Neither statistic labels a trade. On the recorded pools:
 | Pool | Kind | Round share | Benford MAD | Conformity |
 |---|---|---|---|---|
 | `univ2_usdc_weth` | clean | 16.42% | 0.0117 | acceptable |
-| `univ3_usdc_weth_005` | clean | 7.64% | 0.0044 | close |
-| `univ3_weth_usdt_005` | clean | 9.74% | 0.0051 | close |
+| `univ3_usdc_weth_005` | clean | 7.64% | 0.0043 | close |
+| `univ3_weth_usdt_005` | clean | 9.74% | 0.0050 | close |
 | `nexf_weth` | FBI-documented wash market | **0.14%** | **0.0349** | **nonconformity** |
 
 Four pools show that the signal exists, not how often it errs. A pool where
