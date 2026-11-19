@@ -83,6 +83,24 @@ ALERT_DELIVERIES = Counter(
     ["sink", "outcome"],
 )
 
+# -------------------------------------------------- rate limits and auth
+
+RATE_LIMITED = Counter(
+    "wash_rate_limited_total", "Requests refused with 429 by the per-client rate limit."
+)
+AUTH_FAILURES = Counter(
+    "wash_auth_failures_total",
+    "Requests, logins and websockets that presented a wrong API key.",
+)
+AUTH_LOCKOUTS = Counter(
+    "wash_auth_lockouts_total", "Client lockouts started by repeated wrong API keys."
+)
+LIMIT_STORE_ERRORS = Counter(
+    "wash_limit_store_errors_total",
+    "Rate-limit store (Redis) operations that failed; the request was let through.",
+    ["operation"],
+)
+
 # ------------------------------------------------------------------ HTTP
 
 HTTP_REQUESTS = Counter(

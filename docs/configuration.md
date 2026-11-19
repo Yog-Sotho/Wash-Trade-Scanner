@@ -149,10 +149,18 @@ existed, or whose price was unavailable at ingestion (e.g. throttling), run:
 | `API_KEY_HASHES`            | Comma-separated SHA-256 hashes of accepted keys (`wash-genkey`)    | (empty)     |
 | `API_CORS_ORIGINS`          | Comma-separated allowed CORS origins (empty = CORS disabled)       | (empty)     |
 | `API_RATE_LIMIT_PER_MINUTE` | Per-client-IP request budget                                       | `120`       |
+| `RATE_LIMIT_REDIS_URL`      | Redis shared by every instance for limits and lockouts (`redis://` or `rediss://`; empty = per process) | (empty) |
+| `AUTH_MAX_FAILURES`         | Wrong API keys from one client before it is locked out             | `5`         |
+| `AUTH_FAILURE_WINDOW_SECONDS` | Failures are forgotten this long after the last one              | `900`       |
+| `AUTH_LOCKOUT_SECONDS`      | First lockout; doubles with each further failure                   | `60`        |
+| `AUTH_LOCKOUT_MAX_SECONDS`  | Longest lockout                                                    | `3600`      |
+| `AUDIT_MAX_CONCURRENT`      | Background audits running at once, across instances (more get 429) | `2`         |
+| `AUDIT_TASK_TTL_HOURS`      | Finished audit tasks are kept this long                            | `24`        |
 | `API_DOCS_ENABLED`          | Serve interactive docs at `/docs`                                  | `true`      |
 | `API_HSTS_ENABLED`          | Emit `Strict-Transport-Security` (enable behind TLS proxy only)    | `false`     |
 | `PANEL_ENABLED`             | Serve the web panel at `/panel`                                    | `true`      |
 | `PANEL_SESSION_TTL_MINUTES` | Panel session cookie lifetime (minutes)                            | `720`       |
+| `PANEL_SESSION_SECRET`      | Signs session cookies (32+ characters), the same on every instance; empty = random per process | (empty) |
 
 ## Health Probes
 

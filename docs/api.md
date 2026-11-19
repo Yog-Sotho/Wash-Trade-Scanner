@@ -35,7 +35,27 @@ is enabled and at least one API key is configured:
 
 Additional hardening, always on:
 
-- **Per-IP rate limiting** (`API_RATE_LIMIT_PER_MINUTE`, default 120; returns 429).
+- **Per-IP rate limiting** (`API_RATE_LIMIT_PER_MINUTE`, default 120 per
+  sliding minute; returns 429 with `Retry-After`).
+- **Wrong-key lockout.** Every wrong API key counts against the client IP, on
+  any route, the panel login or a websocket. From the `AUTH_MAX_FAILURES`-th
+  (default 5) on, the client is locked out for `AUTH_LOCKOUT_SECONDS` (60),
+  doubling with each further failure up to `AUTH_LOCKOUT_MAX_SECONDS` (1 h).
+  While locked out, even the right key gets 429 with `Retry-After` (websocket
+  close code `4429`). Failures are forgotten `AUTH_FAILURE_WINDOW_SECONDS`
+  (15 min) after the last one, and a success resets them. A missing key or an
+  expired session cookie is not counted (the panel probes without one).
+- **Several instances.** Limits and lockouts are counted per process unless
+  `RATE_LIMIT_REDIS_URL` points every instance at one Redis; then they are
+  shared, and `/health/ready` checks Redis. If Redis is unreachable, requests
+  are let through without limits (every request still needs a valid key) and
+  `wash_limit_store_errors_total` counts it. Set the same
+  `PANEL_SESSION_SECRET` on every instance so a panel session is valid on all
+  of them.
+- **Client IP behind a proxy.** Limits count against the connection's address,
+  or the `X-Forwarded-For` client when the request comes from a proxy uvicorn
+  trusts: loopback by default, others via `FORWARDED_ALLOW_IPS`. Without that,
+  every client behind a remote proxy shares one budget and one lockout.
 - **Security headers**: `X-Content-Type-Options`, `X-Frame-Options: DENY`,
   `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and a deny-all
   `Content-Security-Policy` on API routes.
@@ -89,13 +109,34 @@ log line of the request (and of an audit the request started). See
 | GET  | `/metrics` | Prometheus metrics ([observability.md](observability.md)); needs the key when auth is on |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/trades?limit=&offset=&wash_only=` | Paginated trades for a pool |
 | GET  | `/api/v1/pools/{chain_id}/{pool}/report` | Risk metrics: wash volume, per-method breakdown, severity |
-| POST | `/api/v1/audits` | Start a full audit in the background (body: `AuditRequest`), returns `202 {task_id}` |
+| POST | `/api/v1/audits` | Start a full audit in the background (body: `AuditRequest`), returns `202 {task_id}`; 409 (with the running `task_id`) if the pool is already being audited; 429 if `AUDIT_MAX_CONCURRENT` audits are running |
 | GET  | `/api/v1/audits/{task_id}` | Poll audit status/result |
 
 Example:
 
     curl -H "X-API-Key: $KEY" \
       "http://127.0.0.1:8000/api/v1/pools/1/0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc/report"
+
+### Audit tasks
+
+Audits started with `POST /api/v1/audits` are stored in the database, so any
+instance can report them and a restart does not lose them:
+
+```json
+{"task_id": "fa4ed5a7e65e4b00972eff6ae6593aaf", "status": "completed",
+ "chain_id": 1, "pool_address": "0x9e8c...",
+ "created_at": "2026-11-19T01:40:20.6", "finished_at": "2026-11-19T01:41:31.2",
+ "result": {"trades_processed": 9, "wash_trades_detected": 6, "risk_metrics": {...}}}
+```
+
+`status` is `running`, `completed` (with `result`), `failed` (with `error`) or
+`interrupted`: the server running it stopped. A shutting-down server marks its
+own audits interrupted; a running audit refreshes a heartbeat every 30 s, and
+one silent for 2 minutes (a crashed server) is marked interrupted by the next
+request about audits, freeing its slot. At most `AUDIT_MAX_CONCURRENT`
+(default 2) run at once across all instances, one per pool; finished tasks are
+deleted `AUDIT_TASK_TTL_HOURS` (24) after they end, after which their id
+answers 404.
 
 ## Health probes
 
@@ -110,7 +151,8 @@ readiness probe only takes it out of the load balancer.
   - the database answers a query;
   - for each chain in `HEALTH_RPC_CHAIN_IDS` (default `1`), the configured RPC
     endpoint answers `eth_chainId` with that chain's id. An endpoint serving
-    another network is not ready: every audit through it would be wrong.
+    another network is not ready: every audit through it would be wrong;
+  - with `RATE_LIMIT_REDIS_URL` set, Redis answers (check `rate_limit_store`).
 
   Each check is bounded by `HEALTH_CHECK_TIMEOUT_SECONDS` (default 5). RPC
   answers are reused for `HEALTH_RPC_CACHE_SECONDS` (default 15), and probes

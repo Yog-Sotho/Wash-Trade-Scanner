@@ -54,8 +54,14 @@ def _is_placeholder(url: str) -> bool:
 
 
 class ReadinessChecker:
-    def __init__(self, database_check: Callable[[], Awaitable[bool]]) -> None:
+    def __init__(
+        self,
+        database_check: Callable[[], Awaitable[bool]],
+        extra_checks: dict[str, Callable[[], Awaitable[bool]]] | None = None,
+    ) -> None:
         self._database_check = database_check
+        # Further dependencies, by check name (the shared rate-limit store).
+        self._extra_checks = extra_checks or {}
         self._cache: dict[int, tuple[float, CheckResult]] = {}  # chain -> (when, result)
         self._locks: dict[int, asyncio.Lock] = {}
         self._clients: dict[int, tuple[str, AsyncWeb3]] = {}
@@ -63,22 +69,27 @@ class ReadinessChecker:
     async def check(self) -> tuple[bool, dict[str, Any]]:
         """(ready, {check name: result}) with every check run concurrently."""
         chain_ids = settings.health_rpc_chain_id_list
-        results = await asyncio.gather(self._database(), *(self._rpc(c) for c in chain_ids))
+        extra = list(self._extra_checks.items())
+        results = await asyncio.gather(
+            self._dependency("database", self._database_check),
+            *(self._dependency(name, check) for name, check in extra),
+            *(self._rpc(c) for c in chain_ids),
+        )
         checks = {"database": results[0]}
-        checks.update({f"rpc_{c}": r for c, r in zip(chain_ids, results[1:], strict=True)})
+        checks.update({name: r for (name, _), r in zip(extra, results[1:], strict=False)})
+        rpc_results = results[1 + len(extra) :]
+        checks.update({f"rpc_{c}": r for c, r in zip(chain_ids, rpc_results, strict=True)})
         ready = all(result.ok for result in checks.values())
         return ready, {name: result.as_dict() for name, result in checks.items()}
 
-    async def _database(self) -> CheckResult:
+    async def _dependency(self, name: str, check: Callable[[], Awaitable[bool]]) -> CheckResult:
         start = time.perf_counter()
         try:
-            ok = await asyncio.wait_for(
-                self._database_check(), settings.HEALTH_CHECK_TIMEOUT_SECONDS
-            )
+            ok = await asyncio.wait_for(check(), settings.HEALTH_CHECK_TIMEOUT_SECONDS)
         except TimeoutError:
             return CheckResult(False, _ms(start), "timeout")
         except Exception:
-            logger.warning("Readiness: database check failed", exc_info=True)
+            logger.warning(f"Readiness: {name} check failed", exc_info=True)
             ok = False
         return CheckResult(ok, _ms(start), None if ok else "unreachable")
 

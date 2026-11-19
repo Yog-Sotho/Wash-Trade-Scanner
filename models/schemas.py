@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Index, Integer, String
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -119,6 +119,40 @@ class DetectionAuditLog(Base):
 
 
 # Pydantic models for API responses
+class AuditTask(Base):
+    """A background audit started through the API (POST /api/v1/audits).
+
+    Times come from the database clock (now()), so every API instance agrees
+    on heartbeat age and expiry. A running task's heartbeat_at is refreshed
+    while it runs; one whose heartbeat stopped belongs to an instance that
+    went away, and is marked interrupted (api/audits.py).
+    """
+
+    __tablename__ = "audit_tasks"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # running | completed | failed | interrupted
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    chain_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    pool_address: Mapped[str] = mapped_column(String(42), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index("ix_audit_tasks_status_pool", "status", "chain_id", "pool_address"),
+        Index("ix_audit_tasks_finished_at", "finished_at"),
+    )
+
+
 class SwapTradeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

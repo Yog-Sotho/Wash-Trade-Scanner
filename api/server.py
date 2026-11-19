@@ -9,10 +9,8 @@ binding a public interface requires API auth to be enabled (see
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
-import uuid
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
 from pathlib import Path
@@ -23,24 +21,28 @@ from fastapi import (
     FastAPI,
     HTTPException,
     Query,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
+from api.audits import AuditTasks, task_view
 from api.auth import (
     SESSION_COOKIE,
     authorize_websocket,
+    check_credentials,
     create_session_token,
+    locked_out,
     require_api_key,
-    verify_api_key,
 )
 from api.health import ReadinessChecker
+from api.limits import Limits, client_ip
 from api.middleware import (
     REQUEST_ID_HEADER,
     RateLimitMiddleware,
@@ -104,8 +106,10 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         await watcher.start()
         app.state.watcher = watcher
         yield
-        await watcher.stop()  # first: no new alerts
+        await audits.shutdown()  # running audits record themselves interrupted
+        await watcher.stop()  # no new alerts
         await dispatcher.stop()  # then deliver what is queued
+        await app.state.limits.close()
         if app.state.owns_storage:
             await app.state.storage.close()
 
@@ -118,7 +122,9 @@ def create_app(storage: Storage | None = None) -> FastAPI:
     )
     app.state.storage = storage
     app.state.owns_storage = False
-    app.state.audit_tasks = {}
+    # Rate limits and auth lockouts: per process, or shared through Redis.
+    limits = Limits.from_settings()
+    app.state.limits = limits
 
     # Order matters: middleware added last runs first (outermost), so the
     # security headers wrap even rate-limited (429) responses, and the request
@@ -144,7 +150,10 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         storage: Storage | None = app.state.storage
         return storage is not None and await storage.health_check()
 
-    readiness = ReadinessChecker(database_answers)
+    # A shared limit store is a dependency: without it, limits are not enforced.
+    readiness = ReadinessChecker(
+        database_answers, {"rate_limit_store": limits.ping} if limits.shared else None
+    )
 
     # Probes are unauthenticated by design (orchestrators send no API key) and
     # say nothing beyond up/down and, for readiness, which check failed.
@@ -212,43 +221,52 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         metrics = compute_risk_metrics(trades)
         return {"chain_id": chain_id, "pool_address": pool, **metrics}
 
-    async def _run_audit_task(task_id: str, request: AuditRequest) -> None:
+    async def run_audit(params: AuditParameters) -> dict[str, Any]:
         # Imported lazily: scripts.run_audit pulls in the whole pipeline, which
-        # API-only deployments may not need until an audit is requested. The
-        # task inherits the request's context, so its logs carry the request id.
+        # API-only deployments may not need until an audit is requested.
         from scripts.run_audit import AuditRunner
 
-        tasks: dict[str, dict[str, Any]] = app.state.audit_tasks
-        try:
-            runner = AuditRunner()
-            runner.storage = get_storage()
-            params = AuditParameters(
-                chain_id=request.chain_id,
-                pool_address=request.pool_address,
-                start_block=request.start_block,
-                end_block=request.end_block,
-                use_ml=request.use_ml,
-                use_heuristics=request.use_heuristics,
-            )
-            result = await runner.run_audit(params)
-            tasks[task_id] = {"status": "completed", "result": result}
-        except Exception as exc:
-            logger.exception(f"Audit task {task_id} failed")
-            tasks[task_id] = {"status": "failed", "error": redact(str(exc))}
+        runner = AuditRunner()
+        runner.storage = get_storage()
+        return await runner.run_audit(params)
+
+    # Background audits (persisted, bounded, expiring): api/audits.py.
+    audits = AuditTasks(get_storage, run_audit)
+    app.state.audits = audits
 
     @app.post(
         f"{PREFIX}/audits",
         status_code=202,
         dependencies=[Depends(require_api_key)],
+        responses={409: {"description": "This pool is already being audited"}},
     )
-    async def start_audit(request: AuditRequest) -> dict[str, str]:
-        """Kick off a full audit in the background; poll the returned task id."""
+    async def start_audit(request: AuditRequest) -> Any:
+        """Start a full audit in the background; poll the returned task id.
+
+        429 when AUDIT_MAX_CONCURRENT audits are running; 409 (with the
+        running task's id) when this pool is already being audited.
+        """
         _validated_pool(request.pool_address)
-        task_id = uuid.uuid4().hex
-        app.state.audit_tasks[task_id] = {"status": "running"}
-        task = asyncio.create_task(_run_audit_task(task_id, request))
-        # Keep a reference so the task isn't garbage-collected mid-flight.
-        app.state.audit_tasks[task_id]["task"] = task
+        params = AuditParameters(
+            chain_id=request.chain_id,
+            pool_address=request.pool_address,
+            start_block=request.start_block,
+            end_block=request.end_block,
+            use_ml=request.use_ml,
+            use_heuristics=request.use_heuristics,
+        )
+        outcome, task_id = await audits.start(params)
+        if outcome == "busy":
+            raise HTTPException(
+                status_code=429,
+                detail=f"{settings.AUDIT_MAX_CONCURRENT} audit(s) already running; retry later",
+                headers={"Retry-After": "60"},
+            )
+        if outcome == "duplicate":
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "This pool is already being audited", "task_id": task_id},
+            )
         return {"task_id": task_id, "status": "running"}
 
     @app.get(
@@ -256,10 +274,12 @@ def create_app(storage: Storage | None = None) -> FastAPI:
         dependencies=[Depends(require_api_key)],
     )
     async def audit_status(task_id: str) -> dict[str, Any]:
-        entry = app.state.audit_tasks.get(task_id)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Unknown audit task")
-        return {k: v for k, v in entry.items() if k != "task"}
+        """A task's status and, once finished, its result or error. Finished
+        tasks are kept for AUDIT_TASK_TTL_HOURS."""
+        task = await audits.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Unknown or expired audit task")
+        return task_view(task)
 
     @app.get(f"{PREFIX}/stats/overview", dependencies=[Depends(require_api_key)])
     async def stats_overview() -> dict[str, Any]:
@@ -286,13 +306,19 @@ def create_app(storage: Storage | None = None) -> FastAPI:
     # ------------------------------------------------------------- panel
 
     @app.post("/panel/login")
-    async def panel_login(body: LoginRequest, response: Response) -> dict[str, bool]:
+    async def panel_login(
+        body: LoginRequest, request: Request, response: Response
+    ) -> dict[str, bool]:
         """Exchange an API key for an HttpOnly session cookie.
 
         With auth disabled (local mode) the login always succeeds so the
-        panel works out of the box on loopback.
+        panel works out of the box on loopback. Wrong keys are throttled like
+        everywhere else (api/limits.py): a locked-out client gets 429.
         """
-        if settings.API_AUTH_ENABLED and not verify_api_key(body.api_key):
+        ok, locked = await check_credentials(limits, client_ip(request), body.api_key, None)
+        if locked:
+            raise locked_out(locked)
+        if not ok:
             raise HTTPException(status_code=401, detail="Invalid API key")
         response.set_cookie(
             SESSION_COOKIE,

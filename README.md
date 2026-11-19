@@ -183,6 +183,9 @@ Detection quality (no network or database needed):
 - Input validation via Pydantic (checksum addresses, block ranges, chain IDs)
 - Circuit breaker for RPC resilience
 - Database SSL/TLS enforcement
+- Wrong API keys lock the client out with a doubling backoff (every route, the
+  panel login, websockets); per-IP rate limiting; both shareable across
+  instances through Redis
 - Hash-locked dependencies; CI fails on any known vulnerability (pip-audit),
   type error (mypy), security finding (bandit) or fixable HIGH/CRITICAL image
   vulnerability (Trivy)

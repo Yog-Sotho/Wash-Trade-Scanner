@@ -164,6 +164,22 @@ class Settings(BaseSettings):
     API_KEY_HASHES: str = Field("")
     API_CORS_ORIGINS: str = Field("", description="Comma-separated allowed origins")
     API_RATE_LIMIT_PER_MINUTE: int = Field(120, ge=1, le=100000)
+    # Where rate limits and auth lockouts are counted: in this process (empty)
+    # or in Redis (redis://... or rediss://...), shared by every API instance.
+    RATE_LIMIT_REDIS_URL: str = Field("", pattern=r"^(rediss?://\S+)?$")
+    # Wrong API keys (on any route, the panel login or a websocket) are counted
+    # per client IP. After AUTH_MAX_FAILURES within AUTH_FAILURE_WINDOW_SECONDS
+    # the client is locked out for AUTH_LOCKOUT_SECONDS, doubling with each
+    # further failure up to AUTH_LOCKOUT_MAX_SECONDS. A success resets it.
+    AUTH_MAX_FAILURES: int = Field(5, ge=1, le=1000)
+    AUTH_FAILURE_WINDOW_SECONDS: int = Field(900, ge=10, le=86400)
+    AUTH_LOCKOUT_SECONDS: int = Field(60, ge=1, le=86400)
+    AUTH_LOCKOUT_MAX_SECONDS: int = Field(3600, ge=1, le=604800)
+    # Background audits started through the API: at most this many run at a
+    # time (across instances; more get 429), and finished ones are kept for
+    # AUDIT_TASK_TTL_HOURS before deletion.
+    AUDIT_MAX_CONCURRENT: int = Field(2, ge=1, le=100)
+    AUDIT_TASK_TTL_HOURS: int = Field(24, ge=1, le=8760)
     API_DOCS_ENABLED: bool = Field(True)
     API_HSTS_ENABLED: bool = Field(False)
 
@@ -179,6 +195,11 @@ class Settings(BaseSettings):
     # Web Panel
     PANEL_ENABLED: bool = Field(True)
     PANEL_SESSION_TTL_MINUTES: int = Field(720, ge=5, le=43200)
+    # Signs panel session cookies. Empty: a random secret per process, so
+    # sessions end on restart and are valid on one instance only. Set the same
+    # value (32+ random characters, e.g. `openssl rand -hex 32`) on every
+    # instance behind one load balancer.
+    PANEL_SESSION_SECRET: str = Field("", pattern=r"^(.{32,})?$")
 
     # Real-time Monitor
     MONITOR_POLL_INTERVAL_SECONDS: float = Field(12.0, ge=1.0, le=3600.0)

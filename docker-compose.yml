@@ -44,6 +44,10 @@ services:
       # Required by the server here (it refuses to start without keys and says
       # so in its log); optional for compose, so the audit service still runs.
       API_KEY_HASHES: ${API_KEY_HASHES:-}
+      # For several instances: a shared Redis for limits and lockouts, and one
+      # session secret (docs/api.md).
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-}
+      PANEL_SESSION_SECRET: ${PANEL_SESSION_SECRET:-}
       # Pools watched around the clock and where alerts go (docs/alerting.md).
       MONITOR_POOLS: ${MONITOR_POOLS:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
