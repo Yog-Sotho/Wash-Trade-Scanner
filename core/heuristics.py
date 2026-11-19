@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import math
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import networkx as nx
 from sqlalchemy import and_, select
@@ -125,25 +126,36 @@ class HeuristicDetector:
                 edges[key] += trade.volume_usd or 0.0
                 G.add_edge(trade.sender, trade.recipient, volume=edges[key])
 
-            sccs = list(nx.strongly_connected_components(G))
-            for scc in sccs:
-                if len(scc) < 2:
-                    continue
-                scc_addresses = set(scc)
-                for trade in pool_trades:
-                    if trade.sender not in scc_addresses or trade.recipient not in scc_addresses:
-                        continue
-                    window_minutes = settings.WASH_TRADE_TIME_WINDOW_MINUTES
-                    window_start = trade.block_timestamp - timedelta(minutes=window_minutes)
-                    window_end = trade.block_timestamp + timedelta(minutes=window_minutes)
-                    reverse_trades = [
-                        t
-                        for t in pool_trades
-                        if t.sender == trade.recipient
-                        and t.recipient == trade.sender
-                        and window_start <= t.block_timestamp <= window_end
-                    ]
-                    if reverse_trades:
+            # A trade is circular when both ends are in one strongly connected
+            # component (of 2+ addresses) and the reverse leg (recipient ->
+            # sender) occurs within the window around it. Reverse legs are
+            # looked up in each pair's sorted times: O(n log n), where scanning
+            # every trade for each candidate was O(n^2).
+            component: dict[str, int] = {}
+            for index, scc in enumerate(nx.strongly_connected_components(G)):
+                if len(scc) >= 2:
+                    component.update(dict.fromkeys(scc, index))
+            candidates: dict[int, list[SwapTrade]] = defaultdict(list)
+            for trade in pool_trades:
+                index = component.get(trade.sender, -1)
+                if index >= 0 and component.get(trade.recipient) == index:
+                    candidates[index].append(trade)
+            if not candidates:
+                continue
+
+            pair_times: dict[tuple[str, str], list[datetime]] = defaultdict(list)
+            for trade in pool_trades:
+                pair_times[(trade.sender, trade.recipient)].append(trade.block_timestamp)
+            for times in pair_times.values():
+                times.sort()
+            window = timedelta(minutes=settings.WASH_TRADE_TIME_WINDOW_MINUTES)
+            # Component by component, each in trade order: the order the
+            # per-component scan produced.
+            for index in sorted(candidates):
+                for trade in candidates[index]:
+                    reverse = pair_times.get((trade.recipient, trade.sender), [])
+                    first = bisect_left(reverse, trade.block_timestamp - window)
+                    if first < bisect_right(reverse, trade.block_timestamp + window):
                         flag_trade(trade, 0.9, "circular_trading")
                         wash_trades.append(trade)
 

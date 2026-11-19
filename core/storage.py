@@ -11,7 +11,20 @@ from typing import Any, cast
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import CursorResult, and_, delete, func, inspect, select, text, update
+from sqlalchemy import (
+    CursorResult,
+    String,
+    and_,
+    any_,
+    bindparam,
+    delete,
+    func,
+    inspect,
+    select,
+    text,
+    update,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import (
@@ -52,6 +65,10 @@ def _json_serializer(value: Any) -> str:
 
 
 BASELINE_REVISION = "0001"
+
+# Rows per multi-row INSERT: 1,000 trades bind 22,000 parameters, well under
+# PostgreSQL's 32,767-per-statement limit (a SwapTrade row has 24 columns).
+INSERT_CHUNK_ROWS = 1000
 
 
 def alembic_config(connection: Connection | None = None) -> AlembicConfig:
@@ -176,6 +193,28 @@ class Storage:
             await session.refresh(trade)
             return trade
 
+    async def stored_trade_keys(self, keys: list[tuple[str, int]]) -> set[tuple[str, int]]:
+        """The (transaction_hash, log_index) keys among `keys` already stored
+        with their transaction's sender (tx_from).
+
+        save_trades_batch leaves such a row unchanged, so ingestion skips
+        them. One query per call: the hashes travel as one array parameter,
+        not one parameter each.
+        """
+        if not keys:
+            return set()
+        hashes = sorted({tx_hash for tx_hash, _ in keys})
+        stmt = select(SwapTrade.transaction_hash, SwapTrade.log_index).where(
+            SwapTrade.transaction_hash == any_(bindparam("hashes", hashes, type_=ARRAY(String))),
+            SwapTrade.tx_from.is_not(None),
+        )
+        async with await self.get_session() as session:
+            rows = (await session.execute(stmt)).all()
+        wanted = set(keys)
+        return {
+            (tx_hash, log_index) for tx_hash, log_index in rows if (tx_hash, log_index) in wanted
+        }
+
     async def save_trades_batch(self, trades_data: list[dict[str, Any]]) -> int:
         """Bulk upsert trades for performance.
 
@@ -189,23 +228,31 @@ class Storage:
         """
         if not trades_data:
             return 0
+        saved = 0
         async with await self.get_session() as session:
-            insert_stmt = pg_insert(SwapTrade).values(trades_data)
-            excluded = insert_stmt.excluded
-            stmt = insert_stmt.on_conflict_do_update(
-                index_elements=["transaction_hash", "log_index"],
-                set_={
-                    "tx_from": excluded.tx_from,
-                    "tx_to": excluded.tx_to,
-                    "gas_price": func.coalesce(excluded.gas_price, SwapTrade.gas_price),
-                },
-                where=and_(SwapTrade.tx_from.is_(None), excluded.tx_from.is_not(None)),
-            )
-            # INSERT/UPDATE/DELETE always execute via CursorResult (which has .rowcount);
-            # Session.execute() is typed generically as Result[Any] regardless of statement kind.
-            result = cast("CursorResult[Any]", await session.execute(stmt))
+            # One transaction, several statements: PostgreSQL's protocol caps a
+            # statement at 32,767 bind parameters and a trade row binds 22, so a
+            # single INSERT of 1,490 or more trades failed, and the audit with it.
+            for start in range(0, len(trades_data), INSERT_CHUNK_ROWS):
+                insert_stmt = pg_insert(SwapTrade).values(
+                    trades_data[start : start + INSERT_CHUNK_ROWS]
+                )
+                excluded = insert_stmt.excluded
+                stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=["transaction_hash", "log_index"],
+                    set_={
+                        "tx_from": excluded.tx_from,
+                        "tx_to": excluded.tx_to,
+                        "gas_price": func.coalesce(excluded.gas_price, SwapTrade.gas_price),
+                    },
+                    where=and_(SwapTrade.tx_from.is_(None), excluded.tx_from.is_not(None)),
+                )
+                # INSERT/UPDATE/DELETE always execute via CursorResult (which has
+                # .rowcount); Session.execute() is typed as Result[Any] regardless.
+                result = cast("CursorResult[Any]", await session.execute(stmt))
+                saved += result.rowcount
             await session.commit()
-            return result.rowcount
+        return saved
 
     async def clear_pool_labels(self, chain_id: int, pool_address: str) -> int:
         """Reset every wash label in a pool before an audit relabels it, so a

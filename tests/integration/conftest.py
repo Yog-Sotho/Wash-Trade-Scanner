@@ -104,14 +104,20 @@ class FakeChain:
 
     # ------------------------------------------------------------- JSON-RPC
 
-    def _block(self, number: int) -> dict[str, Any]:
+    def _block(self, number: int, full_transactions: bool = False) -> dict[str, Any]:
+        """The block, listing its transactions as objects or as hashes."""
         zero32 = "0x" + "00" * 32
+        transactions = [
+            tx if full_transactions else tx["hash"]
+            for tx in self.transactions.values()
+            if int(tx["blockNumber"], 16) == number
+        ]
         return {
             "number": hex(number),
             "hash": Web3.keccak(text=f"block-{number}").hex(),
             "parentHash": Web3.keccak(text=f"block-{number - 1}").hex(),
             "timestamp": hex(self.block_timestamps.get(number, 1_700_000_000 + number * 12)),
-            "transactions": [],
+            "transactions": transactions,
             "gasLimit": hex(30_000_000),
             "gasUsed": "0x0",
             "miner": "0x" + "00" * 20,
@@ -156,7 +162,7 @@ class FakeChain:
         if method == "eth_getLogs":
             return self._get_logs(params[0])
         if method == "eth_getBlockByNumber":
-            return self._block(int(params[0], 16))
+            return self._block(int(params[0], 16), bool(params[1]) if len(params) > 1 else False)
         if method == "eth_getTransactionByHash":
             return self.transactions.get(params[0])
         if method == "eth_call":

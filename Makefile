@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lock test lint format security eval eval-check calibrate clean docker-up docker-down
+.PHONY: help install install-dev lock test lint format security eval eval-check perf calibrate clean docker-up docker-down
 
 help: ## Show this help
 	@egrep -h '\s##\s' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -40,6 +40,9 @@ eval: ## Measure every detector and regenerate docs/benchmarks.md
 
 eval-check: ## Fail if a detector regressed or the shipped calibration is stale (CI gate)
 	wash-eval --check
+
+perf: ## Benchmark a full audit of a 10k-trade pool (DATABASE_NAME must name a disposable database)
+	python -m evaluation.perf
 
 calibrate: ## Re-measure detector rates and accept them as calibration + regression baseline
 	wash-eval --write-calibration --write-baseline --write-docs --json evaluation/results.json

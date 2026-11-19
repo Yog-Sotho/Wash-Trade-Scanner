@@ -69,6 +69,38 @@ async def test_run_audit_basic():
 
 
 @pytest.mark.asyncio
+async def test_a_failed_clustering_is_reported_with_the_audit():
+    """Clustering is best-effort, but its absence must be visible in the
+    result, not only in a log line."""
+    with (
+        patch("scripts.run_audit.MultiChainIngestor") as MockIngestor,
+        patch("scripts.run_audit.FeatureEngineer"),
+        patch("scripts.run_audit.HeuristicDetector") as MockHeuristics,
+        patch("scripts.run_audit.MLDetector"),
+        patch("scripts.run_audit.EntityClusterer") as MockClusterer,
+    ):
+        MockIngestor.return_value.initialize = AsyncMock()
+        MockIngestor.return_value.audit_pool = AsyncMock(return_value=0)
+        MockHeuristics.return_value.run_all_heuristics = AsyncMock(return_value=([], {}))
+        MockClusterer.return_value.cluster_addresses = AsyncMock(
+            side_effect=TimeoutError("node too slow")
+        )
+        runner = AuditRunner()
+        runner.storage = AsyncMock(spec=Storage)
+        runner.storage.get_pool_trades.return_value = []
+        session_cm = AsyncMock()
+        session_cm.__aenter__.return_value = AsyncMock()
+        runner.storage.get_session.return_value = session_cm
+        params = AuditParameters(chain_id=1, pool_address="0x" + "b" * 40, use_ml=False)
+
+        result = await runner.run_audit(params)
+
+    assert result["funding_clusters"]["method"] == "failed"
+    assert result["funding_clusters"]["reason"] == "TimeoutError: node too slow"
+    assert result["funding_clusters"]["complete"] is False
+
+
+@pytest.mark.asyncio
 async def test_run_audit_reports_severity_and_method_breakdown():
     from datetime import datetime
 

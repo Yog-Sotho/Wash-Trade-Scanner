@@ -1,5 +1,63 @@
 # Changelog
 
+## [Unreleased] - Phase 5: performance and scale
+
+### Fixed
+- An audit whose block range held 1,490 or more swaps always failed: the
+  trades were saved in one INSERT binding 22 parameters each, past
+  PostgreSQL's 32,767 per statement, after all the RPC work was done. Trades
+  are now saved in statements of 1,000.
+- A range of blocks whose logs could not be fetched after every retry was
+  skipped with a log line, leaving a silent gap in the audited trades; it now
+  fails the audit (`IngestionError`). A block that could not be fetched had
+  its swaps stamped with the current time; it now fails the audit too.
+- The real-time monitor advanced past blocks whose logs it could not fetch,
+  losing their swaps; the failed pass now raises, and the next pass retries
+  from the same block.
+- SIGINT/SIGTERM during `wash-audit` waited for the whole sync to finish; the
+  sync now stops before its next 1,000-block batch, keeping what it saved.
+
+### Changed
+- Ingestion makes one `eth_getBlockByNumber` request per block, with its full
+  transactions, for both the block time and each swap's transaction sender,
+  instead of one more `eth_getTransactionByHash` per transaction: a quarter of
+  the requests for the benchmark pool (`eth_getTransactionByHash` remains the
+  fallback for a node that lists only hashes). Each response is larger: the
+  block's other transactions come with it.
+- Swaps already stored with their transaction's sender are not fetched or
+  priced again, so re-auditing a pool costs one `eth_getLogs` per 1,000 blocks.
+- Ingestion streams: each 1,000-block batch is fetched (up to four
+  `eth_getLogs` ahead), priced and saved before the next, so memory no longer
+  grows with the range and an interrupted audit keeps its finished batches.
+- `RPC_RATE_LIMIT` is shared by everything in the process using a chain
+  (audits, monitors, clustering) instead of applying to each separately, and
+  no longer holds a lock while waiting.
+- When a pool's factory is unknown, the candidate DEXes are synced
+  concurrently.
+- `detect_circular_trading` finds reverse legs in per-pair sorted times,
+  O(n log n) instead of O(n²), with identical results (10,000 trades among
+  three addresses: 46 s before, 0.07 s after).
+- `ENTITY_SCAN_MAX_BLOCKS` is capped at 50,000 (was 2,000,000; larger values
+  are now rejected at startup). The opt-in block scan runs `RPC_CONCURRENCY`
+  requests at a time under the chain's rate limit and breaker, retries each
+  block, and counts the blocks it could not fetch instead of skipping them.
+- The ML stage reads the pool's trades once, not twice; the audit no longer
+  loads every trade before detection only to log their number; stored address
+  clusters are looked up in one query, not one per cluster.
+
+### Added
+- `funding_clusters` in every audit result (and the printed report): how
+  funding links were looked for (`trace_filter`, `block_scan`, `skipped`,
+  `failed`), over which blocks, how many failed, and whether coverage is
+  complete. A pool without clusters is no longer indistinguishable from a
+  pool whose links were never looked for.
+- `RPC_CONCURRENCY` (default 8): requests one chain's ingestor keeps in flight.
+- `INGEST_FULL_BLOCKS` (default true): set false where bandwidth costs more
+  than requests, to fetch block hashes and then each swap's transaction.
+- `python -m evaluation.perf` (`make perf`): a full audit of a 10,000-trade
+  real pool against PostgreSQL and a replaying node, with wall time, SQL
+  statements and RPC requests per stage; results in docs/performance.md.
+
 ## [Unreleased] - Phase 4.4: security hardening
 
 ### Added

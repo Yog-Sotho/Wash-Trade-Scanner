@@ -235,7 +235,9 @@ class MLDetector:
         if threshold is None:
             threshold = float(self.metrics.get("threshold", 0.8))
         async with await self.storage.get_session() as session:
-            df = await self.feature_engineer.build_ml_features(chain_id, pool_address, session)
+            trades, df = await self.feature_engineer.trades_and_ml_features(
+                chain_id, pool_address, session
+            )
             if df.empty:
                 return []
 
@@ -255,20 +257,6 @@ class MLDetector:
             probabilities = expit(-scores)
             wash_probability = self.wash_probability()
 
-            from sqlalchemy import and_, select
-
-            stmt = (
-                select(SwapTrade)
-                .where(
-                    and_(
-                        SwapTrade.chain_id == chain_id,
-                        SwapTrade.pool_address == pool_address,
-                    )
-                )
-                .order_by(SwapTrade.block_timestamp, SwapTrade.block_number, SwapTrade.log_index)
-            )
-            result = await session.execute(stmt)
-            trades = result.scalars().all()
             by_id: dict[int, float] = {
                 int(trade_id): float(prob)
                 for trade_id, prob in zip(df["trade_id"], probabilities, strict=True)

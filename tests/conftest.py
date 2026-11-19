@@ -30,9 +30,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 @pytest.fixture(autouse=True)
 def _fresh_circuit_breakers():
-    """RPC breakers are shared process-wide; give every test its own."""
+    """RPC breakers and rate limiters are shared process-wide; give every test
+    its own."""
     from core.circuit_breaker import reset_shared_breakers
+    from core.ingestor import reset_rate_limiters
 
     reset_shared_breakers()
+    reset_rate_limiters()
     yield
     reset_shared_breakers()
+    reset_rate_limiters()

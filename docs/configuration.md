@@ -93,7 +93,7 @@ regression baseline match.
 | `CLOSED_CLUSTER_BALANCE_TOLERANCE`  | Max per‑member internal in/out volume imbalance                                   | `0.2`        |
 | `REPEATED_AMOUNT_MIN_COUNT`         | Repetitions of one (rounded) amount of one token by a trader before flagging       | `5` †        |
 | `REPEATED_AMOUNT_SIG_FIGS`          | Significant digits used when grouping repeated amounts                            | `3` †        |
-| `ENTITY_SCAN_MAX_BLOCKS`            | On nodes without `trace_filter`, max recent blocks to scan for funding links (one RPC call per block); `0` skips that clustering | `0` |
+| `ENTITY_SCAN_MAX_BLOCKS`            | On nodes without `trace_filter`, max recent blocks to scan for funding links (one RPC call per block, at most 50,000: about a week of Ethereum, ~8 minutes at the default rate limit); `0` skips that clustering. Each audit reports what was examined in `funding_clusters` | `0` |
 
 ### Machine learning
 
@@ -107,7 +107,9 @@ regression baseline match.
 
 | Variable               | Description                                                                                          | Default |
 |------------------------|------------------------------------------------------------------------------------------------------|---------|
-| `RPC_RETRIES`          | Retries after a failed `eth_getLogs` batch (each batch gets `RPC_RETRIES + 1` attempts)              | `3`     |
+| `RPC_RETRIES`          | Retries after a failed `eth_getLogs` or `eth_getBlockByNumber` request during ingestion (`RPC_RETRIES + 1` attempts each, 1 s doubling between them); a range still failing then fails the audit | `3`     |
+| `INGEST_FULL_BLOCKS`   | Ingest each block with its full transactions: one request per block, each carrying the whole block. `false`: the block's hashes, then one request per swap transaction: about 4× the requests and a tenth of the bytes ([performance.md](performance.md)) | `true`  |
+| `RPC_CONCURRENCY`      | Requests one chain's ingestor keeps in flight at once. `RPC_RATE_LIMIT` (requests per second per chain, shared by every audit and monitor in the process) caps their rate | `8`     |
 | `TRADE_RETENTION_DAYS` | Default age limit for `wash-prune`, which counts older trades and deletes them only with `--yes`     | `90`    |
 
 Every setting is read by the application (`tests/test_settings_hygiene.py`

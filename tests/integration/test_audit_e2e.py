@@ -117,8 +117,17 @@ async def test_full_audit_detects_prices_and_reports(pg_storage, chain):
 
     # The configured endpoint was actually used, and logs were fetched from it.
     assert "eth_getLogs" in chain.rpc_methods
+    # One request per block gave each swap its time and its transaction's
+    # sender: none per transaction.
+    swap_blocks = {int(log["blockNumber"], 16) for log in chain.logs}
+    assert chain.rpc_methods.count("eth_getBlockByNumber") == len(swap_blocks)
+    assert "eth_getTransactionByHash" not in chain.rpc_methods
     assert result["trades_processed"] == 9
     assert result["wash_trades_detected"] == 6
+    # The fake node, like most hosted ones, has no trace_filter: the audit says
+    # its funding links were not looked for.
+    assert result["funding_clusters"]["method"] == "skipped"
+    assert result["funding_clusters"]["complete"] is False
 
     trades = await _stored_trades(pg_storage)
     assert len(trades) == 9
@@ -162,11 +171,21 @@ async def test_reaudit_is_idempotent(pg_storage, chain):
     _add_scenario(chain)
 
     await _run_audit(pg_storage)
+    first = await _stored_trades(pg_storage)
+    chain.rpc_methods.clear()
     result = await _run_audit(pg_storage)
 
     assert result["trades_processed"] == 9
     assert result["wash_trades_detected"] == 6
-    assert len(await _stored_trades(pg_storage)) == 9
+    again = await _stored_trades(pg_storage)
+    assert [(t.id, t.block_timestamp, t.tx_from, t.volume_usd) for t in again] == [
+        (t.id, t.block_timestamp, t.tx_from, t.volume_usd) for t in first
+    ]
+    # The stored swaps were not fetched again: the re-audit's node requests
+    # are the head, the pool's factory and the logs.
+    assert "eth_getBlockByNumber" not in chain.rpc_methods
+    assert "eth_getTransactionByHash" not in chain.rpc_methods
+    assert "eth_getLogs" in chain.rpc_methods
 
 
 async def test_reaudit_clears_labels_the_current_detectors_do_not_give(pg_storage, chain):

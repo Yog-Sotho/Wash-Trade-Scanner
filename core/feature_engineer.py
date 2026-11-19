@@ -259,10 +259,17 @@ class FeatureEngineer:
         self, chain_id: int, pool_address: str, session: AsyncSession
     ) -> pd.DataFrame:
         """One query for the pool's trades; every feature is computed in memory."""
+        _, df = await self.trades_and_ml_features(chain_id, pool_address, session)
+        return df
+
+    async def trades_and_ml_features(
+        self, chain_id: int, pool_address: str, session: AsyncSession
+    ) -> tuple[list[SwapTrade], pd.DataFrame]:
+        """The pool's trades (oldest first) and their ML features, from one
+        query: callers that label the trades need not load them again."""
         trades = await self._pool_trades(chain_id, pool_address, session)
         df = features_from_trades(trades)
-        if df.empty:
-            return df
-        df["chain_id"] = chain_id
-        df["pool_address"] = pool_address
-        return df
+        if not df.empty:
+            df["chain_id"] = chain_id
+            df["pool_address"] = pool_address
+        return trades, df

@@ -24,13 +24,14 @@ from opentelemetry import trace
 from pydantic import ValidationError as PydanticValidationError
 
 from core import metrics
-from core.entity_clustering import EntityClusterer
-from core.exceptions import WashTradeError
+from core.entity_clustering import EntityClusterer, FundingCoverage
+from core.exceptions import AuditCancelledError, WashTradeError
 from core.feature_engineer import FeatureEngineer
 from core.heuristics import HeuristicDetector
 from core.ingestor import MultiChainIngestor
 from core.log_config import configure_logging
 from core.ml_detector import MLDetector
+from core.redaction import redact
 from core.storage import Storage
 from core.validators import AuditParameters
 
@@ -103,7 +104,7 @@ class AuditRunner:
         detector_hits: dict[str, int] = {}
 
         if self._shutdown_event.is_set():
-            raise WashTradeError("Audit cancelled by shutdown signal")
+            raise AuditCancelledError("Audit cancelled by shutdown signal")
 
         assert self.storage is not None, "call initialize() first"
         feature_engineer = FeatureEngineer(self.storage)
@@ -125,7 +126,7 @@ class AuditRunner:
         await ingestor.initialize([params.chain_id])
 
         if self._shutdown_event.is_set():
-            raise WashTradeError("Audit cancelled by shutdown signal")
+            raise AuditCancelledError("Audit cancelled by shutdown signal")
 
         logger.info(
             f"Syncing historical data for pool {params.pool_address} on chain {params.chain_id}"
@@ -135,11 +136,11 @@ class AuditRunner:
             pool_address=params.pool_address,
             start_block=params.start_block,
             end_block=params.end_block,
+            # Checked between ingestion batches: SIGINT/SIGTERM stops the sync
+            # within one batch, keeping the batches already saved.
+            stop=self._shutdown_event,
         )
         logger.info(f"Synced {trades_synced} trades")
-
-        trades = await self.storage.get_pool_trades(params.chain_id, params.pool_address)
-        logger.info(f"Analyzing {len(trades)} trades")
 
         flagged_trade_ids: set[int] = set()
         detection_methods: list[str] = []
@@ -148,6 +149,7 @@ class AuditRunner:
         # with other detectors or calibration) left behind.
         await self.storage.clear_pool_labels(params.chain_id, params.pool_address)
 
+        funding = FundingCoverage("not_run", reason="heuristics are off")
         async with await self.storage.get_session() as session:
             if params.use_heuristics:
                 logger.info("Clustering addresses by funding links...")
@@ -155,8 +157,12 @@ class AuditRunner:
                     await entity_clusterer.cluster_addresses(
                         params.chain_id, params.pool_address, session
                     )
+                    funding = entity_clusterer.coverage or FundingCoverage("skipped")
                 except Exception as exc:
                     logger.warning(f"Entity clustering skipped: {exc}")
+                    funding = FundingCoverage(
+                        "failed", reason=redact(f"{type(exc).__name__}: {exc}")
+                    )
 
                 logger.info("Running heuristic detection...")
                 heuristics_wash_trades, stats = await heuristic_detector.run_all_heuristics(
@@ -228,6 +234,7 @@ class AuditRunner:
             risk_metrics,
             detection_methods,
             duration,
+            funding,
         )
 
         if export_format:
@@ -257,6 +264,9 @@ class AuditRunner:
             "risk_metrics": risk_metrics,
             "detection_methods": detection_methods,
             "duration": duration,
+            # What funding-link clustering examined: no clusters means no
+            # links only when this is complete.
+            "funding_clusters": funding.as_dict(),
         }
 
     def _print_results(
@@ -268,6 +278,7 @@ class AuditRunner:
         risk_metrics: dict[str, Any],
         detection_methods: list[str],
         duration: float,
+        funding: FundingCoverage | None = None,
     ) -> None:
         print("\n" + "=" * 60)
         print(f"Audit Results for Pool: {pool_address}")
@@ -285,6 +296,15 @@ class AuditRunner:
         ):
             print(f"  - {method}: ${volume:,.2f}")
         print(f"Detection Methods: {', '.join(detection_methods)}")
+        if funding is not None:
+            scope = "complete" if funding.complete else "partial"
+            if funding.method in ("skipped", "failed", "not_run"):
+                scope = f"none ({funding.reason})"
+            elif funding.scanned:
+                scope += f", blocks {funding.scanned[0]}-{funding.scanned[1]}"
+                if funding.blocks_failed:
+                    scope += f", {funding.blocks_failed} failed"
+            print(f"Funding-link clustering: {funding.method}, coverage {scope}")
         print(f"Duration: {duration:.2f} seconds")
         print("=" * 60)
 

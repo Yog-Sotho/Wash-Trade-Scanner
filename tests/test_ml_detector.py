@@ -100,7 +100,7 @@ async def test_explain_prediction(detector):
 
 @pytest.mark.asyncio
 async def test_detect_wash_trades_empty_features(detector):
-    detector.feature_engineer.build_ml_features.return_value = pd.DataFrame()
+    detector.feature_engineer.trades_and_ml_features.return_value = ([], pd.DataFrame())
     detector.storage.get_session.return_value = _session_returning_trades([])
 
     result = await detector.detect_wash_trades(chain_id=1, pool_address="0xpool")
@@ -119,10 +119,14 @@ async def test_detect_wash_trades_flags_high_probability(detector):
     detector.metrics = dict(MEASURED)
 
     trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
-    detector.storage.get_session.return_value = _session_returning_trades(trades)
+    # One query: the trades come with their features, not from a second select.
+    detector.feature_engineer.trades_and_ml_features.return_value = (trades, df)
+    session = _session_returning_trades([])
+    detector.storage.get_session.return_value = session
 
     # The measured threshold (0.0) makes every trade a hit.
     result = await detector.detect_wash_trades(chain_id=1, pool_address="0xpool")
+    session.__aenter__.return_value.execute.assert_not_awaited()
     assert len(result) == 10
     assert all(t.is_wash_trade for t in result)
     assert all(t.detection_method == "ml_isolation_forest" for t in result)
@@ -140,7 +144,10 @@ async def test_unevaluated_model_cannot_label_trades(detector):
     await detector.train(chain_id=1, pool_addresses=["0xpool"], use_heuristic_labels=False)
 
     trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
-    detector.storage.get_session.return_value = _session_returning_trades(trades)
+    # One query: the trades come with their features, not from a second select.
+    detector.feature_engineer.trades_and_ml_features.return_value = (trades, df)
+    session = _session_returning_trades([])
+    detector.storage.get_session.return_value = session
 
     assert await detector.detect_wash_trades(1, "0xpool", threshold=0.0) == []
 
@@ -154,7 +161,10 @@ async def test_imprecise_model_cannot_label_trades(detector):
     detector.metrics = {**MEASURED, "fpr_upper": 0.05}  # posterior ~0.15
 
     trades = [SwapTrade(id=i, chain_id=1, pool_address="0xpool") for i in range(1, 11)]
-    detector.storage.get_session.return_value = _session_returning_trades(trades)
+    # One query: the trades come with their features, not from a second select.
+    detector.feature_engineer.trades_and_ml_features.return_value = (trades, df)
+    session = _session_returning_trades([])
+    detector.storage.get_session.return_value = session
 
     assert await detector.detect_wash_trades(1, "0xpool") == []
 
