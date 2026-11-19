@@ -132,7 +132,18 @@ instance can report them and a restart does not lose them:
 Besides the counts and `risk_metrics`, a result carries `funding_clusters`
 (what funding-link clustering examined), `excluded_as_mev` (trades taken out
 before detection as sandwich legs or atomic arbitrage, by kind),
-`related_pools` and `pools` (trades and wash trades per audited pool).
+`trade_size_forensics`, `related_pools` and `pools` (trades, wash trades and
+trade-size forensics per audited pool).
+
+`trade_size_forensics` describes the pool, never a trade (Cong et al.,
+"Crypto Wash Trading", 2023; [comparison](comparison.md)): `round_share`, the
+fraction of swaps where either side is a round amount (at most two significant
+digits), and `benford_mad`, the first digits' mean absolute deviation from
+Benford's law, with its Nigrini band in `benford_conformity` (`close`,
+`acceptable`, `marginal`, `nonconformity`). Below 300 swaps both are `null`
+and the band is `insufficient data`. On the recorded clean pools 7.6-16.4% of
+swaps are round and the digits conform; in the FBI's NexF market 0.14% are
+round and the digits do not ([benchmarks](benchmarks.md)).
 
 `status` is `running`, `completed` (with `result`), `failed` (with `error`) or
 `interrupted`: the server running it stopped. A shutting-down server marks its

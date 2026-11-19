@@ -43,6 +43,7 @@ class FakeChain:
         self.usd_prices: dict[str, float] = {}
         self.transactions: dict[str, dict[str, Any]] = {}
         self.rpc_methods: list[str] = []
+        self.contracts: set[str] = set()  # addresses eth_getCode answers code for
         self.rpc_url = ""
         self.coingecko_url = ""
 
@@ -94,6 +95,33 @@ class FakeChain:
             "nonce": hex(log_index),
             "transactionIndex": hex(log_index),
             "value": "0x0",
+            "type": "0x0",
+            "chainId": hex(self.chain_id),
+            "v": "0x25",
+            "r": "0x" + "11" * 32,
+            "s": "0x" + "22" * 32,
+        }
+        return tx_hash
+
+    def add_transfer(self, block: int, sender: str, to: str, value: int) -> str:
+        """Append a plain value transfer from `sender` to `to` in `block`."""
+        self.head = max(self.head, block)
+        position = sum(
+            1 for tx in self.transactions.values() if int(tx["blockNumber"], 16) == block
+        )
+        tx_hash = Web3.keccak(text=f"transfer-{block}-{position}").hex()
+        self.transactions[tx_hash] = {
+            "blockHash": Web3.keccak(text=f"block-{block}").hex(),
+            "blockNumber": hex(block),
+            "from": Web3.to_checksum_address(sender),
+            "to": Web3.to_checksum_address(to),
+            "gas": hex(21_000),
+            "gasPrice": hex(25 * 10**9),
+            "hash": tx_hash,
+            "input": "0x",
+            "nonce": hex(position),
+            "transactionIndex": hex(position),
+            "value": hex(value),
             "type": "0x0",
             "chainId": hex(self.chain_id),
             "v": "0x25",
@@ -165,6 +193,8 @@ class FakeChain:
             return self._block(int(params[0], 16), bool(params[1]) if len(params) > 1 else False)
         if method == "eth_getTransactionByHash":
             return self.transactions.get(params[0])
+        if method == "eth_getCode":
+            return "0x6080" if params[0].lower() in self.contracts else "0x"
         if method == "eth_call":
             key = (params[0]["to"].lower(), params[0]["data"][:10])
             if key in self.call_results:

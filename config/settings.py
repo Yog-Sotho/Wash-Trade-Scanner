@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     # MEV discrimination: a sandwich's back-run sells what its front-run bought,
     # within this share (core/mev.py; Torres et al. 2021, Qin et al. 2022).
     SANDWICH_AMOUNT_TOLERANCE: float = Field(0.1, ge=0.0, le=1.0)
+    # A contract that swaps for itself identifies a sandwich bot across the
+    # accounts it sends from only when at most this many accounts use it in
+    # the audited trades; more, and it is a public router or aggregator shared
+    # by unrelated users (the router exclusion of flashbots/mev-inspect-py).
+    SANDWICH_BOT_MAX_SENDERS: int = Field(5, ge=1, le=1000)
 
     # Closed-Cluster Detection (network-based, 2025)
     CLOSED_CLUSTER_INTERNAL_RATIO: float = Field(0.9, ge=0.5, le=1.0)
@@ -149,6 +154,16 @@ class Settings(BaseSettings):
     # scans at most that many of the most recent blocks, hard-capped at 50,000
     # (about a week of Ethereum blocks: ~8 minutes at RPC_RATE_LIMIT=100).
     ENTITY_SCAN_MAX_BLOCKS: int = Field(0, ge=0, le=50_000)
+    # Funding links join two audited addresses when one first funded the other
+    # or the same address first funded both (core/entity_clustering.py). A
+    # funder of more than FUNDING_MAX_FANOUT of the audited addresses is a hub
+    # (an exchange hot wallet), not an operator: it links nobody. Contracts
+    # never link, nor do the addresses in FUNDING_EXCLUDED_FUNDERS
+    # (comma-separated: exchange hot wallets, bridges, mixers).
+    FUNDING_MAX_FANOUT: int = Field(50, ge=2, le=100_000)
+    FUNDING_EXCLUDED_FUNDERS: str = Field(
+        "", pattern=r"^\s*(0x[0-9a-fA-F]{40}\s*(,\s*0x[0-9a-fA-F]{40}\s*)*)?$"
+    )
 
     # Repeated-Amount Fingerprinting
     REPEATED_AMOUNT_MIN_COUNT: int = Field(5, ge=2, le=1000)
@@ -334,6 +349,10 @@ class Settings(BaseSettings):
                 chain, pool = item.strip().split(":")
                 pairs.append((int(chain), pool.lower()))
         return list(dict.fromkeys(pairs))
+
+    @property
+    def funding_excluded_funder_set(self) -> set[str]:
+        return {a.strip().lower() for a in self.FUNDING_EXCLUDED_FUNDERS.split(",") if a.strip()}
 
     @property
     def alert_email_recipients(self) -> list[str]:

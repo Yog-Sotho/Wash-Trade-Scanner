@@ -416,7 +416,7 @@ class HeuristicDetector:
         # Sandwich attackers' and atomic arbitrageurs' legs are MEV, not wash:
         # no detector sees them (core/mev.py). They are counted, never labelled.
         trades, mev = without_mev(trades)
-        stats[EXCLUDED_MEV] = 2 * len(mev.sandwiches)
+        stats[EXCLUDED_MEV] = sum(len(s.legs) for s in mev.sandwiches)
         stats[EXCLUDED_ARBITRAGE] = sum(len(a.legs) for a in mev.arbitrages)
 
         detectors = [
